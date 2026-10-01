@@ -26,5 +26,12 @@ pub mod stream;
 
 // Re-export primary types for ergonomic usage
 pub use cos::{ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString};
+pub use editor::{ReflowEngine, ReflowLine, SurgicalEditor};
 pub use error::{PdfError, PdfResult};
+pub use fonts::{compose_ligatures, decompose_ligatures, FontMetrics, ToUnicodeMap};
+pub use layout::{
+    LayoutReconstructor, ParagraphBlock, Point, PositionedGlyph, Rect, TextAlignment, TextLine,
+    TextSpan,
+};
 pub use security::SecurityLimits;
+pub use stream::{ContentAst, ContentNode, ContentParser, GraphicsStateStack, Matrix, Operation};
