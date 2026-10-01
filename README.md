@@ -160,14 +160,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Surgical In-Place Text Editing & Layout Reflow
+
+```rust
+use pdf_engine_core::cos::PdfDocument;
+use pdf_engine_core::editor::SurgicalEditor;
+use pdf_engine_core::fonts::FontMetrics;
+use pdf_engine_core::layout::LayoutReconstructor;
+use pdf_engine_core::stream::{build_ast_from_operations, serialize_ast, ContentStreamTokenizer};
+
+fn edit_page_paragraph(page_content_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // 1. Parse content stream into lossless AST
+    let mut tokenizer = ContentStreamTokenizer::new(page_content_bytes);
+    let ops = tokenizer.tokenize_all()?;
+    let mut ast = build_ast_from_operations(ops);
+
+    // 2. Reconstruct semantic layout (ParagraphBlocks, Lines, Spans)
+    let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+    let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
+    let paragraphs = reconstructor.reconstruct();
+
+    // 3. Perform surgical in-place edit on target paragraph
+    if let Some(target) = paragraphs.first() {
+        SurgicalEditor::edit_paragraph(
+            &mut ast,
+            target,
+            "Updated agreement terms executed with zero layout drift.",
+            &metrics,
+        )?;
+    }
+
+    // 4. Re-serialize AST to pure ISO 32000 content stream bytes
+    Ok(serialize_ast(&ast))
+}
+```
+
 ---
 
 ## Project Roadmap
 
 - [x] **Phase 0: Workspace Setup & Architecture** (Cargo workspace, coding standards, CI baseline)
 - [x] **Phase 1: Safe COS Core** (Lexer, Parser, XRef streams, Flate/PNG filters, Writer, Tests)
-- [ ] **Phase 2: Content Streams & Typographic Engine** (AST operator parser, Graphics State, TrueType tables, ToUnicode CMaps, ligatures)
-- [ ] **Phase 3: Semantic Layout & Surgical Reflow** (Glyph clustering, paragraph reflow, in-place AST mutator)
+- [x] **Phase 2: Content Streams & Typographic Engine** (AST operator parser, Graphics State, TrueType tables, ToUnicode CMaps, ligatures)
+- [x] **Phase 3: Semantic Layout & Surgical Reflow** (Glyph clustering, paragraph reflow, in-place AST mutator)
 - [ ] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, font server, WebSocket reflow)
 - [ ] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, FontFace loader)
 - [ ] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing)
