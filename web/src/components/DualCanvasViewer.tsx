@@ -2,7 +2,8 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { AnnotationElement, DetectedTableItem, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
-import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
+import { fetchAuthorizedBuffer, getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
+import { AuthorizedImage } from '@/components/AuthorizedImage';
 import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, PenTool, RefreshCw, Table, Trash2 } from 'lucide-react';
 
 interface DualCanvasViewerProps {
@@ -103,22 +104,17 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
     getPageFonts(documentId, pageNumber).then((data) => {
       if (!isMounted || !data.fonts) return;
       data.fonts.forEach((fontName) => {
-        try {
-          const fontUrl = getFontBinaryUrl(documentId, pageNumber, fontName);
-          const fontFace = new FontFace(fontName, `url("${fontUrl}")`);
-          fontFace
-            .load()
-            .then((loaded) => {
-              if (isMounted) {
-                document.fonts.add(loaded);
-              }
-            })
-            .catch((err) => {
-              console.debug(`Dynamic font registration note for ${fontName}:`, err);
-            });
-        } catch (e) {
-          console.debug(`FontFace initialization note:`, e);
-        }
+        const fontUrl = getFontBinaryUrl(documentId, pageNumber, fontName);
+        fetchAuthorizedBuffer(fontUrl)
+          .then((buffer) => new FontFace(fontName, buffer).load())
+          .then((loaded) => {
+            if (isMounted) {
+              document.fonts.add(loaded);
+            }
+          })
+          .catch((err) => {
+            console.debug(`Dynamic font registration note for ${fontName}:`, err);
+          });
       });
     });
 
@@ -219,8 +215,8 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                   : 'border-dashed border-amber-500/50 hover:border-amber-500 hover:ring-1 hover:ring-amber-400/80 z-10'
               }`}
             >
-              <img
-                src={imageUrl}
+              <AuthorizedImage
+                url={imageUrl}
                 alt={`XObject Image #${img.id}`}
                 className="w-full h-full object-fill pointer-events-none select-none bg-neutral-100 dark:bg-neutral-800"
               />

@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import { AnnotationElement, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
-import { getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
+import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
+import { AuthorizedImage } from '@/components/AuthorizedImage';
 import {
   ShieldCheck,
   Cpu,
@@ -584,8 +585,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     {/* Image Thumbnail */}
                     <div className="mt-2 w-full h-24 rounded overflow-hidden bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 flex items-center justify-center">
-                      <img
-                        src={imageUrl}
+                      <AuthorizedImage
+                        url={imageUrl}
                         alt={`XObject #${img.id}`}
                         className="w-full h-full object-contain"
                       />
@@ -2642,14 +2643,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     )}
                   </button>
 
-                  <a
-                    href={getOptimizedExportUrl(documentId)}
-                    download={`document_optimized.pdf`}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadAuthorized(
+                        getOptimizedExportUrl(documentId),
+                        'document_optimized.pdf'
+                      );
+                    }}
                     className="py-1.5 px-2 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
                   >
                     <Download size={11} />
                     <span>Descargar PDF</span>
-                  </a>
+                  </button>
                 </div>
               </div>
             )}

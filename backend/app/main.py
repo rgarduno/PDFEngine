@@ -4,11 +4,20 @@ High-performance FastAPI service providing document ingestion,
 interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
-import uuid
-from typing import Dict, List, Optional
+from typing import List, Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+
+from app.auth import (
+    AuthMiddleware,
+    adopt_subject,
+    bind_session,
+    consume_ws_ticket,
+    issue_ws_ticket,
+    load_session,
+    reset_subject,
+)
 
 try:
     import pdf_engine
@@ -84,7 +93,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Enable CORS for web and client frontends
+# Auth is registered first so CORS stays the outermost middleware.
+# Preflight responses and 401 bodies then still carry the CORS headers.
+# The origin list stays permissive until that policy is tightened on its own.
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -92,9 +104,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Active document sessions stored in memory (stateless worker pattern)
-DOCUMENT_SESSIONS: Dict[str, dict] = {}
 
 
 @app.get("/api/health")
@@ -105,6 +114,12 @@ def health_check():
         "engine_loaded": pdf_engine is not None,
         "version": "0.1.0",
     }
+
+
+@app.post("/api/auth/ws-ticket")
+def create_ws_ticket():
+    """Exchange the caller's bearer token for a single-use WebSocket ticket."""
+    return {"ticket": issue_ws_ticket(), "expires_in": 60}
 
 
 @app.post("/api/documents/upload", response_model=DocumentUploadResponse)
@@ -127,14 +142,8 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to parse PDF document: {e}")
 
-    doc_id = str(uuid.uuid4())
     page_count = doc.page_count()
-
-    DOCUMENT_SESSIONS[doc_id] = {
-        "doc": doc,
-        "filename": file.filename,
-        "raw_bytes": content,
-    }
+    doc_id = bind_session(doc, file.filename, content)
 
     return DocumentUploadResponse(
         document_id=doc_id,
@@ -146,9 +155,7 @@ async def upload_document(file: UploadFile = File(...)):
 @app.get("/api/documents/{doc_id}/pages/{page_idx}/scenegraph", response_model=PageSceneGraph)
 def get_page_scenegraph(doc_id: str, page_idx: int):
     """Retrieves the layout scene graph (paragraphs, bounding boxes, alignments) for a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -188,9 +195,7 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
 @app.get("/api/documents/{doc_id}/pages/overview", response_model=DocumentOverviewResponse)
 def get_document_overview(doc_id: str):
     """Returns overview metadata, layout metrics, and preview snippets for all pages in the document."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     filename = session.get("filename", "document.pdf")
@@ -233,9 +238,7 @@ def get_document_overview(doc_id: str):
 @app.get("/api/documents/{doc_id}/pages/{page_idx}/rotation")
 def get_page_rotation_endpoint(doc_id: str, page_idx: int):
     """Gets the current rotation degrees for a specific page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -254,9 +257,7 @@ def edit_paragraph(
     doc_id: str, page_idx: int, paragraph_id: int, request: EditParagraphRequest
 ):
     """Performs an in-place surgical paragraph edit, recalculating reflow without altering graphics."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -279,9 +280,7 @@ def edit_paragraph(
 @app.get("/api/documents/{doc_id}/export")
 def export_document(doc_id: str, optimized: bool = False):
     """Serializes the edited document into a downloadable PDF binary."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -309,9 +308,7 @@ def export_document(doc_id: str, optimized: bool = False):
 @app.get("/api/documents/{doc_id}/pages/{page_idx}/fonts")
 def list_page_fonts(doc_id: str, page_idx: int):
     """Lists all font resource identifiers declared on a specific page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -328,9 +325,7 @@ def list_page_fonts(doc_id: str, page_idx: int):
 @app.get("/api/documents/{doc_id}/pages/{page_idx}/fonts/{font_name}")
 def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
     """Extracts and streams embedded TrueType/OpenType font binaries for dynamic browser @font-face registration."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -365,9 +360,7 @@ def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
 )
 def get_page_images(doc_id: str, page_idx: int):
     """Lists all Image XObjects declared and placed on a specific page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -406,9 +399,7 @@ def get_page_images(doc_id: str, page_idx: int):
 @app.get("/api/documents/{doc_id}/images/{image_id}")
 def get_image_binary(doc_id: str, image_id: int):
     """Extracts and streams raw image binary (JPEG or PNG) for browser display."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -429,9 +420,7 @@ def get_image_binary(doc_id: str, image_id: int):
 @app.post("/api/documents/{doc_id}/images/{image_id}/replace")
 async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)):
     """Surgically replaces an existing image XObject in the PDF with a new JPEG or PNG file."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     new_bytes = await file.read()
     if not new_bytes:
@@ -455,9 +444,7 @@ async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)
 @app.get("/api/documents/{doc_id}/forms", response_model=DocumentFormsResponse)
 def get_document_forms(doc_id: str):
     """Retrieves all interactive AcroForm fields present in the document."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -501,9 +488,7 @@ def get_document_forms(doc_id: str):
 @app.post("/api/documents/{doc_id}/forms/fill", response_model=FillFormsResponse)
 def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
     """Fills one or more interactive form fields by name in a batch transaction."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -521,9 +506,7 @@ def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
 @app.post("/api/documents/{doc_id}/forms/flatten", response_model=FlattenFormsResponse)
 def flatten_document_forms_endpoint(doc_id: str):
     """Permanently flattens all interactive form fields into page vectors and strips widget annotations."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -541,9 +524,7 @@ def flatten_document_forms_endpoint(doc_id: str):
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/forms", response_model=CreateFormFieldResponse)
 def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFieldRequest):
     """Creates and places a new interactive AcroForm field on a specific page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -600,9 +581,7 @@ def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFi
 @app.delete("/api/documents/{doc_id}/forms/{field_name}", response_model=DeleteFormFieldResponse)
 def delete_form_field_endpoint(doc_id: str, field_name: str):
     """Deletes an interactive form field from the document by name."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -624,9 +603,7 @@ def delete_form_field_endpoint(doc_id: str, field_name: str):
 @app.put("/api/documents/{doc_id}/forms/{field_name}", response_model=UpdateFormFieldResponse)
 def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateFormFieldRequest):
     """Updates geometry or properties of an existing form field."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -682,9 +659,7 @@ def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateForm
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/rotate", response_model=RotatePageResponse)
 def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest):
     """Rotates a specific page by the given degrees (0, 90, 180, 270, or relative offset)."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -702,20 +677,17 @@ def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest)
 @app.post("/api/documents/{doc_id}/split", response_model=SplitDocumentResponse)
 def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
     """Extracts specified pages or splits the document into smaller chunks."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
         extracted_ids = []
         if request.page_indices is not None:
             extracted_doc = doc.extract_pages(request.page_indices)
-            new_id = str(uuid.uuid4())
-            DOCUMENT_SESSIONS[new_id] = {
-                "doc": extracted_doc,
-                "filename": f"{session['filename'].replace('.pdf', '')}_extracted.pdf",
-            }
+            new_id = bind_session(
+                extracted_doc,
+                f"{session['filename'].replace('.pdf', '')}_extracted.pdf",
+            )
             extracted_ids.append(new_id)
         elif request.chunk_size:
             total_pages = doc.page_count()
@@ -723,11 +695,10 @@ def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
             for start in range(0, total_pages, chunk_size):
                 indices = list(range(start, min(start + chunk_size, total_pages)))
                 chunk_doc = doc.extract_pages(indices)
-                new_id = str(uuid.uuid4())
-                DOCUMENT_SESSIONS[new_id] = {
-                    "doc": chunk_doc,
-                    "filename": f"{session['filename'].replace('.pdf', '')}_part_{len(extracted_ids)+1}.pdf",
-                }
+                new_id = bind_session(
+                    chunk_doc,
+                    f"{session['filename'].replace('.pdf', '')}_part_{len(extracted_ids)+1}.pdf",
+                )
                 extracted_ids.append(new_id)
         else:
             raise HTTPException(status_code=400, detail="Must specify either 'page_indices' or 'chunk_size'.")
@@ -738,6 +709,8 @@ def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
             extracted_document_ids=extracted_ids,
             count=len(extracted_ids),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to split document: {e}")
 
@@ -750,24 +723,20 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
 
     docs_to_merge = []
     for d_id in request.document_ids:
-        sess = DOCUMENT_SESSIONS.get(d_id)
-        if not sess:
-            raise HTTPException(status_code=404, detail=f"Document session '{d_id}' not found.")
+        sess = load_session(d_id)
         docs_to_merge.append(sess["doc"])
 
     try:
         merged_doc = pdf_engine.merge_documents(docs_to_merge)
-        merged_id = str(uuid.uuid4())
-        DOCUMENT_SESSIONS[merged_id] = {
-            "doc": merged_doc,
-            "filename": "merged_document.pdf",
-        }
+        merged_id = bind_session(merged_doc, "merged_document.pdf")
         return MergeDocumentsResponse(
             success=True,
             merged_document_id=merged_id,
             filename="merged_document.pdf",
             page_count=merged_doc.page_count(),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to merge documents: {e}")
 
@@ -775,9 +744,7 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
 @app.post("/api/documents/{doc_id}/pages/reorder", response_model=PageOperationResponse)
 def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
     """Reorders the pages of a document according to a given permutation."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -798,9 +765,7 @@ def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
 @app.post("/api/documents/{doc_id}/pages/delete", response_model=PageOperationResponse)
 def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
     """Deletes specified pages from a document."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -847,9 +812,7 @@ def annot_to_model(a) -> AnnotationModel:
 )
 def get_page_annotations_endpoint(doc_id: str, page_idx: int):
     """Retrieves all non-widget annotations (highlights, underlines, links, stamps) on a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -870,9 +833,7 @@ def get_page_annotations_endpoint(doc_id: str, page_idx: int):
 )
 def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupRequest):
     """Adds a text markup annotation (Highlight, Underline, StrikeOut) to a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -904,9 +865,7 @@ def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupReque
 )
 def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
     """Adds an interactive URI link or internal GoTo link annotation to a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -953,9 +912,7 @@ def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
 )
 def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
     """Adds a rubber stamp annotation with vector styling and text to a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -987,9 +944,7 @@ def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
 )
 def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
     """Deletes an annotation from a page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1015,9 +970,7 @@ def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
 )
 def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None):
     """Permanently flattens visual annotations (highlights, underlines, stamps) into page content."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1035,9 +988,7 @@ def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None)
 @app.post("/api/documents/{doc_id}/pagination", response_model=WatermarkActionResponse)
 def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
     """Applies dynamic Bates numbering or custom header/footer pagination across document pages."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1068,9 +1019,7 @@ def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
 @app.post("/api/documents/{doc_id}/watermark/text", response_model=WatermarkActionResponse)
 def add_text_watermark_endpoint(doc_id: str, request: AddTextWatermarkRequest):
     """Applies a semi-transparent rotated text watermark across document pages."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1109,9 +1058,7 @@ async def add_image_watermark_endpoint(
     page_indices: Optional[str] = Form(None),
 ):
     """Embeds and applies a semi-transparent image watermark across document pages."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1144,55 +1091,71 @@ async def add_image_watermark_endpoint(
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")
-async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int):
-    """Interactive WebSocket endpoint streaming real-time typographic reflow as users type."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        await websocket.close(code=1008, reason="Document session not found")
+async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int, ticket: str = ""):
+    """Interactive WebSocket endpoint streaming real-time typographic reflow as users type.
+
+    The browser WebSocket constructor cannot set Authorization, so the caller
+    presents a single-use ticket minted by POST /api/auth/ws-ticket.
+    """
+    subject = consume_ws_ticket(ticket)
+    if subject is None:
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Authentication required")
         return
 
-    await websocket.accept()
-    doc = session["doc"]
-
+    context_token = adopt_subject(subject)
     try:
-        while True:
-            data = await websocket.receive_json()
-            paragraph_id = data.get("paragraph_id")
-            new_text = data.get("text", "")
+        try:
+            session = load_session(doc_id)
+        except HTTPException:
+            await websocket.accept()
+            await websocket.close(code=1008, reason="Document session not found")
+            return
 
-            if paragraph_id is None:
-                await websocket.send_json({"error": "Missing paragraph_id"})
-                continue
+        await websocket.accept()
+        doc = session["doc"]
 
-            try:
-                page = doc.get_page(page_idx)
-                page.edit_paragraph(int(paragraph_id), new_text)
-                doc.update_page(page)
+        try:
+            while True:
+                data = await websocket.receive_json()
+                paragraph_id = data.get("paragraph_id")
+                new_text = data.get("text", "")
 
-                paragraphs_raw = page.get_paragraphs()
-                updated_para = next((p for p in paragraphs_raw if p.id == paragraph_id), None)
-                if updated_para:
-                    min_x, min_y, max_x, max_y = updated_para.bbox()
-                    await websocket.send_json({
-                        "status": "ok",
-                        "paragraph_id": paragraph_id,
-                        "line_count": updated_para.line_count,
-                        "text": updated_para.text,
-                        "bbox": {
-                            "min_x": round(min_x, 2),
-                            "min_y": round(min_y, 2),
-                            "max_x": round(max_x, 2),
-                            "max_y": round(max_y, 2),
-                            "width": round(max_x - min_x, 2),
-                            "height": round(max_y - min_y, 2),
-                        },
-                    })
-                else:
-                    await websocket.send_json({"status": "ok", "paragraph_id": paragraph_id})
-            except Exception as e:
-                await websocket.send_json({"status": "error", "message": str(e)})
-    except WebSocketDisconnect:
-        pass
+                if paragraph_id is None:
+                    await websocket.send_json({"error": "Missing paragraph_id"})
+                    continue
+
+                try:
+                    page = doc.get_page(page_idx)
+                    page.edit_paragraph(int(paragraph_id), new_text)
+                    doc.update_page(page)
+
+                    paragraphs_raw = page.get_paragraphs()
+                    updated_para = next((p for p in paragraphs_raw if p.id == paragraph_id), None)
+                    if updated_para:
+                        min_x, min_y, max_x, max_y = updated_para.bbox()
+                        await websocket.send_json({
+                            "status": "ok",
+                            "paragraph_id": paragraph_id,
+                            "line_count": updated_para.line_count,
+                            "text": updated_para.text,
+                            "bbox": {
+                                "min_x": round(min_x, 2),
+                                "min_y": round(min_y, 2),
+                                "max_x": round(max_x, 2),
+                                "max_y": round(max_y, 2),
+                                "width": round(max_x - min_x, 2),
+                                "height": round(max_y - min_y, 2),
+                            },
+                        })
+                    else:
+                        await websocket.send_json({"status": "ok", "paragraph_id": paragraph_id})
+                except Exception as e:
+                    await websocket.send_json({"status": "error", "message": str(e)})
+        except WebSocketDisconnect:
+            pass
+    finally:
+        reset_subject(context_token)
 
 
 @app.post(
@@ -1201,9 +1164,7 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int):
 )
 def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
     """Irreversibly excises text glyphs and draws opaque blackout boxes on target coordinates."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1249,9 +1210,7 @@ def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
 )
 def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
     """Scans pages for sensitive PII (Email, Phone, SSN, Credit Card, RFC, CURP) and redacts matches."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1306,9 +1265,7 @@ def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
 )
 def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
     """Finds exact string matches across pages, removes them from content streams, and blacks them out."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1361,9 +1318,7 @@ def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
 )
 def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
     """Purges sensitive document metadata (/Info dictionary and /Metadata XMP stream)."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1384,9 +1339,7 @@ def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
 )
 def get_security_status_endpoint(doc_id: str):
     """Retrieves document encryption and digital signature verification state."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1423,9 +1376,7 @@ def get_security_status_endpoint(doc_id: str):
 )
 def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
     """Encrypts document using AES-128 and password protection."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1465,9 +1416,7 @@ def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
 )
 def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
     """Decrypts document using the provided password."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1488,9 +1437,7 @@ def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
 )
 def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
     """Inscribes a visual cryptographic digital signature into the document."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1532,9 +1479,7 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
 )
 def get_signatures_endpoint(doc_id: str):
     """Lists all verified digital signatures in the document."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1565,9 +1510,7 @@ def get_signatures_endpoint(doc_id: str):
 )
 def get_page_tables_endpoint(doc_id: str, page_idx: int):
     """Detects and extracts all structured tables on the specified page."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1635,9 +1578,7 @@ def export_table_endpoint(
     download: bool = False,
 ):
     """Exports a detected table into the specified format (csv, json, markdown, html)."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:
@@ -1684,9 +1625,7 @@ async def optimize_document_endpoint(
 ):
     """Optimizes the PDF document using garbage collection, lossless Flate stream recompression,
     stream deduplication, and Object Stream (/ObjStm) packing."""
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Document session not found.")
+    session = load_session(doc_id)
 
     doc = session["doc"]
     try:

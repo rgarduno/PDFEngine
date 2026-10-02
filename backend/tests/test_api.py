@@ -1,10 +1,18 @@
 """Integration tests for the PDFEngine REST API."""
 
 import io
+import os
+
+os.environ["PDFENGINE_API_KEYS"] = "pdfengine-test-key-0001,pdfengine-test-key-0002"
+
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0001"})
+other_client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0002"})
+anonymous = TestClient(app)
 
 
 def create_minimal_pdf_bytes() -> bytes:
@@ -134,8 +142,11 @@ def test_websocket_realtime_reflow():
     sg_resp = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
     para_id = sg_resp.json()["paragraphs"][0]["id"]
 
-    # Connect to WebSocket reflow channel
-    with client.websocket_connect(f"/ws/documents/{doc_id}/pages/1/reflow") as websocket:
+    # Connect to WebSocket reflow channel with a single-use ticket.
+    ticket = client.post("/api/auth/ws-ticket").json()["ticket"]
+    with client.websocket_connect(
+        f"/ws/documents/{doc_id}/pages/1/reflow?ticket={ticket}"
+    ) as websocket:
         websocket.send_json({
             "paragraph_id": para_id,
             "text": "Live WebSocket streaming reflow test verification string.",
@@ -1244,6 +1255,71 @@ def test_form_builder_crud_workflow():
         json={"name": "CustomerEmail", "field_type": "Text"},
     )
     assert dup_resp.status_code == 400
+
+
+def test_health_does_not_require_a_token():
+    response = anonymous.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+
+def test_upload_without_token_is_rejected():
+    response = anonymous.post(
+        "/api/documents/upload",
+        files={"file": ("agreement.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."
+
+
+def test_foreign_subject_cannot_open_a_document():
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("owned.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    denied = other_client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert denied.status_code == 404
+    assert denied.json()["detail"] == "Document session not found."
+
+    owned = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert owned.status_code == 200
+
+
+def test_ws_ticket_is_single_use_and_requires_a_bearer():
+    refused = anonymous.post("/api/auth/ws-ticket")
+    assert refused.status_code == 401
+
+    issued = client.post("/api/auth/ws-ticket")
+    assert issued.status_code == 200
+    body = issued.json()
+    assert body["expires_in"] == 60
+    assert isinstance(body["ticket"], str) and len(body["ticket"]) >= 20
+
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("ticketed.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    doc_id = upload_resp.json()["document_id"]
+    ticket = body["ticket"]
+
+    with client.websocket_connect(
+        f"/ws/documents/{doc_id}/pages/1/reflow?ticket={ticket}"
+    ) as websocket:
+        websocket.close()
+
+    rejected = False
+    try:
+        with client.websocket_connect(
+            f"/ws/documents/{doc_id}/pages/1/reflow?ticket={ticket}"
+        ) as websocket:
+            websocket.receive_text()
+    except WebSocketDisconnect as exc:
+        rejected = True
+        assert exc.code == 1008
+    assert rejected
 
 
 

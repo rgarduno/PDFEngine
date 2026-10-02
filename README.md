@@ -303,14 +303,33 @@ python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
 
 # Start production server
+export PDFENGINE_API_KEYS="replace-with-a-long-random-token"
 PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+### Authentication
+
+Every route except `GET /api/health` requires `Authorization: Bearer <token>`.
+Set `PDFENGINE_API_KEYS` to a comma-separated list of tokens. Each token must
+be at least 16 characters. The process stores a SHA-256 subject id with the
+document, and a document id can be read only by the subject that created it.
+A missing document and a document owned by another subject both answer 404.
+
+The local studio sends `NEXT_PUBLIC_PDFENGINE_API_KEY` on each request.
+Next.js inlines that value into the browser bundle, so it is visible to anyone
+who can load the studio page. Use it for a single-user studio. A shared
+deployment should terminate at a proxy that injects the bearer header and
+should not publish a tenant key to the browser.
+
+Browser WebSockets cannot set `Authorization`. `POST /api/auth/ws-ticket`
+returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.
 
 ### 3. API Endpoints
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/health` | Health check and native engine availability. |
+| `GET` | `/api/health` | Health check and native engine availability. Public. |
+| `POST` | `/api/auth/ws-ticket` | Exchange the bearer token for a single-use WebSocket ticket. |
 | `POST` | `/api/documents/upload` | Ingest PDF, validate ISO structure, and return session token. |
 | `GET` | `/api/documents/{id}/pages/{p}/scenegraph` | Retrieve semantic layout (paragraphs, bounding boxes, alignments). |
 | `GET` | `/api/documents/{id}/pages/{p}/fonts` | List embedded font resources declared on a specific page. |
@@ -344,7 +363,7 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `POST` | `/api/documents/{id}/redact/text` | Search and permanently excise text runs with zero layout shift on non-redacted text. |
 | `POST` | `/api/documents/{id}/sanitize` | Scrub `/Info` dictionary and `/Metadata` XMP streams to prevent information leaks. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
-| `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
+| `WS` | `/ws/documents/{id}/pages/{p}/reflow?ticket=` | Real-time layout reflow. The ticket is consumed on connect. |
 
 ---
 

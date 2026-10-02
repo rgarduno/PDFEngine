@@ -45,6 +45,43 @@ import {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
 
+// Local studio key. Next.js inlines NEXT_PUBLIC_* into the browser bundle,
+// so this value is visible to anyone who can load the studio. It is a
+// single-user convenience, not a tenant secret.
+const API_KEY = process.env.NEXT_PUBLIC_PDFENGINE_API_KEY || '';
+
+export function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (API_KEY && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${API_KEY}`);
+  }
+  return fetch(input, { ...init, headers });
+}
+
+export async function fetchAuthorizedBuffer(url: string): Promise<ArrayBuffer> {
+  const res = await apiFetch(url);
+  if (!res.ok) {
+    throw new Error(`Request failed (${res.status})`);
+  }
+  return res.arrayBuffer();
+}
+
+export async function downloadAuthorized(url: string, filename: string): Promise<void> {
+  const res = await apiFetch(url);
+  if (!res.ok) {
+    throw new Error(`Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 // Mock data for immediate preview when backend is not connected
 export const MOCK_SESSION: DocumentSession = {
   document_id: 'demo-contract-uuid-001',
@@ -206,7 +243,7 @@ export async function uploadPdf(file: File): Promise<DocumentSession> {
   formData.append('file', file);
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/upload`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -230,7 +267,7 @@ export async function getPageScenegraph(
   pageIdx: number
 ): Promise<PageSceneGraph> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/scenegraph`
     );
     if (!res.ok) {
@@ -250,7 +287,7 @@ export async function editParagraph(
   newText: string
 ): Promise<{ success: boolean; updated_text: string }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/edit/${paragraphId}`,
       {
         method: 'POST',
@@ -277,7 +314,7 @@ export async function getPageFonts(
   pageIdx: number
 ): Promise<{ page_number: number; fonts: string[]; embedded_count: number }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/fonts`
     );
     if (!res.ok) {
@@ -303,7 +340,7 @@ export async function getPageImages(
   pageIdx: number
 ): Promise<{ page_number: number; images: ImageElement[]; count: number }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/images`
     );
     if (!res.ok) {
@@ -329,7 +366,7 @@ export async function replaceImage(
   formData.append('file', file);
 
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/images/${imageId}/replace`,
       {
         method: 'POST',
@@ -347,14 +384,20 @@ export async function replaceImage(
   }
 }
 
-export function connectReflowWebSocket(
+export async function connectReflowWebSocket(
   docId: string,
   pageIdx: number,
   onMessage: (msg: ReflowWebSocketMessage) => void
-): WebSocket | null {
+): Promise<WebSocket | null> {
   try {
+    const ticketRes = await apiFetch(`${API_BASE_URL}/api/auth/ws-ticket`, { method: 'POST' });
+    if (!ticketRes.ok) {
+      throw new Error('WebSocket ticket was refused.');
+    }
+    const body = await ticketRes.json();
+    const ticket = encodeURIComponent(body.ticket);
     const ws = new WebSocket(
-      `${WS_BASE_URL}/ws/documents/${docId}/pages/${pageIdx}/reflow`
+      `${WS_BASE_URL}/ws/documents/${docId}/pages/${pageIdx}/reflow?ticket=${ticket}`
     );
     ws.onmessage = (event) => {
       try {
@@ -375,7 +418,7 @@ export async function getDocumentForms(
   docId: string
 ): Promise<DocumentFormsResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/forms`);
     if (!res.ok) {
       return { document_id: docId, count: MOCK_FORMS.length, fields: MOCK_FORMS };
     }
@@ -392,7 +435,7 @@ export async function fillFormField(
   value: string
 ): Promise<{ success: boolean; updated_count: number }> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/fill`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/forms/fill`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields: { [fieldName]: value } }),
@@ -411,7 +454,7 @@ export async function flattenDocumentForms(
   docId: string
 ): Promise<{ success: boolean; flattened_count: number; message: string }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/forms/flatten`,
       { method: 'POST' }
     );
@@ -435,7 +478,7 @@ export async function rotatePage(
   degrees: number
 ): Promise<RotatePageResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/rotate`,
       {
         method: 'POST',
@@ -462,7 +505,7 @@ export async function splitDocument(
   chunkSize?: number
 ): Promise<SplitDocumentResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/split`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/split`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ page_indices: pageIndices, chunk_size: chunkSize }),
@@ -484,7 +527,7 @@ export async function mergeDocuments(
   documentIds: string[]
 ): Promise<MergeDocumentsResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/merge`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/merge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document_ids: documentIds }),
@@ -507,7 +550,7 @@ export async function reorderPages(
   newOrder: number[]
 ): Promise<{ success: boolean; page_count: number; message: string }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/reorder`,
       {
         method: 'POST',
@@ -528,7 +571,7 @@ export async function deletePages(
   pageIndices: number[]
 ): Promise<{ success: boolean; page_count: number; message: string }> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/delete`,
       {
         method: 'POST',
@@ -549,7 +592,7 @@ export async function getPageAnnotations(
   pageNumber: number
 ): Promise<PageAnnotationsResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations`
     );
     if (!res.ok) throw new Error('Failed to fetch page annotations');
@@ -571,7 +614,7 @@ export async function addMarkup(
   payload: AddMarkupPayload
 ): Promise<AnnotationActionResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/markup`,
       {
         method: 'POST',
@@ -599,7 +642,7 @@ export async function addLink(
   payload: AddLinkPayload
 ): Promise<AnnotationActionResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/link`,
       {
         method: 'POST',
@@ -627,7 +670,7 @@ export async function addStamp(
   payload: AddStampPayload
 ): Promise<AnnotationActionResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/stamp`,
       {
         method: 'POST',
@@ -655,7 +698,7 @@ export async function deleteAnnotation(
   annotId: number
 ): Promise<AnnotationActionResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/${annotId}`,
       {
         method: 'DELETE',
@@ -683,7 +726,7 @@ export async function flattenAnnotations(
     const url = pageNumber
       ? `${API_BASE_URL}/api/documents/${docId}/annotations/flatten?page_number=${pageNumber}`
       : `${API_BASE_URL}/api/documents/${docId}/annotations/flatten`;
-    const res = await fetch(url, { method: 'POST' });
+    const res = await apiFetch(url, { method: 'POST' });
     if (!res.ok) throw new Error('Failed to flatten annotations');
     return await res.json();
   } catch (e) {
@@ -702,7 +745,7 @@ export async function addPagination(
   payload: AddPaginationPayload
 ): Promise<WatermarkActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pagination`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pagination`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -725,7 +768,7 @@ export async function addTextWatermark(
   payload: AddTextWatermarkPayload
 ): Promise<WatermarkActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/watermark/text`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/watermark/text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -765,7 +808,7 @@ export async function addImageWatermark(
     if (options?.placement !== undefined) formData.append('placement', options.placement);
     if (options?.pageIndices !== undefined) formData.append('page_indices', options.pageIndices.join(','));
 
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/watermark/image`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/watermark/image`, {
       method: 'POST',
       body: formData,
     });
@@ -787,7 +830,7 @@ export async function redactRegions(
   payload: RedactRegionsPayload
 ): Promise<RedactionActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/redact/regions`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/redact/regions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -822,7 +865,7 @@ export async function redactPattern(
   payload: RedactPatternPayload
 ): Promise<RedactionActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/redact/pattern`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/redact/pattern`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -857,7 +900,7 @@ export async function redactText(
   payload: RedactTextPayload
 ): Promise<RedactionActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/redact/text`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/redact/text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -892,7 +935,7 @@ export async function sanitizeDocument(
   scrubMetadata: boolean = true
 ): Promise<SanitizeDocumentResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/sanitize`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/sanitize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scrub_metadata: scrubMetadata }),
@@ -912,7 +955,7 @@ export async function sanitizeDocument(
 
 export async function getSecurityStatus(docId: string): Promise<SecurityStatusResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/security`);
     if (!res.ok) throw new Error('Failed to load security status');
     return await res.json();
   } catch (e) {
@@ -930,7 +973,7 @@ export async function encryptDocument(
   payload: EncryptDocumentPayload
 ): Promise<SecurityActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/encrypt`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/security/encrypt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -956,7 +999,7 @@ export async function decryptDocument(
   payload: DecryptDocumentPayload
 ): Promise<SecurityActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/decrypt`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/security/decrypt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -982,7 +1025,7 @@ export async function signDocument(
   payload: SignDocumentPayload
 ): Promise<SecurityActionResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/sign`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/security/sign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1018,7 +1061,7 @@ export async function signDocument(
 
 export async function getSignatures(docId: string): Promise<SignatureItem[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/signatures`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/security/signatures`);
     if (!res.ok) throw new Error('Failed to load signatures');
     return await res.json();
   } catch (e) {
@@ -1032,7 +1075,7 @@ export async function getPageTables(
   pageIdx: number
 ): Promise<PageTablesResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables`);
     if (!res.ok) throw new Error('Failed to extract tables');
     return await res.json();
   } catch (e) {
@@ -1077,7 +1120,7 @@ export async function exportTableData(
   format: 'csv' | 'json' | 'markdown' | 'html' = 'csv'
 ): Promise<TableExportResponse> {
   try {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables/${tableIdx}/export?format=${format}`
     );
     if (!res.ok) throw new Error('Failed to export table');
@@ -1113,7 +1156,7 @@ export async function getDocumentOverview(
   docId: string
 ): Promise<DocumentOverviewResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/overview`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pages/overview`);
     if (!res.ok) throw new Error('Failed to get document overview');
     return await res.json();
   } catch (e) {
@@ -1142,7 +1185,7 @@ export async function getPageRotation(
   pageIdx: number
 ): Promise<number> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/rotation`);
+    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/rotation`);
     if (!res.ok) throw new Error('Failed to get page rotation');
     const data = await res.json();
     return data.rotation ?? 0;
@@ -1155,7 +1198,7 @@ export async function optimizeDocument(
   docId: string,
   options: OptimizeRequest = {}
 ): Promise<OptimizeResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/optimize`, {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/optimize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options),
@@ -1176,7 +1219,7 @@ export async function createFormField(
   pageNumber: number,
   payload: CreateFormFieldPayload
 ): Promise<CreateFormFieldResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/forms`, {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/forms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -1192,7 +1235,7 @@ export async function deleteFormField(
   docId: string,
   fieldName: string
 ): Promise<DeleteFormFieldResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
@@ -1207,7 +1250,7 @@ export async function updateFormField(
   fieldName: string,
   payload: UpdateFormFieldPayload
 ): Promise<{ status: string; document_id: string; field: FormFieldElement; message: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

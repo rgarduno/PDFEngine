@@ -17,6 +17,7 @@ import {
   getPageImages,
   replaceImage,
   editParagraph,
+  downloadAuthorized,
   getExportUrl,
   connectReflowWebSocket,
   getDocumentForms,
@@ -119,9 +120,13 @@ export default function Home() {
   const watermarkImageFileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Initialize WebSocket for live reflow calculation
+  // Initialize WebSocket for live reflow calculation.
+  // The ticket request is async, so a cancelled flag drops a socket that
+  // resolves after this document session has already changed.
   useEffect(() => {
-    const ws = connectReflowWebSocket(session.document_id, 1, (msg) => {
+    let cancelled = false;
+
+    connectReflowWebSocket(session.document_id, 1, (msg) => {
       if (msg.status === 'ok') {
         setParagraphs((prev) =>
           prev.map((p) => {
@@ -138,18 +143,23 @@ export default function Home() {
         );
         setActiveReflowId(null);
       }
-    });
-
-    if (ws) {
+    }).then((ws) => {
+      if (!ws) return;
+      if (cancelled) {
+        ws.close();
+        return;
+      }
       ws.onopen = () => setWsConnected(true);
       ws.onclose = () => setWsConnected(false);
       ws.onerror = () => setWsConnected(false);
       wsRef.current = ws;
-    }
+    });
 
     return () => {
+      cancelled = true;
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [session.document_id]);
@@ -905,12 +915,8 @@ export default function Home() {
 
   const handleDownloadTable = (tableIdx: number, format: string) => {
     const downloadUrl = getTableDownloadUrl(session.document_id, currentPage, tableIdx, format);
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = `table_p${currentPage}_${tableIdx + 1}.${format === 'markdown' ? 'md' : format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const extension = format === 'markdown' ? 'md' : format;
+    void downloadAuthorized(downloadUrl, `table_p${currentPage}_${tableIdx + 1}.${extension}`);
   };
 
   // Dynamic Page Navigation Handler
@@ -998,20 +1004,10 @@ export default function Home() {
         await editParagraph(session.document_id, 1, p.id, p.text);
       }
 
-      // Trigger file download from API
-      const exportUrl = getExportUrl(session.document_id);
-      const res = await fetch(exportUrl);
-      if (!res.ok) throw new Error('Export endpoint error');
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${session.filename.replace('.pdf', '')}_surgical_edited.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      await downloadAuthorized(
+        getExportUrl(session.document_id),
+        `${session.filename.replace('.pdf', '')}_surgical_edited.pdf`
+      );
     } catch (e) {
       console.warn('Backend export unavailable, using client-side fallback download notification:', e);
       alert('Surgical In-Place Edits confirmed! When connected to backend, modified PDF downloads instantaneously.');

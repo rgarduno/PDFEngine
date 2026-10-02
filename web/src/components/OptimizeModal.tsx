@@ -15,7 +15,7 @@ import {
   Info,
 } from 'lucide-react';
 import { OptimizeRequest, OptimizeResponse } from '@/lib/types';
-import { optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
+import { downloadAuthorized, optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
 
 interface OptimizeModalProps {
   isOpen: boolean;
@@ -292,14 +292,19 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({
                   <span>{copied ? 'Copiado' : 'Copiar Reporte'}</span>
                 </button>
 
-                <a
-                  href={getOptimizedExportUrl(documentId)}
-                  download={`${filename.replace('.pdf', '')}_optimized.pdf`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void downloadAuthorized(
+                      getOptimizedExportUrl(documentId),
+                      `${filename.replace('.pdf', '')}_optimized.pdf`
+                    );
+                  }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-all shadow-xs"
                 >
                   <Download size={13} />
                   <span>Descargar Optimizado</span>
-                </a>
+                </button>
               </div>
             </div>
           )}
