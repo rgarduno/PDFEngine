@@ -3,12 +3,13 @@
 //! Handles chunk processing, scanline reconstruction (Sub, Up, Average, Paeth filters),
 //! alpha transparency separation for `/SMask`, and lossless PNG synthesis.
 
-use std::io::{Read, Write};
-use flate2::read::ZlibDecoder;
+use std::io::Write;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 
+use crate::cos::filters::decode_flate;
 use crate::error::{PdfError, PdfResult};
+use crate::security::SecurityLimits;
 
 /// PNG header metadata from the `IHDR` chunk.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,8 +54,14 @@ pub fn parse_png_header(data: &[u8]) -> PdfResult<PngHeader> {
 }
 
 /// Parses and unfilters pixel data from a PNG file.
+///
+/// IDAT inflation uses the same ceiling as other Flate streams. The declared
+/// width and height are rejected when the reconstructed image would pass that ceiling.
 /// Returns `(width, height, rgb_or_gray_samples, optional_alpha_samples)`.
-pub fn parse_png_pixels(data: &[u8]) -> PdfResult<(u32, u32, Vec<u8>, Option<Vec<u8>>)> {
+pub fn parse_png_pixels(
+    data: &[u8],
+    limits: &SecurityLimits,
+) -> PdfResult<(u32, u32, Vec<u8>, Option<Vec<u8>>)> {
     let header = parse_png_header(data)?;
 
     if header.bit_depth != 8 {
@@ -107,20 +114,33 @@ pub fn parse_png_pixels(data: &[u8]) -> PdfResult<(u32, u32, Vec<u8>, Option<Vec
         offset = chunk_end + 4; // Skip CRC
     }
 
-    // 2. Decompress zlib stream
-    let mut decoder = ZlibDecoder::new(&idat_data[..]);
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| PdfError::DecompressionError {
+    // 2. Decompress zlib stream under the same ceiling as FlateDecode.
+    let decompressed = decode_flate(&idat_data, None, limits).map_err(|error| match error {
+        PdfError::DecompressionError { message, .. } => PdfError::DecompressionError {
             filter: "FlateDecode".to_string(),
-            message: format!("Failed to decompress PNG IDAT data: {}", e),
-        })?;
+            message: format!("Failed to decompress PNG IDAT data: {}", message),
+        },
+        other => other,
+    })?;
 
     let width = header.width as usize;
     let height = header.height as usize;
-    let row_len = width * bpp;
-    let expected_len = height * (1 + row_len);
+    let row_len = width.checked_mul(bpp).ok_or_else(|| {
+        PdfError::SecurityLimitExceeded(
+            "PNG row width exceeds the decompression ceiling".to_string(),
+        )
+    })?;
+    let scanline = row_len.checked_add(1).ok_or_else(|| {
+        PdfError::SecurityLimitExceeded(
+            "PNG row width exceeds the decompression ceiling".to_string(),
+        )
+    })?;
+    let expected_len = height.checked_mul(scanline).ok_or_else(|| {
+        PdfError::SecurityLimitExceeded(
+            "PNG image size exceeds the decompression ceiling".to_string(),
+        )
+    })?;
+    limits.validate_decompression(idat_data.len(), expected_len)?;
 
     if decompressed.len() < expected_len {
         return Err(PdfError::ParseError {
@@ -329,11 +349,24 @@ mod tests {
         assert!(png_bytes.starts_with(&PNG_SIGNATURE));
 
         let (parsed_w, parsed_h, parsed_pixels, alpha) =
-            parse_png_pixels(&png_bytes).expect("Parse PNG");
+            parse_png_pixels(&png_bytes, &SecurityLimits::default()).expect("Parse PNG");
 
         assert_eq!(parsed_w, width);
         assert_eq!(parsed_h, height);
         assert_eq!(parsed_pixels, original_pixels);
         assert!(alpha.is_none());
+    }
+
+    #[test]
+    fn png_idat_stops_at_the_decompression_ceiling() {
+        let width = 4u32;
+        let height = 2u32;
+        let original_pixels = vec![0u8; (width * height * 3) as usize];
+        let png_bytes = encode_png(width, height, &original_pixels, true).expect("Encode PNG");
+
+        let mut limits = SecurityLimits::default();
+        limits.max_stream_decompressed_bytes = 8;
+        let error = parse_png_pixels(&png_bytes, &limits).unwrap_err();
+        assert!(error.to_string().contains("exceeds maximum allowable limit"));
     }
 }

@@ -77,24 +77,37 @@ pub fn decode_flate(
             .unwrap_or(1);
 
         if predictor > 1 {
-            let columns = params
-                .get("Columns")
-                .and_then(|o| o.as_i64())
-                .unwrap_or(1) as usize;
-            let colors = params
-                .get("Colors")
-                .and_then(|o| o.as_i64())
-                .unwrap_or(1) as usize;
-            let bits_per_component = params
-                .get("BitsPerComponent")
-                .and_then(|o| o.as_i64())
-                .unwrap_or(8) as usize;
-
-            return apply_predictor(&decompressed, predictor, columns, colors, bits_per_component);
+            let columns = predictor_dimension(params, "Columns", 1)?;
+            let colors = predictor_dimension(params, "Colors", 1)?;
+            let bits_per_component = predictor_dimension(params, "BitsPerComponent", 8)?;
+            return apply_predictor(
+                &decompressed,
+                predictor,
+                columns,
+                colors,
+                bits_per_component,
+                limits,
+            );
         }
     }
 
     Ok(decompressed)
+}
+
+/// Reads a predictor dimension. Missing keys use `default`. Zero and negative values are rejected
+/// before they are cast: a zero `Columns` makes the row length 0, and `chunks_exact(0)` panics.
+fn predictor_dimension(params: &PdfDictionary, key: &str, default: i64) -> PdfResult<usize> {
+    let value = params.get(key).and_then(|o| o.as_i64()).unwrap_or(default);
+    if value <= 0 {
+        return Err(PdfError::DecompressionError {
+            filter: "FlateDecode".to_string(),
+            message: format!("Predictor /{} must be positive", key),
+        });
+    }
+    usize::try_from(value).map_err(|_| PdfError::SecurityLimitExceeded(format!(
+        "Predictor /{} exceeds the decompression ceiling",
+        key
+    )))
 }
 
 /// Applies PNG or TIFF predictor reconstruction (ISO 32000-1 §7.4.4.4).
@@ -104,9 +117,28 @@ fn apply_predictor(
     columns: usize,
     colors: usize,
     bits_per_component: usize,
+    limits: &SecurityLimits,
 ) -> PdfResult<Vec<u8>> {
-    let bytes_per_pixel = ((colors * bits_per_component) + 7) / 8;
-    let row_len = ((columns * colors * bits_per_component) + 7) / 8;
+    let pixel_bits = colors
+        .checked_mul(bits_per_component)
+        .ok_or_else(|| predictor_overflow())?;
+    let bytes_per_pixel = pixel_bits.saturating_add(7) / 8;
+    let row_bits = columns
+        .checked_mul(pixel_bits)
+        .ok_or_else(|| predictor_overflow())?;
+    let row_len = row_bits.saturating_add(7) / 8;
+    if row_len == 0 || bytes_per_pixel == 0 {
+        return Err(PdfError::DecompressionError {
+            filter: "FlateDecode".to_string(),
+            message: "Predictor row length is zero".to_string(),
+        });
+    }
+    if row_len > limits.max_stream_decompressed_bytes {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "Predictor row length ({} bytes) exceeds maximum allowable limit ({} bytes)",
+            row_len, limits.max_stream_decompressed_bytes
+        )));
+    }
 
     // TIFF Predictor 2: Horizontal differencing
     if predictor == 2 {
@@ -167,6 +199,13 @@ fn apply_predictor(
     }
 
     Ok(data.to_vec())
+}
+
+/// Reports a predictor dimension that overflowed while computing the row length.
+fn predictor_overflow() -> PdfError {
+    PdfError::SecurityLimitExceeded(
+        "Predictor dimensions exceed the decompression ceiling".to_string(),
+    )
 }
 
 /// Computes the Paeth filter prediction according to PNG specification.
@@ -306,5 +345,34 @@ mod tests {
         let hex_data = b"48656c6c6f20576f726c64>";
         let decoded = decode_ascii_hex(hex_data, &limits).unwrap();
         assert_eq!(decoded, b"Hello World");
+    }
+
+    #[test]
+    fn predictor_columns_of_zero_is_rejected() {
+        let limits = SecurityLimits::default();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"abcdefghijklmnop").unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut params = PdfDictionary::new();
+        params.insert("Predictor", 2i64);
+        params.insert("Columns", 0i64);
+        let error = decode_flate(&compressed, Some(&params), &limits).unwrap_err();
+        assert!(error.to_string().contains("Columns"));
+    }
+
+    #[test]
+    fn predictor_row_above_the_ceiling_is_rejected() {
+        let mut limits = SecurityLimits::default();
+        limits.max_stream_decompressed_bytes = 64;
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"abcdefghijklmnop").unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut params = PdfDictionary::new();
+        params.insert("Predictor", 2i64);
+        params.insert("Columns", 10_000i64);
+        let error = decode_flate(&compressed, Some(&params), &limits).unwrap_err();
+        assert!(error.to_string().contains("Predictor row length"));
     }
 }

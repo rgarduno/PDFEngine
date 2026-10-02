@@ -298,7 +298,7 @@ pub fn replace_image_content(
         Ok(())
     } else if new_bytes.len() >= 8 && &new_bytes[0..8] == png::PNG_SIGNATURE {
         // PNG Replacement
-        let (width, height, color_samples, alpha_opt) = parse_png_pixels(new_bytes)?;
+        let (width, height, color_samples, alpha_opt) = parse_png_pixels(new_bytes, &doc.limits)?;
 
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder
@@ -407,7 +407,7 @@ pub fn create_image_xobject(
         Ok((image_id, header.width, header.height))
     } else if image_bytes.len() >= 8 && &image_bytes[0..8] == png::PNG_SIGNATURE {
         // PNG Encoding
-        let (width, height, color_samples, alpha_opt) = parse_png_pixels(image_bytes)?;
+        let (width, height, color_samples, alpha_opt) = parse_png_pixels(image_bytes, &doc.limits)?;
 
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder
