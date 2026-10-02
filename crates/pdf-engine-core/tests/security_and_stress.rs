@@ -162,7 +162,7 @@ fn test_multi_column_dense_document_layout_and_surgical_edits() {
     let mut ast = build_ast_from_operations(ops);
 
     let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct().unwrap();
 
     assert_eq!(
         paragraphs.len(),
@@ -193,7 +193,7 @@ fn test_multi_column_dense_document_layout_and_surgical_edits() {
 
     // Reconstruct layout after mutations
     let re_reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-    let re_paragraphs = re_reconstructor.reconstruct();
+    let re_paragraphs = re_reconstructor.reconstruct().unwrap();
 
     assert_eq!(re_paragraphs.len(), 20, "Block count must remain exactly 20");
     assert!(re_paragraphs[5].text().contains("Financial record #6 successfully audited"));
@@ -273,7 +273,7 @@ fn test_font_encoder_and_glyph_fallback_editing() {
 
     let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
     let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct().unwrap();
     assert_eq!(paragraphs.len(), 1);
 
     let edit_result = SurgicalEditor::edit_paragraph_with_encoder(

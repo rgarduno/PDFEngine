@@ -46,7 +46,7 @@ ET
     // 2. Reconstruct layout
     let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
     let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct().unwrap();
 
     assert_eq!(paragraphs.len(), 2);
     assert!(paragraphs[0].text().contains("The original agreement"));
@@ -81,7 +81,7 @@ ET
 
     // 6. Re-run LayoutReconstructor on mutated AST to verify that the new paragraph parses correctly
     let reconstructor_after = LayoutReconstructor::new(&ast).with_font("F1", metrics);
-    let paragraphs_after = reconstructor_after.reconstruct();
+    let paragraphs_after = reconstructor_after.reconstruct().unwrap();
 
     assert_eq!(paragraphs_after.len(), 2);
     assert!(paragraphs_after[0].text().contains("The amended agreement"));

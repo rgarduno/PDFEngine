@@ -1,6 +1,10 @@
-//! User access permissions conforming to ISO 32000-1 §7.6.3.2 Table 22.
+//! Permission bits stored in the encryption dictionary `/P` entry.
+//!
+//! The flags follow the bit positions in ISO 32000-1 §7.6.3.2 Table 22.
+//! This process writes and reads the integer. It does not block printing,
+//! copying, modification, or form filling.
 
-/// Granular user access permissions bitmask for encrypted PDF documents.
+/// Bits written to `/P`. They are not enforced by this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PdfPermissions {
     /// Bit 3: Print the document (possibly at low resolution).
@@ -22,7 +26,7 @@ pub struct PdfPermissions {
 }
 
 impl Default for PdfPermissions {
-    /// Default unrestricted permissions (all actions allowed).
+    /// All bits set. The stored value does not grant or deny an action in this process.
     fn default() -> Self {
         Self {
             print_low_res: true,
@@ -38,7 +42,8 @@ impl Default for PdfPermissions {
 }
 
 impl PdfPermissions {
-    /// Read-only presentation: allows printing and accessibility, but forbids copying and modifications.
+    /// Stored bitmask with print and accessibility bits set and the modification bits clear.
+    /// This process does not consult the bitmask before an edit.
     pub fn read_only() -> Self {
         Self {
             print_low_res: true,
@@ -52,7 +57,8 @@ impl PdfPermissions {
         }
     }
 
-    /// Form filling only: allows printing, filling forms, and accessibility.
+    /// Stored bitmask with the form-filling bit set and the other modification bits clear.
+    /// This process does not consult the bitmask before an edit.
     pub fn forms_only() -> Self {
         Self {
             print_low_res: true,

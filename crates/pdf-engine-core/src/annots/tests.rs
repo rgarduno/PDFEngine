@@ -155,6 +155,40 @@ fn test_link_annotations_uri_and_goto() {
 }
 
 #[test]
+fn test_link_uri_rejects_non_web_schemes() {
+    let pdf_bytes = create_test_pdf_two_pages();
+    let mut doc = PdfDocument::load(&pdf_bytes).unwrap();
+    let rect = Rect::new(100.0, 500.0, 300.0, 520.0);
+    let rejected = [
+        "javascript:example",
+        "file:example",
+        "mailto:person@example.com",
+        "http:/single",
+        " https://example.com",
+        "https://",
+    ];
+    for uri in rejected {
+        let err = add_link_uri(&mut doc, 0, rect, uri, false).unwrap_err();
+        assert!(
+            err.to_string().contains("http or https"),
+            "{uri} produced {err}"
+        );
+    }
+
+    let annots = extract_page_annotations(&mut doc, 0).unwrap();
+    assert!(annots.is_empty());
+
+    let accepted = add_link_uri(&mut doc, 0, rect, "HTTPS://example.com/terms", false).unwrap();
+    let annots = extract_page_annotations(&mut doc, 0).unwrap();
+    assert_eq!(annots.len(), 1);
+    assert_eq!(annots[0].id, accepted);
+    assert_eq!(
+        annots[0].link_action,
+        Some(LinkAction::Uri("HTTPS://example.com/terms".into()))
+    );
+}
+
+#[test]
 fn test_stamp_annotation_creation_and_reading() {
     let pdf_bytes = create_test_pdf_two_pages();
     let mut doc = PdfDocument::load(&pdf_bytes).unwrap();

@@ -306,7 +306,8 @@ impl PyRedactionSummary {
     }
 }
 
-/// Granular user access permissions matching ISO 32000-1 §7.6.3.2 Table 22.
+/// Bits stored in the encryption dictionary `/P` entry.
+/// This process does not enforce them. The bit positions follow ISO 32000-1 §7.6.3.2 Table 22.
 #[pyclass(name = "PdfPermissions")]
 #[derive(Debug, Clone)]
 pub struct PyPdfPermissions {
@@ -744,7 +745,9 @@ impl PyPage {
         // Reconstruct layout after mutation to keep page state synchronized
         let reconstructor =
             LayoutReconstructor::new(&self.ast).with_font("F1", self.metrics.clone());
-        self.paragraphs = reconstructor.reconstruct();
+        self.paragraphs = reconstructor.reconstruct().map_err(|e| {
+            PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e))
+        })?;
 
         Ok(())
     }
@@ -812,7 +815,9 @@ impl PyPdfDocument {
                         let ast = build_ast_from_operations(ops);
                         let reconstructor =
                             LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-                        let paragraphs = reconstructor.reconstruct();
+                        let paragraphs = reconstructor.reconstruct().map_err(|e| {
+                            PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e))
+                        })?;
                         (Some(contents_ref), ast, paragraphs)
                     } else {
                         (None, ContentAst::new(), Vec::new())
@@ -842,7 +847,7 @@ impl PyPdfDocument {
     }
 
     /// Reloads all active PyPage scene graphs to reflect recent stream mutations or flatten operations.
-    pub(crate) fn reload_active_pages(&mut self) {
+    pub(crate) fn reload_active_pages(&mut self) -> PyResult<()> {
         let page_ids = self.page_ids.clone();
         let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
         let mut reloaded_pages = Vec::with_capacity(page_ids.len());
@@ -858,7 +863,12 @@ impl PyPdfDocument {
                             let ast = build_ast_from_operations(ops);
                             let reconstructor =
                                 LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-                            let paragraphs = reconstructor.reconstruct();
+                            let paragraphs = reconstructor.reconstruct().map_err(|e| {
+                                PyRuntimeError::new_err(format!(
+                                    "Layout reconstruction failed: {}",
+                                    e
+                                ))
+                            })?;
                             (ast, paragraphs)
                         } else {
                             (ContentAst::new(), Vec::new())
@@ -879,6 +889,7 @@ impl PyPdfDocument {
             }
         }
         self.active_pages = reloaded_pages;
+        Ok(())
     }
 }
 
@@ -1234,7 +1245,7 @@ impl PyPdfDocument {
         let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e)))?;
 
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(count)
     }
 
@@ -1433,7 +1444,7 @@ impl PyPdfDocument {
         let count = pdf_engine_core::annots::flatten_annotations(&mut self.doc, target_idx)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten annotations: {}", e)))?;
 
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(count)
     }
 
@@ -1700,7 +1711,7 @@ impl PyPdfDocument {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("Redaction failed: {}", e)))?;
 
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(PyRedactionSummary::from_core(summary))
     }
 
@@ -1776,7 +1787,7 @@ impl PyPdfDocument {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("Pattern redaction failed: {}", e)))?;
 
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(summaries
             .into_iter()
             .map(PyRedactionSummary::from_core)
@@ -1843,7 +1854,7 @@ impl PyPdfDocument {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("Text redaction failed: {}", e)))?;
 
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(summaries
             .into_iter()
             .map(PyRedactionSummary::from_core)
@@ -1884,7 +1895,7 @@ impl PyPdfDocument {
     pub fn decrypt(&mut self, password: &str) -> PyResult<()> {
         pdf_engine_core::security::decrypt_document(&mut self.doc, password)
             .map_err(|e| PyRuntimeError::new_err(format!("Decryption failed: {}", e)))?;
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(())
     }
 
@@ -1915,7 +1926,7 @@ impl PyPdfDocument {
         };
         let sig = pdf_engine_core::security::sign_document(&mut self.doc, &config)
             .map_err(|e| PyRuntimeError::new_err(format!("Signing failed: {}", e)))?;
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(PyVerifiedSignature::from_core(sig))
     }
 
@@ -2008,7 +2019,7 @@ impl PyPdfDocument {
             .doc
             .optimize(&options)
             .map_err(|e| PyRuntimeError::new_err(format!("Optimization failed: {}", e)))?;
-        self.reload_active_pages();
+        self.reload_active_pages()?;
         Ok(PyOptimizationStats::from_core(stats))
     }
 

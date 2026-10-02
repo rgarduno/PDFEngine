@@ -54,7 +54,7 @@ pub fn detect_tables(doc: &mut PdfDocument, page_idx: usize) -> PdfResult<Vec<De
 
     // 1. Extract layout paragraphs and text lines for cell content assignment
     let reconstructor = LayoutReconstructor::new(&ast);
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct()?;
 
     // 2. Try lattice-based (vector ruled grid) table detection
     let mut tables = detect_lattice_tables(&ast, &paragraphs, page_idx);

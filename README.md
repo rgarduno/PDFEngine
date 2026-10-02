@@ -98,18 +98,18 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Semitransparent text watermarks with matrix rotation and /ExtGState /ca│
 │    - Embedded image watermarks (PNG/JPEG) with background/foreground depth  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 10. Surgical Redaction & PII Sanitizer (ISO 32000-1 §14.11)                 │
+│ 10. Glyph excision and PII scan (not a legal redaction)                     │
 │    - Physical glyph & stream excision from AST (no visual-only hiding)      │
 │    - Zero layout shift: coordinates of non-redacted text preserved via Tm   │
 │    - Automated PII scanning: Email, Phone, RFC, CURP, Credit Card (Luhn)    │
 │    - Opaque blackout vector patches (`re f`) with centered overlay labels   │
 │    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
-│    - Complete metadata scrubbing: /Info dictionary & /Metadata XMP stream   │
+│    - Metadata /Info and XMP are removed only when scrub_metadata is set     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 11. PDF Security, Permissions & SHA-256 Attestation (ISO 32000 §7.6 & §12.8)│
 │    - Rev 4 security handler: AES-128 CBC, SHA-256, and MD5                  │
 │    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
-│    - Granular permissions bitmask (print, edit, extract, forms, assemble)  │
+│    - /P permission bits are stored and are not enforced by this process     │
 │    - Digital signatures with AcroForm /Sig fields and /ByteRange validation │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 12. Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4│
@@ -149,7 +149,7 @@ PDFEngine/
 │   │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
 │   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
 │   │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
-│   │   │   ├── redact/         # ISO 32000-1 §14.11 legal redaction, PII scanning & metadata scrubbing
+│   │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
 │   │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
@@ -187,6 +187,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Object count and optimizer work** | A cross-reference reserves a slot per object number, an object stream declares a huge `/N`, or compressed objects point at each other. | At most 500,000 objects. Cross-reference streams list only occupied numbers. Object-stream `/N` and `/First` outside the decoded stream are rejected. A compressed-object cycle fails closed. Each object stream holds at most 100 objects, and zlib-best recompression skips streams larger than 1 MiB. |
 | **Optimizer on protected files** | A size rewrite moves every byte offset. A byte-range signature would no longer match, and encryption is not re-applied. | Optimization is refused (409) when the trailer has `/Encrypt`, or when an object is `/Type /Sig` or `/SubFilter /PDFEngine.sha256`. The file is left unchanged. Words drawn in a content stream are not treated as a signature. |
 | **Browser origin and error text** | Any site can call the API with credentials, and a handler returns the engine's internal error text. | `PDFENGINE_CORS_ORIGINS` lists the exact origins that may call the API. Credentials are attached only for an origin on that list. A wildcard is ignored. Clients receive `The request could not be completed.` and the cause stays in the server log. |
+| **Downloads, links, permissions, and redaction** | A download name is taken from the upload, a link can use any scheme, `/P` is described as access control, and redaction is described as ISO legal redaction. | Export names are `document_edited.pdf` and `document_optimized.pdf`. New links accept only `http` and `https`. `/P` is stored and not enforced. Redaction removes intersecting glyphs, page `/Metadata`, and marked-content `/ActualText`, `/Alt`, and `/E` on the rewritten page. Attachments, the structure tree, and form appearances stay. Document `/Info` and catalog XMP are removed only when metadata scrubbing is requested. |
 
 ---
 
@@ -252,7 +253,7 @@ fn edit_page_paragraph(page_content_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std
     // 2. Reconstruct semantic layout (ParagraphBlocks, Lines, Spans)
     let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
     let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct()?;
 
     // 3. Perform surgical in-place edit on target paragraph
     if let Some(target) = paragraphs.first() {
@@ -386,7 +387,7 @@ PDFEngine includes a modern, high-precision web studio inside `web/` with a dual
 * **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
 * **Layer 1.8 Interactive AcroForms & Flattening**: In-situ filling for text inputs, checkboxes, and select dropdowns, coupled with single-click surgical document flattening.
 * **Layer 1.9 Visual Annotations & Interactive Links**: Real-time rendering of highlights, underlines, strikeouts, clickable links, and rotated rubber stamps.
-* **Layer 1.10 True Legal Redaction & PII Sanitizer**: Physical glyph excision conforming to ISO 32000-1 §14.11, automated PII regex scanning, interactive annotation pruning, and `/Info` & XMP metadata scrubbing.
+* **Layer 1.10 Glyph excision and PII scan**: Removes intersecting glyphs from the page content stream, draws a blackout, and can prune intersecting annotations. Document `/Info` and catalog XMP are removed only when scrubbing is requested. Attachments, the structure tree, and form appearances stay. This is not an ISO legal redaction.
 * **Document Assembly & Orientation Inspector**: Rotate pages (-90°, +90°, 180°), split documents into single-page chunks, merge external PDFs, and delete pages with live canvas viewport synchronization.
 * **Dynamic Foliado & Bates Numbering**: Configurable headers and footers with `{page}` and `{total}` template evaluation, 6-way spatial placement, and cover page bypass.
 * **Semi-transparent Text & Image Watermarks**: Rotated diagonal text watermarks and company logos with opacity controls and foreground/background depth placement.
@@ -422,8 +423,8 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 10: Document Assembly, Splitting, Merging & Page Operations** (Object cloner, rotation, split, merge, reorder, delete, PyO3 bindings, FastAPI endpoints & Web Studio UI)
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
-- [x] **Phase 13: Surgical Legal Redaction, PII Sanitizer & Metadata Scrubbing (ISO 32000-1 §14.11)** (Physical glyph & stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` & XMP metadata scrubbing, PyO3 bindings, FastAPI endpoints & Web Studio)
-- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, granular permissions bitmask, SHA-256 /ByteRange integrity attestation)
+- [x] **Phase 13: Glyph excision, PII scan, and optional metadata scrub** (Physical glyph and stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` and XMP scrub only when requested, PyO3 bindings, FastAPI endpoints and Web Studio)
+- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, permissions bitmask stored in `/P` and not enforced by this process, SHA-256 /ByteRange integrity attestation)
 - [x] **Phase 15: Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4)** (Vector lattice grid solver, borderless fallback, multi-format CSV/JSON/MD/HTML exporters)
 - [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)

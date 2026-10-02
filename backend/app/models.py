@@ -446,7 +446,7 @@ class SanitizeDocumentResponse(BaseModel):
 
 
 class PermissionsModel(BaseModel):
-    """Granular user access permissions matching ISO 32000-1 §7.6.3.2."""
+    """Bits stored in the encryption dictionary `/P` entry. This process does not enforce them."""
     print_low_res: bool = True
     print_high_res: bool = True
     modify_contents: bool = True
@@ -461,7 +461,7 @@ class EncryptDocumentRequest(BaseModel):
     """Request payload to encrypt document with AES-128 and password protection."""
     user_password: str = Field(default="", description="Password required to open and read document")
     owner_password: str = Field(min_length=1, description="Owner password required to change permissions. No default is applied.")
-    permissions: Optional[PermissionsModel] = Field(default=None, description="Granular access permissions")
+    permissions: Optional[PermissionsModel] = Field(default=None, description="Bits stored in /P. This process does not enforce them.")
     encrypt_metadata: Optional[bool] = Field(default=True, description="Whether to encrypt metadata stream")
 
 

@@ -1,4 +1,5 @@
-//! Data models and configurations for PDF Redaction and Content Sanitization according to ISO 32000-1 §14.11.
+//! Regions, patterns, and options for glyph excision.
+//! Document metadata is removed only when `scrub_metadata` is set.
 
 use crate::layout::geometry::Rect;
 

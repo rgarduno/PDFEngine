@@ -1,11 +1,13 @@
-//! Surgical Content AST mutator for irreversible text redaction and blackout patch synthesis.
+//! Removes glyphs that intersect a redaction rectangle and draws an opaque blackout.
 //!
-//! Complies with ISO 32000-1 §14.11 and legal privacy standards by physically eliminating
-//! target glyphs and operators from the AST rather than merely covering them.
+//! Marked-content `/ActualText`, `/Alt`, and `/E` entries on the rewritten page are
+//! removed with the glyphs. Attachments, the structure tree, and form appearances
+//! are left in place. This is not an ISO 32000-1 legal redaction.
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::cos::object::{PdfName, PdfObject, PdfString};
+use crate::cos::object::{PdfDictionary, PdfName, PdfObject, PdfString};
+use crate::error::PdfResult;
 use crate::fonts::FontMetrics;
 use crate::layout::geometry::Rect;
 use crate::layout::glyph::PositionedGlyph;
@@ -20,9 +22,9 @@ pub fn find_pattern_boxes_on_page(
     pattern: &RedactionPattern,
     metrics: &FontMetrics,
     padding: f64,
-) -> Vec<Rect> {
+) -> PdfResult<Vec<Rect>> {
     let reconstructor = LayoutReconstructor::new(ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct()?;
     let mut detected_boxes = Vec::new();
 
     for paragraph in paragraphs {
@@ -73,7 +75,52 @@ pub fn find_pattern_boxes_on_page(
         }
     }
 
-    detected_boxes
+    Ok(detected_boxes)
+}
+
+const ALTERNATE_TEXT_KEYS: &[&str] = &["ActualText", "Alt", "E"];
+
+/// Drops replacement-text keys from dictionaries carried in the page content stream.
+fn strip_alternate_text(nodes: &mut [ContentNode]) {
+    for node in nodes {
+        match node {
+            ContentNode::GraphicsGroup { children, .. } => strip_alternate_text(children),
+            ContentNode::TextBlock { operations, .. } => {
+                for operation in operations {
+                    for operand in &mut operation.operands {
+                        strip_alternate_text_object(operand);
+                    }
+                }
+            }
+            ContentNode::Instruction { operation, .. } => {
+                for operand in &mut operation.operands {
+                    strip_alternate_text_object(operand);
+                }
+            }
+        }
+    }
+}
+
+fn strip_alternate_text_object(object: &mut PdfObject) {
+    match object {
+        PdfObject::Dictionary(dict) => strip_alternate_text_dict(dict),
+        PdfObject::Stream(stream) => strip_alternate_text_dict(&mut stream.dict),
+        PdfObject::Array(items) => {
+            for item in items {
+                strip_alternate_text_object(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_alternate_text_dict(dict: &mut PdfDictionary) {
+    for key in ALTERNATE_TEXT_KEYS {
+        dict.remove(key);
+    }
+    for (_key, value) in dict.iter_mut() {
+        strip_alternate_text_object(value);
+    }
 }
 
 /// Surgically excises glyphs intersecting `redactions` from `ast` and appends blackout vector patches.
@@ -81,15 +128,17 @@ pub fn apply_redaction_to_ast(
     ast: &mut ContentAst,
     redactions: &[RedactionRect],
     metrics: &FontMetrics,
-) -> RedactionSummary {
+) -> PdfResult<RedactionSummary> {
     let mut summary = RedactionSummary::default();
     if redactions.is_empty() {
-        return summary;
+        return Ok(summary);
     }
+
+    strip_alternate_text(&mut ast.nodes);
 
     // Step 1: Reconstruct layout to identify positioned glyphs and their AST nodes
     let reconstructor = LayoutReconstructor::new(ast).with_font("F1", metrics.clone());
-    let paragraphs = reconstructor.reconstruct();
+    let paragraphs = reconstructor.reconstruct()?;
 
     // Map each NodeId to its full list of glyphs with original index
     let mut node_glyphs: BTreeMap<NodeId, Vec<(usize, PositionedGlyph, bool)>> = BTreeMap::new();
@@ -146,7 +195,7 @@ pub fn apply_redaction_to_ast(
         summary.applied_rects.push(red.rect);
     }
 
-    summary
+    Ok(summary)
 }
 
 /// Partitions non-redacted glyphs into contiguous text runs preserving original coordinates.

@@ -6,7 +6,29 @@ use crate::cos::PdfDocument;
 use crate::error::{PdfError, PdfResult};
 use crate::layout::geometry::Rect;
 
-/// Adds an interactive clickable web link annotation to a page.
+/// Accepts an absolute `http` or `https` URI and nothing else.
+/// The check happens before an annotation object is allocated.
+fn require_web_link(uri: &str) -> PdfResult<()> {
+    if uri.chars().any(|c| c.is_control()) {
+        return Err(web_link_error());
+    }
+    let Some((scheme, rest)) = uri.split_once(':') else {
+        return Err(web_link_error());
+    };
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    if !web || !rest.starts_with("//") || rest == "//" {
+        return Err(web_link_error());
+    }
+    Ok(())
+}
+
+fn web_link_error() -> PdfError {
+    PdfError::OperationError("Link URI must use the http or https scheme.".into())
+}
+
+/// Adds a clickable link annotation.
+/// The URI must use the `http` or `https` scheme. Any other scheme is rejected
+/// before an annotation object is created.
 pub fn add_link_uri(
     doc: &mut PdfDocument,
     page_index: usize,
@@ -14,6 +36,7 @@ pub fn add_link_uri(
     uri: &str,
     show_border: bool,
 ) -> PdfResult<ObjectId> {
+    require_web_link(uri)?;
     let pages = doc.get_pages()?;
     let page_id = pages.get(page_index).copied().ok_or_else(|| {
         PdfError::InvalidPageNumber {

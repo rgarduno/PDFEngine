@@ -46,7 +46,7 @@ pub fn redact_page(
 
     // 3. Perform surgical redaction mutation on AST
     let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
-    let mut summary = apply_redaction_to_ast(&mut ast, redactions, &metrics);
+    let mut summary = apply_redaction_to_ast(&mut ast, redactions, &metrics)?;
     summary.page_index = page_index;
 
     // 4. Serialize mutated AST back to content stream bytes
@@ -86,6 +86,8 @@ pub fn redact_page(
     doc.set_object(target_contents_id, PdfObject::Stream(stream));
 
     page_dict.insert("Contents", PdfObject::Reference(target_contents_id));
+    // Page-level metadata can repeat text that the content stream no longer shows.
+    page_dict.remove("Metadata");
     doc.set_object(page_id, PdfObject::Dictionary(page_dict));
 
     // 6. Prune intersecting interactive annotations (links, highlights, redact annotations)
@@ -132,7 +134,7 @@ pub fn redact_document_pattern(
         let ast = build_ast_from_operations(ops);
 
         // Find matches on this page
-        let detected_boxes = find_pattern_boxes_on_page(&ast, pattern, &metrics, config.padding);
+        let detected_boxes = find_pattern_boxes_on_page(&ast, pattern, &metrics, config.padding)?;
         if detected_boxes.is_empty() {
             continue;
         }

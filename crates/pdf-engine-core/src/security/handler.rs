@@ -1,6 +1,6 @@
 //! Standard Security Handler for ISO 32000-1 §7.6.3, revision 4 (AES-128).
 //! Revision 5 and 6 (AES-256) are not implemented and are rejected.
-//! The permissions bitmask is stored in `/P`. Enforcement of those flags is separate.
+//! The permissions bitmask is stored in `/P` and is not enforced by this process.
 
 use crate::cos::{
     ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfString, StringFormat,

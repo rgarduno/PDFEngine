@@ -5,6 +5,7 @@
 //! Saving a document removes `/JavaScript`, `/JS`, `/Launch`, `/SubmitForm`,
 //! `/OpenAction`, and `/AA`. A `/URI` action is kept unless its scheme is
 //! `javascript`, `vbscript`, `file`, or `data`.
+//! The `/P` bitmask is stored and is not enforced by this process.
 
 pub mod active;
 pub mod handler;

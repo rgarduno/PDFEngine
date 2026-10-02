@@ -75,7 +75,7 @@ fn test_surgical_ast_redaction_text_purged() {
     let redaction = RedactionRect::new(redact_rect)
         .with_overlay_text("[REDACTADO]", None);
 
-    let summary = apply_redaction_to_ast(&mut ast, &[redaction], &metrics);
+    let summary = apply_redaction_to_ast(&mut ast, &[redaction], &metrics).unwrap();
 
     assert!(summary.purged_glyphs_count >= 10);
     assert_eq!(summary.blackout_boxes_count, 1);
@@ -188,4 +188,66 @@ fn test_full_document_redaction_workflow() {
         updated_info.get("Producer").and_then(|p| p.as_string()).map(|s| s.to_string_lossy()),
         Some("PDFEngine Sanitizer".to_string())
     );
+}
+
+#[test]
+fn redaction_strips_alternate_text_on_the_rewritten_page() {
+    let stream = b"/Span << /ActualText (hidden-actual) /Alt (hidden-alt) /E (hidden-expansion) /MCID 7 >> BDC\nBT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Visible clause) Tj\nET\nEMC\n";
+    let mut tokenizer = ContentStreamTokenizer::new(stream);
+    let ops = tokenizer.tokenize_all().unwrap();
+    let mut ast = build_ast_from_operations(ops);
+    let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+    let redaction = RedactionRect::new(Rect::new(70.0, 690.0, 220.0, 720.0));
+
+    apply_redaction_to_ast(&mut ast, &[redaction], &metrics).unwrap();
+
+    let serialized = serialize_ast(&ast);
+    let output = String::from_utf8_lossy(&serialized);
+    assert!(!output.contains("hidden-actual"));
+    assert!(!output.contains("hidden-alt"));
+    assert!(!output.contains("hidden-expansion"));
+    assert!(!output.contains("ActualText"));
+    assert!(output.contains("MCID"));
+}
+
+#[test]
+fn redaction_drops_page_metadata_and_keeps_document_info() {
+    use crate::cos::object::{PdfDictionary, PdfObject};
+    use crate::cos::PdfDocument;
+
+    let mut doc = PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let page_id = doc.get_pages().unwrap()[0];
+    let meta_id = doc.alloc_object_id();
+    let mut meta = PdfDictionary::new();
+    meta.insert("Type", PdfObject::Name("Metadata".into()));
+    doc.set_object(meta_id, PdfObject::Dictionary(meta));
+
+    let mut page = match doc.get_object(page_id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("page object"),
+    };
+    page.insert("Metadata", PdfObject::Reference(meta_id));
+    doc.set_object(page_id, PdfObject::Dictionary(page));
+
+    let config = RedactionConfig::default();
+    assert!(!config.scrub_metadata);
+    redact_document_rectangles(
+        &mut doc,
+        0,
+        &[Rect::new(70.0, 690.0, 400.0, 720.0)],
+        &config,
+    )
+    .unwrap();
+
+    let page = doc.get_object(page_id).unwrap().as_dict().unwrap().clone();
+    assert!(!page.contains_key("Metadata"));
+
+    let info_id = doc
+        .xref
+        .trailer
+        .get("Info")
+        .and_then(|item| item.as_reference())
+        .unwrap();
+    let info = doc.get_object(info_id).unwrap().as_dict().unwrap().clone();
+    assert!(info.contains_key("Author"));
 }

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::error::{PdfError, PdfResult};
 use crate::fonts::{FontMetrics, ToUnicodeMap};
 use crate::layout::geometry::Point;
 use crate::layout::glyph::PositionedGlyph;
@@ -44,7 +45,7 @@ impl<'a> LayoutReconstructor<'a> {
     }
 
     /// Reconstructs and returns all paragraph blocks from the AST.
-    pub fn reconstruct(&self) -> Vec<ParagraphBlock> {
+    pub fn reconstruct(&self) -> PdfResult<Vec<ParagraphBlock>> {
         let mut state_stack = GraphicsStateStack::new();
         let mut glyphs = Vec::new();
 
@@ -251,9 +252,12 @@ impl<'a> LayoutReconstructor<'a> {
     }
 
     /// Hierarchically clusters flat glyph runs into structured paragraphs.
-    fn cluster_glyphs_into_paragraphs(&self, glyphs: Vec<PositionedGlyph>) -> Vec<ParagraphBlock> {
+    fn cluster_glyphs_into_paragraphs(
+        &self,
+        glyphs: Vec<PositionedGlyph>,
+    ) -> PdfResult<Vec<ParagraphBlock>> {
         if glyphs.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // 1. Group glyphs into spans (consecutive glyphs on same baseline with same style)
@@ -266,7 +270,9 @@ impl<'a> LayoutReconstructor<'a> {
                 continue;
             }
 
-            let prev: &PositionedGlyph = cur_span_glyphs.last().unwrap();
+            let prev: &PositionedGlyph = cur_span_glyphs.last().ok_or_else(|| {
+                PdfError::LayoutError("glyph span has no preceding glyph".into())
+            })?;
             let same_baseline = (prev.origin.y - glyph.origin.y).abs() < 1.0;
             let same_font = prev.font_name == glyph.font_name;
             let same_size = (prev.font_size - glyph.font_size).abs() < 0.5;
@@ -331,7 +337,9 @@ impl<'a> LayoutReconstructor<'a> {
                 continue;
             }
 
-            let prev_line: &TextLine = cur_para_lines.last().unwrap();
+            let prev_line: &TextLine = cur_para_lines.last().ok_or_else(|| {
+                PdfError::LayoutError("paragraph has no preceding line".into())
+            })?;
             let dy = prev_line.baseline_y - line.baseline_y;
             let avg_height = prev_line.bbox.height().max(line.bbox.height());
 
@@ -359,7 +367,7 @@ impl<'a> LayoutReconstructor<'a> {
             }
         }
 
-        paragraphs
+        Ok(paragraphs)
     }
 
     fn collect_source_node_ids(lines: &[TextLine]) -> Vec<NodeId> {

@@ -1,8 +1,11 @@
-//! PDF Redaction and Content Sanitization engine according to ISO 32000-1 §14.11.
+//! Glyph excision, PII scanning, and optional document-metadata scrubbing.
 //!
-//! Provides true irreversible content surgery (purging text and glyphs from streams),
-//! vector blackout box synthesis, PII pattern scanners (email, phone, SSN, cards, RFC, CURP),
-//! annotation pruning, and metadata scrubbing.
+//! A redaction removes intersecting glyphs from the page content stream, draws an
+//! opaque blackout, and can drop intersecting annotations. It also removes page
+//! `/Metadata` and marked-content `/ActualText`, `/Alt`, and `/E` on that page.
+//! Document `/Info` and catalog XMP are removed only when `scrub_metadata` is set.
+//! Attachments, the structure tree, and form appearances stay. This is not an
+//! ISO 32000-1 legal redaction.
 
 pub mod patterns;
 pub mod sanitizer;

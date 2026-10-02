@@ -283,7 +283,10 @@ def test_document_lifecycle_upload_inspect_edit_and_export():
     export_resp = client.get(f"/api/documents/{doc_id}/export")
     assert export_resp.status_code == 200
     assert export_resp.headers["content-type"] == "application/pdf"
-    assert "agreement_edited.pdf" in export_resp.headers["content-disposition"]
+    assert (
+        export_resp.headers["content-disposition"]
+        == 'attachment; filename="document_edited.pdf"'
+    )
     assert len(export_resp.content) > 0
     assert export_resp.content.startswith(b"%PDF-")
     assert b"Amended Agreement" in export_resp.content
@@ -1358,7 +1361,10 @@ def test_document_optimization_and_export_endpoints():
     export_resp = client.get(f"/api/documents/{doc_id}/export?optimized=true")
     assert export_resp.status_code == 200
     assert export_resp.headers["content-type"] == "application/pdf"
-    assert "optimize_sample_optimized.pdf" in export_resp.headers["content-disposition"]
+    assert (
+        export_resp.headers["content-disposition"]
+        == 'attachment; filename="document_optimized.pdf"'
+    )
     assert len(export_resp.content) == data["optimized_size"]
 
     # 4. Verify Document Session is active and paragraphs still readable
@@ -1713,6 +1719,75 @@ def test_parse_failure_hides_engine_text():
     assert "startxref" not in response.text
     assert "offset" not in response.text
 
+
+def test_export_ignores_the_uploaded_filename():
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={
+            "file": (
+                'evil"; filename="pwned.pdf',
+                io.BytesIO(pdf_bytes),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+    stored_name = upload_resp.json()["filename"]
+    assert "pwned" in stored_name
+    assert stored_name != "document_edited.pdf"
+    doc_id = upload_resp.json()["document_id"]
+
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert (
+        export_resp.headers["content-disposition"]
+        == 'attachment; filename="document_edited.pdf"'
+    )
+    assert stored_name not in export_resp.headers["content-disposition"]
+    assert "pwned" not in export_resp.headers["content-disposition"]
+    assert "\r" not in export_resp.headers["content-disposition"]
+    assert "\n" not in export_resp.headers["content-disposition"]
+
+
+def test_link_endpoint_accepts_only_web_schemes():
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("links.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+    box = {
+        "min_x": 50.0,
+        "min_y": 650.0,
+        "max_x": 200.0,
+        "max_y": 670.0,
+        "show_border": False,
+    }
+    for uri in ("javascript:example", "file:example"):
+        refused = client.post(
+            f"/api/documents/{doc_id}/pages/1/annotations/link",
+            json={**box, "uri": uri},
+        )
+        assert refused.status_code == 400
+        assert refused.json()["detail"] == "Only http and https links are accepted."
+
+    listed = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert listed.status_code == 200
+    assert listed.json()["count"] == 0
+
+    accepted = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/link",
+        json={**box, "uri": "HTTPS://example.com/terms#javascript:example"},
+    )
+    assert accepted.status_code == 200
+    listed_ok = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert listed_ok.json()["count"] == 1
+    assert (
+        listed_ok.json()["annotations"][0]["link_uri"]
+        == "HTTPS://example.com/terms#javascript:example"
+    )
 
 
 

@@ -1592,10 +1592,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="p-3 rounded-lg border border-rose-300 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/30 text-rose-900 dark:text-rose-200 space-y-1.5">
               <div className="flex items-center gap-1.5 font-semibold text-xs text-rose-700 dark:text-rose-300">
                 <ShieldAlert size={14} className="text-rose-600 dark:text-rose-400 shrink-0" />
-                <span>ISO 32000-1 §14.11 Legal Redaction</span>
+                <span>Excisión de glifos</span>
               </div>
               <p className="text-[11px] leading-relaxed text-rose-800 dark:text-rose-300/90">
-                Los glifos y streams son destruidos e invalidados físicamente del AST binario en lugar de ocultarse con una capa visual. Operación irreversible.
+                Quita los glifos que cruzan la zona y dibuja un recuadro opaco. No borra adjuntos, la estructura ni las apariencias de formulario. Los metadatos del documento se quitan solo si se pide el barrido.
               </p>
             </div>
 
@@ -2010,7 +2010,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {/* Permissions Bitmask Checkboxes */}
                 <div className="space-y-1.5 pt-1 border-t border-neutral-200/60 dark:border-neutral-800">
                   <span className="text-[10px] font-semibold text-neutral-400 uppercase">
-                    Permisos de Usuario (/P Bitmask)
+                    Bits /P almacenados, este proceso no los aplica
                   </span>
                   <div className="grid grid-cols-1 gap-1 text-[11px] text-neutral-600 dark:text-neutral-300">
                     <label className="flex items-center gap-2 cursor-pointer">

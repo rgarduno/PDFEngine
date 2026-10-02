@@ -407,6 +407,36 @@ def edit_paragraph(
     )
 
 
+def _content_disposition(kind: str, filename: str) -> str:
+    """Builds a Content-Disposition value from a server-chosen ASCII name.
+
+    A name that is not a plain token is replaced so a client filename cannot
+    break out of the header.
+    """
+    safe = filename if (
+        filename.isascii()
+        and filename
+        and all(ch.isalnum() or ch in "._-" for ch in filename)
+    ) else "document.pdf"
+    return f'{kind}; filename="{safe}"'
+
+
+def _download_token(raw: str, fallback: str) -> str:
+    """Keeps letters, digits, hyphen, and underscore from a caller-supplied label."""
+    token = "".join(ch for ch in raw if ch.isascii() and (ch.isalnum() or ch in "-_"))
+    return token or fallback
+
+
+def _link_scheme_refusal(exc: Exception) -> Optional[HTTPException]:
+    """Maps a rejected link scheme to a stable client error."""
+    if "Link URI must use the http or https scheme." in str(exc):
+        return HTTPException(
+            status_code=400,
+            detail="Only http and https links are accepted.",
+        )
+    return None
+
+
 def _optimization_refusal(exc: Exception) -> Optional[HTTPException]:
     """Maps the engine's protected-file refusal to a stable client error.
 
@@ -441,15 +471,12 @@ def export_document(doc_id: str, optimized: bool = False):
             raise refusal
         raise _public_error(500, e)
 
-    filename = session.get("filename", "document.pdf")
-    base_name = filename.rsplit(".", 1)[0]
-    suffix = "_optimized.pdf" if optimized else "_edited.pdf"
-    export_name = f"{base_name}{suffix}"
+    export_name = "document_optimized.pdf" if optimized else "document_edited.pdf"
 
     return Response(
         content=bytes(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{export_name}"'},
+        headers={"Content-Disposition": _content_disposition("attachment", export_name)},
     )
 
 
@@ -496,11 +523,12 @@ def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
             detail=f"Font '{font_name}' has no embedded binary on page {page_idx}.",
         )
 
+    font_token = _download_token(font_name.lstrip("/"), "embedded")
     return Response(
         content=bytes(font_bytes),
         media_type="font/ttf",
         headers={
-            "Content-Disposition": f'inline; filename="{font_name}.ttf"',
+            "Content-Disposition": _content_disposition("inline", f"{font_token}.ttf"),
             "Cache-Control": "public, max-age=86400",
         },
     )
@@ -1116,6 +1144,9 @@ def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
     except HTTPException:
         raise
     except Exception as e:
+        refusal = _link_scheme_refusal(e)
+        if refusal is not None:
+            raise refusal
         raise _public_error(400, e)
 
 
@@ -1843,12 +1874,13 @@ def export_table_endpoint(
                 "html": "text/html; charset=utf-8",
             }
             media_type = media_types.get(format.lower(), "text/plain; charset=utf-8")
-            ext = "md" if format.lower() == "markdown" else format.lower()
+            extensions = {"csv": "csv", "json": "json", "markdown": "md", "md": "md", "html": "html"}
+            ext = extensions.get(format.lower(), "txt")
             filename = f"table_p{page_idx}_{table_idx}.{ext}"
             return Response(
                 content=content,
                 media_type=media_type,
-                headers={"Content-Disposition": f"attachment; filename={filename}"},
+                headers={"Content-Disposition": _content_disposition("attachment", filename)},
             )
 
         return TableExportResponse(
