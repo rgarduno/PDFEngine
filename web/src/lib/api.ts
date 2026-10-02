@@ -137,6 +137,32 @@ export function getExportUrl(docId: string): string {
   return `${API_BASE_URL}/api/documents/${docId}/export`;
 }
 
+export async function getPageFonts(
+  docId: string,
+  pageIdx: number
+): Promise<{ page_number: number; fonts: string[]; embedded_count: number }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/fonts`
+    );
+    if (!res.ok) {
+      return { page_number: pageIdx, fonts: [], embedded_count: 0 };
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, font extraction fallback:', e);
+    return { page_number: pageIdx, fonts: [], embedded_count: 0 };
+  }
+}
+
+export function getFontBinaryUrl(
+  docId: string,
+  pageIdx: number,
+  fontName: string
+): string {
+  return `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/fonts/${encodeURIComponent(fontName)}`;
+}
+
 export function connectReflowWebSocket(
   docId: string,
   pageIdx: number,

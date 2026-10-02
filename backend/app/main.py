@@ -185,6 +185,59 @@ def export_document(doc_id: str):
     )
 
 
+@app.get("/api/documents/{doc_id}/pages/{page_idx}/fonts")
+def list_page_fonts(doc_id: str, page_idx: int):
+    """Lists all font resource identifiers declared on a specific page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        fonts = doc.get_page_fonts(page_idx)
+        return {
+            "page_number": page_idx,
+            "fonts": list(fonts.keys()),
+            "embedded_count": len(fonts),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/documents/{doc_id}/pages/{page_idx}/fonts/{font_name}")
+def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
+    """Extracts and streams embedded TrueType/OpenType font binaries for dynamic browser @font-face registration."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        fonts = doc.get_page_fonts(page_idx)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    font_bytes = fonts.get(font_name)
+    if not font_bytes:
+        clean_name = font_name.lstrip("/")
+        font_bytes = fonts.get(clean_name)
+
+    if not font_bytes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Font '{font_name}' has no embedded binary on page {page_idx}.",
+        )
+
+    return Response(
+        content=bytes(font_bytes),
+        media_type="font/ttf",
+        headers={
+            "Content-Disposition": f'inline; filename="{font_name}.ttf"',
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")
 async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int):
     """Interactive WebSocket endpoint streaming real-time typographic reflow as users type."""

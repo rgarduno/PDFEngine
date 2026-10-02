@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { Paragraph, TextAlignment } from '@/lib/types';
+import { getPageFonts, getFontBinaryUrl } from '@/lib/api';
 import { Check, Edit3, Layers, Move } from 'lucide-react';
 
 interface DualCanvasViewerProps {
@@ -11,6 +12,8 @@ interface DualCanvasViewerProps {
   onUpdateParagraphText: (id: number, text: string) => void;
   zoom: number;
   activeReflowId: number | null;
+  documentId?: string;
+  pageNumber?: number;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -24,6 +27,8 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   onUpdateParagraphText,
   zoom,
   activeReflowId,
+  documentId,
+  pageNumber = 1,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -51,6 +56,38 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
       activeTextareaRef.current.selectionEnd = activeTextareaRef.current.value.length;
     }
   }, [editingId]);
+
+  // Dynamically load and register embedded TrueType/OpenType fonts for this page
+  useEffect(() => {
+    if (!documentId) return;
+    let isMounted = true;
+
+    getPageFonts(documentId, pageNumber).then((data) => {
+      if (!isMounted || !data.fonts) return;
+      data.fonts.forEach((fontName) => {
+        try {
+          const fontUrl = getFontBinaryUrl(documentId, pageNumber, fontName);
+          const fontFace = new FontFace(fontName, `url("${fontUrl}")`);
+          fontFace
+            .load()
+            .then((loaded) => {
+              if (isMounted) {
+                document.fonts.add(loaded);
+              }
+            })
+            .catch((err) => {
+              console.debug(`Dynamic font registration note for ${fontName}:`, err);
+            });
+        } catch (e) {
+          console.debug(`FontFace initialization note:`, e);
+        }
+      });
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [documentId, pageNumber]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -168,8 +205,9 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                   style={{
                     fontSize: `${(p.fontSize || 12) * zoom}px`,
                     lineHeight: `${(p.leading || 16) * zoom}px`,
+                    fontFamily: p.fontFamily ? `"${p.fontFamily}", sans-serif` : 'sans-serif',
                   }}
-                  className={`w-full h-full resize-none p-1 bg-white/95 dark:bg-neutral-900/95 text-neutral-900 dark:text-neutral-100 outline-none border-none font-sans ${alignClass} focus:ring-0`}
+                  className={`w-full h-full resize-none p-1 bg-white/95 dark:bg-neutral-900/95 text-neutral-900 dark:text-neutral-100 outline-none border-none ${alignClass} focus:ring-0`}
                 />
               ) : (
                 /* Rendered Text with precise typography */
@@ -177,8 +215,9 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                   style={{
                     fontSize: `${(p.fontSize || 12) * zoom}px`,
                     lineHeight: `${(p.leading || 16) * zoom}px`,
+                    fontFamily: p.fontFamily ? `"${p.fontFamily}", sans-serif` : 'sans-serif',
                   }}
-                  className={`w-full h-full p-1 whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 font-sans ${alignClass}`}
+                  className={`w-full h-full p-1 whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 ${alignClass}`}
                 >
                   {p.text}
                 </div>

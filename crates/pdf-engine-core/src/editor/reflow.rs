@@ -3,7 +3,7 @@
 //! Re-flows modified text into paragraph lines adhering to bounding box constraints,
 //! font metrics, and alignment rules (left, center, right, justified).
 
-use crate::fonts::FontMetrics;
+use crate::fonts::{FontEncoder, FontMetrics};
 use crate::layout::paragraph::TextAlignment;
 use crate::stream::graphics_state::TextState;
 
@@ -103,8 +103,10 @@ impl ReflowEngine {
     /// Computes advance width of an individual word in points.
     fn compute_word_width(word: &str, metrics: &FontMetrics, text_state: &TextState) -> f64 {
         let mut width = 0.0;
-        for b in word.bytes() {
-            width += metrics.compute_char_advance(b as u32, text_state);
+        let encoder = FontEncoder::new();
+        for c in word.chars() {
+            let (code, _) = encoder.encode_char(c);
+            width += metrics.compute_char_advance(code, text_state);
         }
         width
     }

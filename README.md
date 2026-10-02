@@ -256,6 +256,8 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `GET` | `/api/health` | Health check and native engine availability. |
 | `POST` | `/api/documents/upload` | Ingest PDF, validate ISO structure, and return session token. |
 | `GET` | `/api/documents/{id}/pages/{p}/scenegraph` | Retrieve semantic layout (paragraphs, bounding boxes, alignments). |
+| `GET` | `/api/documents/{id}/pages/{p}/fonts` | List embedded font resources declared on a specific page. |
+| `GET` | `/api/documents/{id}/pages/{p}/fonts/{name}` | Stream raw embedded TrueType/OpenType font binary for browser `@font-face` registration. |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
@@ -267,6 +269,7 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 PDFEngine includes a modern, high-precision web studio inside `web/` with a dual-layer canvas architecture:
 
 * **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
+* **Dynamic @font-face Registration**: Fetches embedded TrueType font binaries directly from the PDF via the engine and registers them in the browser runtime for pixel-identical typography.
 * **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
 * **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
 * **Non-Destructive History**: Full undo/redo stack (`Cmd+Z` / `Cmd+Shift+Z`) and instant lossless PDF download.
@@ -292,6 +295,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, scene graph inspection, surgical edit endpoints, WebSocket reflow)
 - [x] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, live WebSocket reflow)
 - [x] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing, zip bomb mitigation, circular reference loop prevention)
+- [x] **Phase 7: Embedded Font Extraction & Dynamic Glyph Fallback** (WinAnsi encoding, Spanish/Latin-1 accents, metric transliteration fallback, TrueType font streaming)
 
 ---
 

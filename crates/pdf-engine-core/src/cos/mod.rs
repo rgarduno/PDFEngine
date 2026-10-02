@@ -291,6 +291,76 @@ impl PdfDocument {
         Ok(())
     }
 
+    /// Extracts embedded font binaries (TrueType / OpenType) from a specific page.
+    /// Returns a map of font names (e.g. "F1", "Helvetica") to their raw decompressed font file bytes.
+    pub fn extract_page_fonts(
+        &mut self,
+        page_id: ObjectId,
+    ) -> PdfResult<std::collections::HashMap<String, Vec<u8>>> {
+        let mut fonts = std::collections::HashMap::new();
+
+        let page_obj = self.get_object(page_id)?;
+        let page_dict = match page_obj {
+            PdfObject::Dictionary(d) => d,
+            _ => return Ok(fonts),
+        };
+
+        let resources = match page_dict.get("Resources") {
+            Some(PdfObject::Dictionary(d)) => d.clone(),
+            Some(PdfObject::Reference(r)) => match self.get_object(*r)? {
+                PdfObject::Dictionary(d) => d,
+                _ => return Ok(fonts),
+            },
+            _ => return Ok(fonts),
+        };
+
+        let font_dict = match resources.get("Font") {
+            Some(PdfObject::Dictionary(d)) => d.clone(),
+            Some(PdfObject::Reference(r)) => match self.get_object(*r)? {
+                PdfObject::Dictionary(d) => d,
+                _ => return Ok(fonts),
+            },
+            _ => return Ok(fonts),
+        };
+
+        for (font_key, font_val) in font_dict.0 {
+            let font_obj = match font_val {
+                PdfObject::Dictionary(d) => d,
+                PdfObject::Reference(r) => match self.get_object(r)? {
+                    PdfObject::Dictionary(d) => d,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+
+            let descriptor_obj = match font_obj.get("FontDescriptor") {
+                Some(PdfObject::Dictionary(d)) => d.clone(),
+                Some(PdfObject::Reference(r)) => match self.get_object(*r)? {
+                    PdfObject::Dictionary(d) => d,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+
+            // Check /FontFile2 (TrueType) or /FontFile3 (CFF/OpenType)
+            let font_file_ref = descriptor_obj
+                .get("FontFile2")
+                .or_else(|| descriptor_obj.get("FontFile3"))
+                .and_then(|f| f.as_reference());
+
+            if let Some(stream_ref) = font_file_ref {
+                if let PdfObject::Stream(s) = self.get_object(stream_ref)? {
+                    let filter = s.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
+                    let decode_parms = s.dict.get("DecodeParms").and_then(|p| p.as_dict());
+                    let font_bytes = decode_stream(filter, decode_parms, &s.content, &self.limits)?;
+                    fonts.insert(font_key.as_str().to_string(), font_bytes);
+                }
+            }
+        }
+
+        Ok(fonts)
+    }
+
     /// Serializes the complete document to a byte vector.
     pub fn save_to_vec(&mut self) -> PdfResult<Vec<u8>> {
         let mut out = Vec::new();

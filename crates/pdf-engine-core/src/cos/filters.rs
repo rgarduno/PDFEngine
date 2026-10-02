@@ -19,6 +19,10 @@ pub fn decode_stream(
     limits: &SecurityLimits,
 ) -> PdfResult<Vec<u8>> {
     match filter {
+        "" | "Identity" => {
+            limits.validate_decompression(data.len(), data.len())?;
+            Ok(data.to_vec())
+        }
         "FlateDecode" | "Fl" => decode_flate(data, params, limits),
         "ASCIIHexDecode" | "AHx" => decode_ascii_hex(data, limits),
         "ASCII85Decode" | "A85" => decode_ascii85(data, limits),

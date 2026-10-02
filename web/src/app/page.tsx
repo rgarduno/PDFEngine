@@ -260,6 +260,8 @@ export default function Home() {
           onUpdateParagraphText={handleUpdateParagraphText}
           zoom={zoom}
           activeReflowId={activeReflowId}
+          documentId={session.document_id}
+          pageNumber={1}
         />
 
         <Sidebar

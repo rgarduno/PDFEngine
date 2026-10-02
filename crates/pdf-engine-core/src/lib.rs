@@ -28,7 +28,10 @@ pub mod stream;
 pub use cos::{ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString};
 pub use editor::{ReflowEngine, ReflowLine, SurgicalEditor};
 pub use error::{PdfError, PdfResult};
-pub use fonts::{compose_ligatures, decompose_ligatures, FontMetrics, ToUnicodeMap};
+pub use fonts::{
+    compose_ligatures, decompose_ligatures, FontEncoder, FontMetrics, GlyphFallback, ToUnicodeMap,
+    WinAnsiEncoding,
+};
 pub use layout::{
     LayoutReconstructor, ParagraphBlock, Point, PositionedGlyph, Rect, TextAlignment, TextLine,
     TextSpan,

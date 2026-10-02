@@ -5,7 +5,7 @@
 
 use crate::cos::object::{PdfName, PdfObject, PdfString};
 use crate::error::{PdfError, PdfResult};
-use crate::fonts::FontMetrics;
+use crate::fonts::{FontEncoder, FontMetrics};
 use crate::layout::paragraph::ParagraphBlock;
 use crate::stream::ast::{ContentAst, ContentNode, NodeId, Operation};
 use crate::stream::graphics_state::TextState;
@@ -15,18 +15,24 @@ use crate::editor::reflow::ReflowEngine;
 pub struct SurgicalEditor;
 
 impl SurgicalEditor {
-    /// Replaces the text of a paragraph block in-place with new content.
-    ///
-    /// # Arguments
-    /// * `ast` - The mutable Content AST of the page.
-    /// * `target_block` - The paragraph block to be modified.
-    /// * `new_text` - The replacement text.
-    /// * `metrics` - Font metrics used for line-breaking advance calculations.
+    /// Replaces the text of a paragraph block in-place with new content using default encoder.
     pub fn edit_paragraph(
         ast: &mut ContentAst,
         target_block: &ParagraphBlock,
         new_text: &str,
         metrics: &FontMetrics,
+    ) -> PdfResult<()> {
+        let encoder = FontEncoder::new();
+        Self::edit_paragraph_with_encoder(ast, target_block, new_text, metrics, &encoder)
+    }
+
+    /// Replaces the text of a paragraph block in-place with character encoding and glyph fallback.
+    pub fn edit_paragraph_with_encoder(
+        ast: &mut ContentAst,
+        target_block: &ParagraphBlock,
+        new_text: &str,
+        metrics: &FontMetrics,
+        encoder: &FontEncoder,
     ) -> PdfResult<()> {
         if target_block.source_node_ids.is_empty() {
             return Err(PdfError::LayoutError(
@@ -68,6 +74,7 @@ impl SurgicalEditor {
             first_line.baseline_y,
             &font_name,
             font_size,
+            encoder,
         );
 
         let replacement_node = ContentNode::TextBlock {
@@ -102,6 +109,7 @@ impl SurgicalEditor {
         top_baseline_y: f64,
         font_name: &str,
         font_size: f64,
+        encoder: &FontEncoder,
     ) -> Vec<Operation> {
         let mut ops = Vec::new();
 
@@ -144,10 +152,11 @@ impl SurgicalEditor {
                 ],
             ));
 
-            // Show line text
+            // Show line text encoded with font encoder
+            let encoded_bytes = encoder.encode_string(&line.text);
             ops.push(Operation::new(
                 "Tj",
-                vec![PdfObject::String(PdfString::literal(line.text.as_bytes()))],
+                vec![PdfObject::String(PdfString::literal(encoded_bytes))],
             ));
 
             // Reset word spacing if it was altered

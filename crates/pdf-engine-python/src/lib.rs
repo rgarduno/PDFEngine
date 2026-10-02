@@ -284,6 +284,31 @@ impl PyPdfDocument {
         Ok(())
     }
 
+    /// Extracts embedded font binaries (TrueType / OpenType) from a specific page.
+    /// Returns a dict mapping font names (e.g. "F1") to raw font file bytes.
+    pub fn get_page_fonts(
+        &mut self,
+        index: usize,
+    ) -> PyResult<std::collections::HashMap<String, Vec<u8>>> {
+        let zero_idx = if index > 0 && index <= self.page_ids.len() {
+            index - 1
+        } else {
+            index
+        };
+
+        if zero_idx < self.page_ids.len() {
+            let page_id = self.page_ids[zero_idx];
+            self.doc
+                .extract_page_fonts(page_id)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract fonts: {}", e)))
+        } else {
+            Err(PyValueError::new_err(format!(
+                "Page index {} out of range",
+                index
+            )))
+        }
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;

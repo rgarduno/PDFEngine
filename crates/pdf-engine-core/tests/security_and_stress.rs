@@ -238,3 +238,56 @@ fn test_corrupted_xref_error_handling() {
         other => panic!("Expected InvalidXRef or ParseError, got: {:?}", other),
     }
 }
+
+#[test]
+fn test_font_encoder_and_glyph_fallback_editing() {
+    use pdf_engine_core::fonts::FontEncoder;
+
+    let encoder = FontEncoder::new();
+
+    // 1. Test encoding standard Spanish / European characters in WinAnsi
+    let spanish_text = "Señor López: Garantía de café & crédito (€50)";
+    let encoded_bytes = encoder.encode_string(spanish_text);
+    assert!(!encoded_bytes.is_empty());
+
+    // Verify ñ (0xF1), ó (0xF3), í (0xED), é (0xE9), € (0x80)
+    assert!(encoded_bytes.contains(&0xF1)); // ñ
+    assert!(encoded_bytes.contains(&0xF3)); // ó
+    assert!(encoded_bytes.contains(&0xED)); // í
+    assert!(encoded_bytes.contains(&0xE9)); // é
+    assert!(encoded_bytes.contains(&0x80)); // €
+
+    // 2. Test fallback for unsupported symbols / scripts (e.g. Cyrillic/Greek when font is Latin-1)
+    let mixed_text = "Report: Москва / Café";
+    let fallback_bytes = encoder.encode_string(mixed_text);
+    // Transliterate should replace missing Cyrillic with '?'
+    let fallback_str = String::from_utf8_lossy(&fallback_bytes);
+    assert!(fallback_str.contains("??????"));
+    assert!(fallback_bytes.contains(&0xE9)); // 'é' still cleanly preserved!
+
+    // 3. Test surgical editor with encoder
+    let stream_source = b"BT\n/F1 12 Tf\n50 700 Tm\n(Original Draft Agreement) Tj\nET\n";
+    let mut tokenizer = ContentStreamTokenizer::new(stream_source);
+    let ops = tokenizer.tokenize_all().unwrap();
+    let mut ast = build_ast_from_operations(ops);
+
+    let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+    let reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
+    let paragraphs = reconstructor.reconstruct();
+    assert_eq!(paragraphs.len(), 1);
+
+    let edit_result = SurgicalEditor::edit_paragraph_with_encoder(
+        &mut ast,
+        &paragraphs[0],
+        "Cláusula de confidencialidad para el año 2026.",
+        &metrics,
+        &encoder,
+    );
+    assert!(edit_result.is_ok(), "Surgical edit with FontEncoder must succeed");
+
+    let serialized = serialize_ast(&ast);
+    assert!(!serialized.is_empty());
+    // Verify that the serialized content stream contains valid PDF syntax
+    assert!(serialized.starts_with(b"BT\n"));
+    assert!(serialized.ends_with(b"ET\n"));
+}

@@ -148,3 +148,84 @@ def test_websocket_realtime_reflow():
         assert response["line_count"] >= 1
         assert response["bbox"]["width"] > 0
 
+def create_pdf_with_embedded_font_bytes() -> bytes:
+    """Generates a PDF containing an embedded TrueType font descriptor and stream."""
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = b"BT\n/F1 12 Tf\n50 700 Tm\n(Testing font extraction) Tj\nET\n"
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"endstream\nendobj\n")
+
+    off5 = len(pdf)
+    pdf.extend(
+        b"5 0 obj\n<< /Type /Font /Subtype /TrueType /BaseFont /CustomEmbeddedFont /FontDescriptor 6 0 R >>\nendobj\n"
+    )
+
+    off6 = len(pdf)
+    pdf.extend(
+        b"6 0 obj\n<< /Type /FontDescriptor /FontName /CustomEmbeddedFont /FontFile2 7 0 R >>\nendobj\n"
+    )
+
+    off7 = len(pdf)
+    font_bytes = b"\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    pdf.extend(f"7 0 obj\n<< /Length {len(font_bytes)} >>\nstream\n".encode())
+    pdf.extend(font_bytes)
+    pdf.extend(b"endstream\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(b"xref\n0 8\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010} 00000 n \n".encode())
+    pdf.extend(f"{off2:010} 00000 n \n".encode())
+    pdf.extend(f"{off3:010} 00000 n \n".encode())
+    pdf.extend(f"{off4:010} 00000 n \n".encode())
+    pdf.extend(f"{off5:010} 00000 n \n".encode())
+    pdf.extend(f"{off6:010} 00000 n \n".encode())
+    pdf.extend(f"{off7:010} 00000 n \n".encode())
+
+    pdf.extend(b"trailer\n<< /Size 8 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+
+    return bytes(pdf)
+
+
+def test_font_extraction_endpoints():
+    pdf_bytes = create_pdf_with_embedded_font_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("font_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 1. Query page fonts list
+    fonts_resp = client.get(f"/api/documents/{doc_id}/pages/1/fonts")
+    assert fonts_resp.status_code == 200
+    fonts_data = fonts_resp.json()
+    assert fonts_data["page_number"] == 1
+    assert fonts_data["embedded_count"] == 1
+    assert "F1" in fonts_data["fonts"]
+
+    # 2. Download embedded font binary
+    font_bin_resp = client.get(f"/api/documents/{doc_id}/pages/1/fonts/F1")
+    assert font_bin_resp.status_code == 200
+    assert font_bin_resp.headers["content-type"] == "font/ttf"
+    assert len(font_bin_resp.content) == 16
+    assert font_bin_resp.content.startswith(b"\x00\x01\x00\x00")
+
+    # 3. Request non-existent font returns 404
+    missing_resp = client.get(f"/api/documents/{doc_id}/pages/1/fonts/NonExistentFont")
+    assert missing_resp.status_code == 404
