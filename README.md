@@ -69,7 +69,12 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Knuth-Plass / Greedy line-breaking with exact character advance delta  │
 │    - Atomic node replacement within page content stream display list        │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 5. Security & Resource Hardening                                            │
+│ 5. XObject Image & Graphics Engine                                          │
+│    - Safe ISO 32000 XObject /Image extraction & CTM transformation parsing  │
+│    - Pure W3C PNG & JPEG header parsers with /SMask soft mask extraction    │
+│    - Surgical in-place image swapping preserving page geometry & vectors    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 6. Security & Resource Hardening                                            │
 │    - Bounded Flate expansion: 100:1 max ratio, 250 MB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Active code neutralization (strips /JavaScript, /Launch, /SubmitForm) │
@@ -94,6 +99,7 @@ PDFEngine/
 │   │   │   ├── stream/         # Content Stream AST & graphics state evaluator
 │   │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
 │   │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
+│   │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
@@ -258,6 +264,9 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `GET` | `/api/documents/{id}/pages/{p}/scenegraph` | Retrieve semantic layout (paragraphs, bounding boxes, alignments). |
 | `GET` | `/api/documents/{id}/pages/{p}/fonts` | List embedded font resources declared on a specific page. |
 | `GET` | `/api/documents/{id}/pages/{p}/fonts/{name}` | Stream raw embedded TrueType/OpenType font binary for browser `@font-face` registration. |
+| `GET` | `/api/documents/{id}/pages/{p}/images` | List XObject images on a specific page with CTM bounding boxes and metadata. |
+| `GET` | `/api/documents/{id}/images/{img_id}` | Stream synthesized PNG or native JPEG binary for inspection/preview. |
+| `POST` | `/api/documents/{id}/images/{img_id}/replace` | Surgical in-place image replacement (JPEG/PNG with `/SMask` transparency). |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
@@ -269,6 +278,7 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 PDFEngine includes a modern, high-precision web studio inside `web/` with a dual-layer canvas architecture:
 
 * **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
+* **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
 * **Dynamic @font-face Registration**: Fetches embedded TrueType font binaries directly from the PDF via the engine and registers them in the browser runtime for pixel-identical typography.
 * **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
 * **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
@@ -296,6 +306,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, live WebSocket reflow)
 - [x] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing, zip bomb mitigation, circular reference loop prevention)
 - [x] **Phase 7: Embedded Font Extraction & Dynamic Glyph Fallback** (WinAnsi encoding, Spanish/Latin-1 accents, metric transliteration fallback, TrueType font streaming)
+- [x] **Phase 8: Graphics & XObject Image Management** (CTM spatial projection, pure JPEG/PNG codecs, in-place surgical replacement, web studio inspection & replacement)
 
 ---
 

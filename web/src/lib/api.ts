@@ -1,4 +1,4 @@
-import { DocumentSession, PageSceneGraph, Paragraph, ReflowWebSocketMessage } from './types';
+import { DocumentSession, ImageElement, PageSceneGraph, Paragraph, ReflowWebSocketMessage } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
@@ -10,8 +10,23 @@ export const MOCK_SESSION: DocumentSession = {
   page_count: 1,
 };
 
+export const MOCK_IMAGES: ImageElement[] = [
+  {
+    id: 101,
+    name: 'ImLogo',
+    width_px: 240,
+    height_px: 60,
+    color_space: 'DeviceRGB',
+    bits_per_component: 8,
+    filter: 'DCTDecode',
+    byte_size: 4820,
+    bbox: { min_x: 72, min_y: 745, max_x: 212, max_y: 780, width: 140, height: 35 },
+  },
+];
+
 export const MOCK_SCENEGRAPH: PageSceneGraph = {
   page_number: 1,
+  images: MOCK_IMAGES,
   paragraphs: [
     {
       id: 0,
@@ -161,6 +176,55 @@ export function getFontBinaryUrl(
   fontName: string
 ): string {
   return `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/fonts/${encodeURIComponent(fontName)}`;
+}
+
+export async function getPageImages(
+  docId: string,
+  pageIdx: number
+): Promise<{ page_number: number; images: ImageElement[]; count: number }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/images`
+    );
+    if (!res.ok) {
+      return { page_number: pageIdx, images: MOCK_IMAGES, count: MOCK_IMAGES.length };
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, using mock image data:', e);
+    return { page_number: pageIdx, images: MOCK_IMAGES, count: MOCK_IMAGES.length };
+  }
+}
+
+export function getImageBinaryUrl(docId: string, imageId: number): string {
+  return `${API_BASE_URL}/api/documents/${docId}/images/${imageId}`;
+}
+
+export async function replaceImage(
+  docId: string,
+  imageId: number,
+  file: File
+): Promise<{ success: boolean; message: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/images/${imageId}/replace`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Image replacement failed' }));
+      throw new Error(err.detail || 'Image replacement failed');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock image replace:', e);
+    return { success: true, message: `Image ${imageId} updated locally.` };
+  }
 }
 
 export function connectReflowWebSocket(

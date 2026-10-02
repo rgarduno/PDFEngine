@@ -54,6 +54,52 @@ impl PyParagraph {
     }
 }
 
+/// High-level representation of an extracted Image XObject on a page in Python.
+#[pyclass(name = "ImageInfo")]
+#[derive(Debug, Clone)]
+pub struct PyImageInfo {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub width_px: u32,
+    #[pyo3(get)]
+    pub height_px: u32,
+    #[pyo3(get)]
+    pub color_space: String,
+    #[pyo3(get)]
+    pub bits_per_component: u32,
+    #[pyo3(get)]
+    pub filter: Option<String>,
+    #[pyo3(get)]
+    pub byte_size: usize,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+}
+
+#[pymethods]
+impl PyImageInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "<ImageInfo id={} name='{}' size={}x{} cs='{}' bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
+            self.id, self.name, self.width_px, self.height_px, self.color_space,
+            self.min_x, self.min_y, self.max_x, self.max_y
+        )
+    }
+
+    /// Returns spatial bounding box coordinates as a tuple (min_x, min_y, max_x, max_y).
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -309,6 +355,59 @@ impl PyPdfDocument {
         }
     }
 
+    /// Extracts all Image XObjects on a given page (1-indexed or 0-indexed).
+    pub fn get_page_images(&mut self, index: usize) -> PyResult<Vec<PyImageInfo>> {
+        let zero_idx = if index > 0 && index <= self.page_ids.len() {
+            index - 1
+        } else {
+            index
+        };
+
+        if zero_idx < self.page_ids.len() {
+            let page_id = self.page_ids[zero_idx];
+            let images = pdf_engine_core::images::extract_page_images(&mut self.doc, page_id)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract page images: {}", e)))?;
+
+            Ok(images
+                .into_iter()
+                .map(|img| PyImageInfo {
+                    id: img.object_id.number,
+                    name: img.resource_name,
+                    width_px: img.width_px,
+                    height_px: img.height_px,
+                    color_space: img.color_space,
+                    bits_per_component: img.bits_per_component,
+                    filter: img.filter,
+                    byte_size: img.byte_size,
+                    min_x: img.bbox.min_x,
+                    min_y: img.bbox.min_y,
+                    max_x: img.bbox.max_x,
+                    max_y: img.bbox.max_y,
+                })
+                .collect())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "Page index {} out of range",
+                index
+            )))
+        }
+    }
+
+    /// Retrieves raw image file bytes and MIME type for a given image object ID.
+    pub fn get_image_binary(&mut self, object_id_num: u32) -> PyResult<(Vec<u8>, String)> {
+        let obj_id = ObjectId::new(object_id_num);
+        let (bytes, mime) = pdf_engine_core::images::get_image_binary(&mut self.doc, obj_id)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to retrieve image binary: {}", e)))?;
+        Ok((bytes, mime.to_string()))
+    }
+
+    /// Surgically replaces an existing Image XObject in the document with new JPEG or PNG bytes.
+    pub fn replace_image(&mut self, object_id_num: u32, new_bytes: &[u8]) -> PyResult<()> {
+        let obj_id = ObjectId::new(object_id_num);
+        pdf_engine_core::images::replace_image_content(&mut self.doc, obj_id, new_bytes)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to replace image: {}", e)))
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -331,5 +430,6 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPdfDocument>()?;
     m.add_class::<PyPage>()?;
     m.add_class::<PyParagraph>()?;
+    m.add_class::<PyImageInfo>()?;
     Ok(())
 }

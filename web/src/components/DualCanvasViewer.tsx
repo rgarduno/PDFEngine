@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Paragraph, TextAlignment } from '@/lib/types';
-import { getPageFonts, getFontBinaryUrl } from '@/lib/api';
-import { Check, Edit3, Layers, Move } from 'lucide-react';
+import { ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
+import { Check, Edit3, ImageIcon, Layers, Move, RefreshCw } from 'lucide-react';
 
 interface DualCanvasViewerProps {
   paragraphs: Paragraph[];
@@ -14,6 +14,10 @@ interface DualCanvasViewerProps {
   activeReflowId: number | null;
   documentId?: string;
   pageNumber?: number;
+  images?: ImageElement[];
+  selectedImageId?: number | null;
+  onSelectImage?: (id: number | null) => void;
+  onTriggerReplaceImage?: (id: number) => void;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -29,6 +33,10 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   activeReflowId,
   documentId,
   pageNumber = 1,
+  images = [],
+  selectedImageId = null,
+  onSelectImage,
+  onTriggerReplaceImage,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -116,6 +124,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
       ref={containerRef}
       onClick={() => {
         onSelectParagraph(null);
+        onSelectImage?.(null);
         setEditingId(null);
       }}
       className="flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-950 p-8 flex items-center justify-center min-h-[calc(100vh-4rem)] relative"
@@ -141,6 +150,74 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
             className="absolute border border-dashed border-blue-400/30"
           />
         </div>
+
+        {/* Layer 1.5: Interactive Image XObjects & Surgical Replacement */}
+        {images.map((img) => {
+          const { left, top, width, height } = pdfToScreenCoordinates(img.bbox);
+          const isSelected = selectedImageId === img.id;
+          const imageUrl = getImageBinaryUrl(documentId || '', img.id);
+
+          return (
+            <div
+              key={img.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectParagraph(null);
+                setEditingId(null);
+                onSelectImage?.(img.id);
+              }}
+              style={{
+                left: `${left}px`,
+                top: `${top}px`,
+                width: `${Math.max(width, 32 * zoom)}px`,
+                height: `${Math.max(height, 32 * zoom)}px`,
+              }}
+              className={`absolute transition-all group overflow-hidden border cursor-pointer ${
+                isSelected
+                  ? 'ring-2 ring-emerald-500 border-emerald-400 z-20 shadow-lg'
+                  : 'border-dashed border-amber-500/50 hover:border-amber-500 hover:ring-1 hover:ring-amber-400/80 z-10'
+              }`}
+            >
+              <img
+                src={imageUrl}
+                alt={`XObject Image #${img.id}`}
+                className="w-full h-full object-fill pointer-events-none select-none bg-neutral-100 dark:bg-neutral-800"
+              />
+
+              {/* Status & Replacement Badge */}
+              <div
+                className={`absolute top-1 left-1 flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono transition-opacity ${
+                  isSelected
+                    ? 'bg-emerald-600 text-white opacity-100'
+                    : 'bg-black/70 text-amber-300 opacity-0 group-hover:opacity-100'
+                }`}
+              >
+                <ImageIcon size={10} />
+                <span>Img #{img.id}</span>
+                <span className="text-[9px] opacity-80">({img.width_px}x{img.height_px})</span>
+              </div>
+
+              {/* Floating Replace Button */}
+              {onTriggerReplaceImage && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTriggerReplaceImage(img.id);
+                  }}
+                  title="Replace Image (PNG / JPEG)"
+                  className={`absolute bottom-2 right-2 flex items-center gap-1 px-2 py-1 rounded text-xs font-medium shadow-md transition-all ${
+                    isSelected
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-black/80 hover:bg-black text-white opacity-0 group-hover:opacity-100'
+                  }`}
+                >
+                  <RefreshCw size={12} />
+                  <span>Replace</span>
+                </button>
+              )}
+            </div>
+          );
+        })}
 
         {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
         {paragraphs.map((p) => {

@@ -54,3 +54,24 @@ class EditParagraphResponse(BaseModel):
     paragraph_id: int
     updated_text: str
     message: str
+
+
+class ImageModel(BaseModel):
+    """Extracted image XObject on a page with spatial layout attributes."""
+    id: int
+    name: str
+    width_px: int
+    height_px: int
+    color_space: str
+    bits_per_component: int
+    filter: Optional[str] = None
+    byte_size: int
+    bbox: BoundingBox
+
+
+class PageImagesResponse(BaseModel):
+    """Response containing all extracted images on a page."""
+    page_number: int
+    images: List[ImageModel]
+    count: int
+

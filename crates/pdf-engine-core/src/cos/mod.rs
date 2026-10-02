@@ -291,6 +291,82 @@ impl PdfDocument {
         Ok(())
     }
 
+    /// Inserts or replaces an object in the document cache and xref index.
+    pub fn set_object(&mut self, id: ObjectId, obj: PdfObject) {
+        self.objects.insert(id, obj);
+        self.xref.entries.insert(
+            id,
+            XRefEntry::InUse {
+                offset: 0,
+                generation: id.generation,
+            },
+        );
+    }
+
+    /// Allocates a new unused `ObjectId`.
+    pub fn alloc_object_id(&self) -> ObjectId {
+        let max_from_objects = self.objects.keys().map(|id| id.number).max().unwrap_or(0);
+        let max_from_xref = self.xref.entries.keys().map(|id| id.number).max().unwrap_or(0);
+        ObjectId::new(max_from_objects.max(max_from_xref) + 1)
+    }
+
+    /// Retrieves a mutable reference to a stream object.
+    pub fn get_stream_mut(&mut self, id: ObjectId) -> PdfResult<&mut PdfStream> {
+        let _ = self.get_object(id)?;
+        match self.objects.get_mut(&id) {
+            Some(PdfObject::Stream(s)) => Ok(s),
+            Some(_) => Err(PdfError::TypeMismatch {
+                id: id.number,
+                gen: id.generation,
+                expected: "Stream",
+                found: "Non-stream object",
+            }),
+            None => Err(PdfError::ObjectNotFound {
+                id: id.number,
+                gen: id.generation,
+            }),
+        }
+    }
+
+    /// Extracts decompressed page content stream bytes.
+    pub fn get_page_content_bytes(&mut self, page_id: ObjectId) -> PdfResult<Vec<u8>> {
+        let page_obj = self.get_object(page_id)?;
+        let page_dict = match page_obj {
+            PdfObject::Dictionary(d) => d,
+            _ => return Ok(Vec::new()),
+        };
+
+        match page_dict.get("Contents") {
+            Some(PdfObject::Reference(r)) => {
+                let stream_obj = self.get_object(*r)?;
+                if let PdfObject::Stream(s) = stream_obj {
+                    let filter = s.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
+                    let decode_parms = s.dict.get("DecodeParms").and_then(|p| p.as_dict());
+                    decode_stream(filter, decode_parms, &s.content, &self.limits)
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Some(PdfObject::Array(arr)) => {
+                let mut combined = Vec::new();
+                for item in arr.iter() {
+                    if let Some(r) = item.as_reference() {
+                        let stream_obj = self.get_object(r)?;
+                        if let PdfObject::Stream(s) = stream_obj {
+                            let filter = s.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
+                            let decode_parms = s.dict.get("DecodeParms").and_then(|p| p.as_dict());
+                            let chunk = decode_stream(filter, decode_parms, &s.content, &self.limits)?;
+                            combined.extend_from_slice(&chunk);
+                            combined.push(b'\n');
+                        }
+                    }
+                }
+                Ok(combined)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
     /// Extracts embedded font binaries (TrueType / OpenType) from a specific page.
     /// Returns a map of font names (e.g. "F1", "Helvetica") to their raw decompressed font file bytes.
     pub fn extract_page_fonts(

@@ -7,18 +7,24 @@ import { Sidebar } from '@/components/Sidebar';
 import {
   MOCK_SESSION,
   MOCK_SCENEGRAPH,
+  MOCK_IMAGES,
   uploadPdf,
   getPageScenegraph,
+  getPageImages,
+  replaceImage,
   editParagraph,
   getExportUrl,
   connectReflowWebSocket,
 } from '@/lib/api';
-import { DocumentSession, Paragraph, TextAlignment } from '@/lib/types';
+import { DocumentSession, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 
 export default function Home() {
   const [session, setSession] = useState<DocumentSession>(MOCK_SESSION);
   const [paragraphs, setParagraphs] = useState<Paragraph[]>(MOCK_SCENEGRAPH.paragraphs);
+  const [images, setImages] = useState<ImageElement[]>(MOCK_IMAGES);
   const [selectedParagraphId, setSelectedParagraphId] = useState<number | null>(0);
+  const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
+  const [replacingImageId, setReplacingImageId] = useState<number | null>(null);
   const [zoom, setZoom] = useState<number>(1.0);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
@@ -29,6 +35,7 @@ export default function Home() {
   const [historyIndex, setHistoryIndex] = useState<number>(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Initialize WebSocket for live reflow calculation
@@ -180,10 +187,45 @@ export default function Home() {
       setParagraphs(scenegraph.paragraphs);
       setSelectedParagraphId(scenegraph.paragraphs[0]?.id ?? null);
 
+      try {
+        const pageImages = await getPageImages(newSession.document_id, 1);
+        setImages(pageImages.images);
+      } catch (err) {
+        console.warn('No images extracted or endpoint unavailable', err);
+        setImages([]);
+      }
+      setSelectedImageId(null);
+
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
     } catch (err) {
       console.error('Failed to load document', err);
+    }
+  };
+
+  // Image Replacement Triggers & Handler
+  const handleTriggerReplaceImage = (id: number) => {
+    setReplacingImageId(id);
+    imageFileInputRef.current?.click();
+  };
+
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || replacingImageId === null) return;
+
+    try {
+      await replaceImage(session.document_id, replacingImageId, file);
+      // Refresh page images from engine
+      const refreshed = await getPageImages(session.document_id, 1);
+      setImages(refreshed.images);
+    } catch (err) {
+      console.error('Failed to replace image', err);
+      alert('Image replacement failed. Ensure backend engine is reachable.');
+    } finally {
+      setReplacingImageId(null);
+      if (imageFileInputRef.current) {
+        imageFileInputRef.current.value = '';
+      }
     }
   };
 
@@ -232,6 +274,15 @@ export default function Home() {
         className="hidden"
       />
 
+      {/* Hidden file input for replacing images */}
+      <input
+        type="file"
+        ref={imageFileInputRef}
+        onChange={handleImageFileChange}
+        accept="image/png,image/jpeg,image/jpg"
+        className="hidden"
+      />
+
       {/* Top Application Toolbar */}
       <Toolbar
         filename={session.filename}
@@ -256,19 +307,39 @@ export default function Home() {
         <DualCanvasViewer
           paragraphs={paragraphs}
           selectedParagraphId={selectedParagraphId}
-          onSelectParagraph={setSelectedParagraphId}
+          onSelectParagraph={(id) => {
+            setSelectedParagraphId(id);
+            if (id !== null) setSelectedImageId(null);
+          }}
           onUpdateParagraphText={handleUpdateParagraphText}
           zoom={zoom}
           activeReflowId={activeReflowId}
           documentId={session.document_id}
           pageNumber={1}
+          images={images}
+          selectedImageId={selectedImageId}
+          onSelectImage={(id) => {
+            setSelectedImageId(id);
+            if (id !== null) setSelectedParagraphId(null);
+          }}
+          onTriggerReplaceImage={handleTriggerReplaceImage}
         />
 
         <Sidebar
           paragraphs={paragraphs}
           selectedParagraphId={selectedParagraphId}
-          onSelectParagraph={setSelectedParagraphId}
+          onSelectParagraph={(id) => {
+            setSelectedParagraphId(id);
+            setSelectedImageId(null);
+          }}
           documentId={session.document_id}
+          images={images}
+          selectedImageId={selectedImageId}
+          onSelectImage={(id) => {
+            setSelectedImageId(id);
+            setSelectedParagraphId(null);
+          }}
+          onTriggerReplaceImage={handleTriggerReplaceImage}
         />
       </div>
     </div>

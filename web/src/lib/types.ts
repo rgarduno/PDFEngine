@@ -20,9 +20,22 @@ export interface Paragraph {
   fontFamily?: string;
 }
 
+export interface ImageElement {
+  id: number;
+  name: string;
+  width_px: number;
+  height_px: number;
+  color_space: string;
+  bits_per_component: number;
+  filter?: string;
+  byte_size: number;
+  bbox: BoundingBox;
+}
+
 export interface PageSceneGraph {
   page_number: number;
   paragraphs: Paragraph[];
+  images?: ImageElement[];
 }
 
 export interface DocumentSession {

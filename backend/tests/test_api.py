@@ -229,3 +229,114 @@ def test_font_extraction_endpoints():
     # 3. Request non-existent font returns 404
     missing_resp = client.get(f"/api/documents/{doc_id}/pages/1/fonts/NonExistentFont")
     assert missing_resp.status_code == 404
+
+
+def create_pdf_with_image_bytes() -> bytes:
+    """Generates a PDF containing an embedded Image XObject and placement CTM."""
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = b"q\n150 0 0 75 80 500 cm\n/Im1 Do\nQ\n"
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"endstream\nendobj\n")
+
+    off5 = len(pdf)
+    raw_pixels = b"\xFF\x00\x00\x00\xFF\x00\x00\x00\xFF\xFF\xFF\xFF"  # 2x2 RGB samples
+    pdf.extend(
+        f"5 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {len(raw_pixels)} >>\nstream\n".encode()
+    )
+    pdf.extend(raw_pixels)
+    pdf.extend(b"endstream\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(b"xref\n0 6\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010} 00000 n \n".encode())
+    pdf.extend(f"{off2:010} 00000 n \n".encode())
+    pdf.extend(f"{off3:010} 00000 n \n".encode())
+    pdf.extend(f"{off4:010} 00000 n \n".encode())
+    pdf.extend(f"{off5:010} 00000 n \n".encode())
+
+    pdf.extend(b"trailer\n<< /Size 6 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+
+    return bytes(pdf)
+
+
+def test_image_extraction_and_replacement_endpoints():
+    pdf_bytes = create_pdf_with_image_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("image_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 1. Query page images and verify placement BBox
+    images_resp = client.get(f"/api/documents/{doc_id}/pages/1/images")
+    assert images_resp.status_code == 200
+    img_data = images_resp.json()
+    assert img_data["page_number"] == 1
+    assert img_data["count"] == 1
+
+    img = img_data["images"][0]
+    assert img["name"] == "Im1"
+    assert img["id"] == 5
+    assert img["width_px"] == 2
+    assert img["height_px"] == 2
+    assert img["bbox"]["min_x"] == 80.0
+    assert img["bbox"]["min_y"] == 500.0
+    assert img["bbox"]["width"] == 150.0
+    assert img["bbox"]["height"] == 75.0
+
+    # 2. Download image binary (synthesized PNG for raw samples)
+    img_bin_resp = client.get(f"/api/documents/{doc_id}/images/5")
+    assert img_bin_resp.status_code == 200
+    assert img_bin_resp.headers["content-type"] == "image/png"
+    assert img_bin_resp.content.startswith(b"\x89PNG")
+
+    # 3. Surgically replace image with a new JPEG image (10x20 pixels)
+    # JPEG minimal header: SOI, SOF0 (height=10, width=20, components=3), EOI
+    replacement_jpeg = bytearray([0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x08, 0x08, 0x00, 0x0A, 0x00, 0x14, 0x03, 0xFF, 0xD9])
+    replace_resp = client.post(
+        f"/api/documents/{doc_id}/images/5/replace",
+        files={"file": ("new_logo.jpg", io.BytesIO(replacement_jpeg), "image/jpeg")},
+    )
+    assert replace_resp.status_code == 200
+    assert replace_resp.json()["success"] is True
+
+    # 4. Re-query page images and verify updated dimensions while BBox is preserved
+    updated_resp = client.get(f"/api/documents/{doc_id}/pages/1/images")
+    assert updated_resp.status_code == 200
+    updated_img = updated_resp.json()["images"][0]
+    assert updated_img["width_px"] == 20
+    assert updated_img["height_px"] == 10
+    assert updated_img["filter"] == "DCTDecode"
+    assert updated_img["bbox"]["min_x"] == 80.0
+    assert updated_img["bbox"]["min_y"] == 500.0
+    assert updated_img["bbox"]["width"] == 150.0
+    assert updated_img["bbox"]["height"] == 75.0
+
+    # 5. Download replaced binary (should return image/jpeg)
+    new_bin_resp = client.get(f"/api/documents/{doc_id}/images/5")
+    assert new_bin_resp.status_code == 200
+    assert new_bin_resp.headers["content-type"] == "image/jpeg"
+    assert new_bin_resp.content == bytes(replacement_jpeg)
+
+    # 6. Verify Export reflects the surgical change
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert b"/Filter /DCTDecode" in export_resp.content
+

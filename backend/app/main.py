@@ -20,6 +20,8 @@ from app.models import (
     DocumentUploadResponse,
     EditParagraphRequest,
     EditParagraphResponse,
+    ImageModel,
+    PageImagesResponse,
     PageSceneGraph,
     ParagraphModel,
 )
@@ -236,6 +238,99 @@ def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
             "Cache-Control": "public, max-age=86400",
         },
     )
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/images",
+    response_model=PageImagesResponse,
+)
+def get_page_images(doc_id: str, page_idx: int):
+    """Lists all Image XObjects declared and placed on a specific page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        raw_images = doc.get_page_images(page_idx)
+        images = []
+        for img in raw_images:
+            images.append(
+                ImageModel(
+                    id=img.id,
+                    name=img.name,
+                    width_px=img.width_px,
+                    height_px=img.height_px,
+                    color_space=img.color_space,
+                    bits_per_component=img.bits_per_component,
+                    filter=img.filter,
+                    byte_size=img.byte_size,
+                    bbox=BoundingBox(
+                        min_x=img.min_x,
+                        min_y=img.min_y,
+                        max_x=img.max_x,
+                        max_y=img.max_y,
+                        width=img.max_x - img.min_x,
+                        height=img.max_y - img.min_y,
+                    ),
+                )
+            )
+        return PageImagesResponse(
+            page_number=page_idx,
+            images=images,
+            count=len(images),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/documents/{doc_id}/images/{image_id}")
+def get_image_binary(doc_id: str, image_id: int):
+    """Extracts and streams raw image binary (JPEG or PNG) for browser display."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        content_bytes, mime_type = doc.get_image_binary(image_id)
+        ext = "jpg" if "jpeg" in mime_type else "png"
+        return Response(
+            content=bytes(content_bytes),
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'inline; filename="image_{image_id}.{ext}"',
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Image {image_id} error: {e}")
+
+
+@app.post("/api/documents/{doc_id}/images/{image_id}/replace")
+async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)):
+    """Surgically replaces an existing image XObject in the PDF with a new JPEG or PNG file."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    new_bytes = await file.read()
+    if not new_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
+
+    doc = session["doc"]
+    try:
+        doc.replace_image(image_id, new_bytes)
+        return {
+            "success": True,
+            "document_id": doc_id,
+            "image_id": image_id,
+            "filename": file.filename,
+            "byte_size": len(new_bytes),
+            "message": f"Image {image_id} successfully replaced in-place with {file.filename}.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to replace image: {e}")
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")
