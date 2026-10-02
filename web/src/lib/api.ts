@@ -1,9 +1,16 @@
 import {
+  AddLinkPayload,
+  AddMarkupPayload,
+  AddStampPayload,
+  AnnotationActionResponse,
+  AnnotationElement,
   DocumentFormsResponse,
   DocumentSession,
+  FlattenAnnotationsResponse,
   FormFieldElement,
   ImageElement,
   MergeDocumentsResponse,
+  PageAnnotationsResponse,
   PageSceneGraph,
   Paragraph,
   ReflowWebSocketMessage,
@@ -77,10 +84,45 @@ export const MOCK_FORMS: FormFieldElement[] = [
   },
 ];
 
+export const MOCK_ANNOTATIONS: AnnotationElement[] = [
+  {
+    id: 301,
+    page_index: 0,
+    page_number: 1,
+    subtype: 'Highlight',
+    bbox: { min_x: 72, min_y: 640, max_x: 540, max_y: 695, width: 468, height: 55 },
+    color: [1.0, 0.92, 0.23],
+    opacity: 0.45,
+    contents: 'Key introductory clause',
+  },
+  {
+    id: 302,
+    page_index: 0,
+    page_number: 1,
+    subtype: 'Stamp',
+    bbox: { min_x: 380, min_y: 740, max_x: 540, max_y: 785, width: 160, height: 45 },
+    stamp_type: 'APPROVED',
+    date_str: '2026-10-02',
+    color: [0.15, 0.68, 0.38],
+    opacity: 1.0,
+  },
+  {
+    id: 303,
+    page_index: 0,
+    page_number: 1,
+    subtype: 'Link',
+    bbox: { min_x: 72, min_y: 560, max_x: 320, max_y: 575, width: 248, height: 15 },
+    link_type: 'URI',
+    link_uri: 'https://pdfengine.dev/docs/surgical-editing',
+    opacity: 1.0,
+  },
+];
+
 export const MOCK_SCENEGRAPH: PageSceneGraph = {
   page_number: 1,
   images: MOCK_IMAGES,
   forms: MOCK_FORMS,
+  annotations: MOCK_ANNOTATIONS,
   paragraphs: [
     {
       id: 0,
@@ -477,4 +519,158 @@ export async function deletePages(
     return { success: true, page_count: 1, message: 'Pages deleted locally.' };
   }
 }
+
+export async function getPageAnnotations(
+  docId: string,
+  pageNumber: number
+): Promise<PageAnnotationsResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations`
+    );
+    if (!res.ok) throw new Error('Failed to fetch page annotations');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock page annotations:', e);
+    return {
+      document_id: docId,
+      page_number: pageNumber,
+      count: MOCK_ANNOTATIONS.length,
+      annotations: MOCK_ANNOTATIONS,
+    };
+  }
+}
+
+export async function addMarkup(
+  docId: string,
+  pageNumber: number,
+  payload: AddMarkupPayload
+): Promise<AnnotationActionResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/markup`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!res.ok) throw new Error('Failed to add text markup');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock add markup:', e);
+    return {
+      success: true,
+      document_id: docId,
+      page_number: pageNumber,
+      annotation_id: Date.now(),
+      message: `${payload.subtype} markup created locally.`,
+    };
+  }
+}
+
+export async function addLink(
+  docId: string,
+  pageNumber: number,
+  payload: AddLinkPayload
+): Promise<AnnotationActionResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/link`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!res.ok) throw new Error('Failed to add link');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock add link:', e);
+    return {
+      success: true,
+      document_id: docId,
+      page_number: pageNumber,
+      annotation_id: Date.now(),
+      message: `Link created locally.`,
+    };
+  }
+}
+
+export async function addStamp(
+  docId: string,
+  pageNumber: number,
+  payload: AddStampPayload
+): Promise<AnnotationActionResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/stamp`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!res.ok) throw new Error('Failed to add stamp');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock add stamp:', e);
+    return {
+      success: true,
+      document_id: docId,
+      page_number: pageNumber,
+      annotation_id: Date.now(),
+      message: `Stamp '${payload.stamp_type}' created locally.`,
+    };
+  }
+}
+
+export async function deleteAnnotation(
+  docId: string,
+  pageNumber: number,
+  annotId: number
+): Promise<AnnotationActionResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/${annotId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+    if (!res.ok) throw new Error('Failed to delete annotation');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock delete annotation:', e);
+    return {
+      success: true,
+      document_id: docId,
+      page_number: pageNumber,
+      annotation_id: annotId,
+      message: `Annotation ${annotId} deleted locally.`,
+    };
+  }
+}
+
+export async function flattenAnnotations(
+  docId: string,
+  pageNumber?: number
+): Promise<FlattenAnnotationsResponse> {
+  try {
+    const url = pageNumber
+      ? `${API_BASE_URL}/api/documents/${docId}/annotations/flatten?page_number=${pageNumber}`
+      : `${API_BASE_URL}/api/documents/${docId}/annotations/flatten`;
+    const res = await fetch(url, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to flatten annotations');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock flatten annotations:', e);
+    return {
+      success: true,
+      document_id: docId,
+      flattened_count: 1,
+      message: 'Annotations flattened locally.',
+    };
+  }
+}
+
 

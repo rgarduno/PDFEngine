@@ -185,4 +185,78 @@ class PageOperationResponse(BaseModel):
     message: str
 
 
+class AnnotationModel(BaseModel):
+    """Structured representation of a PDF annotation."""
+    id: int
+    page_index: int
+    page_number: int
+    subtype: str
+    bbox: BoundingBox
+    color: Optional[List[float]] = None
+    opacity: float = 1.0
+    contents: Optional[str] = None
+    link_type: Optional[str] = None
+    link_uri: Optional[str] = None
+    link_target_page: Optional[int] = None
+    stamp_type: Optional[str] = None
+    date_str: Optional[str] = None
 
+
+class PageAnnotationsResponse(BaseModel):
+    """Response containing annotations on a given page."""
+    document_id: str
+    page_number: int
+    count: int
+    annotations: List[AnnotationModel]
+
+
+class AddMarkupRequest(BaseModel):
+    """Request payload to add a text markup annotation (Highlight, Underline, StrikeOut)."""
+    subtype: str = Field(default="Highlight", description="Highlight, Underline, or StrikeOut")
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    color: Optional[List[float]] = None
+    opacity: Optional[float] = None
+    contents: Optional[str] = None
+
+
+class AddLinkRequest(BaseModel):
+    """Request payload to add an interactive clickable link or GoTo destination."""
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    uri: Optional[str] = None
+    target_page: Optional[int] = None
+    show_border: bool = False
+
+
+class AddStampRequest(BaseModel):
+    """Request payload to add a rubber stamp annotation."""
+    stamp_type: str = Field(default="Approved", description="Approved, Confidential, Draft, Rejected, Final, TopSecret, or Custom")
+    min_x: Optional[float] = None
+    min_y: Optional[float] = None
+    max_x: Optional[float] = None
+    max_y: Optional[float] = None
+    custom_text: Optional[str] = None
+    color: Optional[List[float]] = None
+    date_str: Optional[str] = None
+
+
+class AnnotationActionResponse(BaseModel):
+    """Response returned upon creating or modifying an annotation."""
+    success: bool
+    document_id: str
+    page_number: int
+    annotation_id: int
+    message: str
+
+
+class FlattenAnnotationsResponse(BaseModel):
+    """Response returned upon flattening visual annotations into page vectors."""
+    success: bool
+    document_id: str
+    flattened_count: int
+    message: str

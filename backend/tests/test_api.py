@@ -531,4 +531,103 @@ def test_document_operations_rotate_split_merge_reorder_delete():
     assert delete_resp.json()["page_count"] == 1
 
 
+def test_annotations_workflow():
+    """Validates complete lifecycle of text markup, links, stamps, deletion, and flattening."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("annot_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 1. Initial annotations should be empty
+    list_resp = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert list_resp.status_code == 200
+    assert list_resp.json()["count"] == 0
+
+    # 2. Add Highlight markup
+    hl_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/markup",
+        json={
+            "subtype": "Highlight",
+            "min_x": 50.0,
+            "min_y": 690.0,
+            "max_x": 250.0,
+            "max_y": 715.0,
+            "color": [1.0, 0.9, 0.1],
+            "opacity": 0.5,
+            "contents": "Key Contract Clause",
+        },
+    )
+    assert hl_resp.status_code == 200
+    hl_data = hl_resp.json()
+    assert hl_data["success"] is True
+    hl_id = hl_data["annotation_id"]
+
+    # 3. Add Web Link
+    link_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/link",
+        json={
+            "min_x": 50.0,
+            "min_y": 650.0,
+            "max_x": 200.0,
+            "max_y": 670.0,
+            "uri": "https://example.com/terms",
+            "show_border": True,
+        },
+    )
+    assert link_resp.status_code == 200
+    link_data = link_resp.json()
+    assert link_data["success"] is True
+
+    # 4. Add Stamp
+    stamp_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/stamp",
+        json={
+            "stamp_type": "Approved",
+            "min_x": 400.0,
+            "min_y": 700.0,
+            "max_x": 550.0,
+            "max_y": 750.0,
+            "date_str": "2026-10-02",
+        },
+    )
+    assert stamp_resp.status_code == 200
+    stamp_data = stamp_resp.json()
+    assert stamp_data["success"] is True
+    stamp_id = stamp_data["annotation_id"]
+
+    # 5. Verify all 3 annotations are returned
+    list_resp2 = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert list_resp2.status_code == 200
+    items = list_resp2.json()["annotations"]
+    assert len(items) == 3
+    subtypes = [it["subtype"] for it in items]
+    assert "Highlight" in subtypes
+    assert "Link" in subtypes
+    assert "Stamp" in subtypes
+
+    # 6. Delete Stamp
+    del_resp = client.delete(f"/api/documents/{doc_id}/pages/1/annotations/{stamp_id}")
+    assert del_resp.status_code == 200
+    list_resp3 = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert list_resp3.json()["count"] == 2
+
+    # 7. Flatten Annotations (Highlight becomes permanent vector graphics, Link is preserved)
+    flat_resp = client.post(f"/api/documents/{doc_id}/annotations/flatten?page_number=1")
+    assert flat_resp.status_code == 200
+    assert flat_resp.json()["flattened_count"] == 1
+
+    # Remaining active annotation should only be the interactive Link
+    list_resp4 = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert list_resp4.json()["count"] == 1
+    assert list_resp4.json()["annotations"][0]["subtype"] == "Link"
+
+    # 8. Export document and verify valid bytes
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert export_resp.content.startswith(b"%PDF-")
+
+
 

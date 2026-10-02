@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { AnnotationElement, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
-import { Check, Edit3, FileText, ImageIcon, Layers, Move, RefreshCw } from 'lucide-react';
+import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, RefreshCw, Trash2 } from 'lucide-react';
 
 interface DualCanvasViewerProps {
   paragraphs: Paragraph[];
@@ -23,6 +23,11 @@ interface DualCanvasViewerProps {
   onSelectFormField?: (name: string | null) => void;
   onUpdateFormFieldValue?: (name: string, value: string) => void;
   rotation?: number;
+  annotations?: AnnotationElement[];
+  selectedAnnotationId?: number | null;
+  onSelectAnnotation?: (id: number | null) => void;
+  onDeleteAnnotation?: (id: number) => void;
+  onNavigatePage?: (page: number) => void;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -47,6 +52,11 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   onSelectFormField,
   onUpdateFormFieldValue,
   rotation = 0,
+  annotations = [],
+  selectedAnnotationId = null,
+  onSelectAnnotation,
+  onDeleteAnnotation,
+  onNavigatePage,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -140,6 +150,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
         onSelectParagraph(null);
         onSelectImage?.(null);
         onSelectFormField?.(null);
+        onSelectAnnotation?.(null);
         setEditingId(null);
       }}
       className="flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-950 p-8 flex items-center justify-center min-h-[calc(100vh-4rem)] relative"
@@ -325,6 +336,160 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                 >
                   <FileText size={9} />
                   <span>{field.name}</span>
+                </div>
+              </div>
+            );
+          })}
+
+        {/* Layer 1.9: Annotations (Highlights, Underlines, Strikeouts, Links, Stamps) */}
+        {annotations
+          .filter((a) => a.page_number === pageNumber)
+          .map((annot) => {
+            const { left, top, width, height } = pdfToScreenCoordinates(annot.bbox);
+            const isSelected = selectedAnnotationId === annot.id;
+
+            const rgbColor = annot.color
+              ? `rgb(${Math.round(annot.color[0] * 255)}, ${Math.round(annot.color[1] * 255)}, ${Math.round(annot.color[2] * 255)})`
+              : annot.subtype === 'Highlight'
+              ? 'rgb(254, 240, 138)'
+              : annot.subtype === 'Underline'
+              ? 'rgb(37, 99, 235)'
+              : annot.subtype === 'StrikeOut'
+              ? 'rgb(220, 38, 38)'
+              : annot.subtype === 'Stamp'
+              ? 'rgb(16, 185, 129)'
+              : 'rgb(59, 130, 246)';
+
+            return (
+              <div
+                key={annot.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectParagraph(null);
+                  onSelectImage?.(null);
+                  onSelectFormField?.(null);
+                  onSelectAnnotation?.(annot.id);
+                }}
+                style={{
+                  left: `${left}px`,
+                  top: `${top}px`,
+                  width: `${Math.max(width, 20 * zoom)}px`,
+                  height: `${Math.max(height, 14 * zoom)}px`,
+                }}
+                className={`absolute transition-all cursor-pointer group ${
+                  isSelected ? 'ring-2 ring-amber-500 z-25' : 'hover:ring-1 hover:ring-amber-400 z-15'
+                }`}
+              >
+                {/* Visual rendering per subtype */}
+                {annot.subtype === 'Highlight' && (
+                  <div
+                    style={{
+                      backgroundColor: annot.color
+                        ? `rgba(${Math.round(annot.color[0] * 255)}, ${Math.round(annot.color[1] * 255)}, ${Math.round(annot.color[2] * 255)}, ${annot.opacity || 0.45})`
+                        : 'rgba(254, 240, 138, 0.45)',
+                      mixBlendMode: 'multiply',
+                    }}
+                    className="w-full h-full rounded-xs"
+                  />
+                )}
+
+                {annot.subtype === 'Underline' && (
+                  <div className="w-full h-full flex items-end">
+                    <div
+                      style={{
+                        backgroundColor: rgbColor,
+                        height: `${Math.max(2 * zoom, 2)}px`,
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+
+                {annot.subtype === 'StrikeOut' && (
+                  <div className="w-full h-full flex items-center">
+                    <div
+                      style={{
+                        backgroundColor: rgbColor,
+                        height: `${Math.max(1.5 * zoom, 1.5)}px`,
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+
+                {annot.subtype === 'Link' && (
+                  <div
+                    onClick={(e) => {
+                      if (annot.link_type === 'URI' && annot.link_uri) {
+                        e.stopPropagation();
+                        window.open(annot.link_uri, '_blank', 'noopener,noreferrer');
+                      } else if (annot.link_type === 'GoTo' && annot.link_target_page && onNavigatePage) {
+                        e.stopPropagation();
+                        onNavigatePage(annot.link_target_page);
+                      }
+                    }}
+                    className="w-full h-full border-b-2 border-dashed border-blue-500 bg-blue-400/10 hover:bg-blue-400/25 flex items-center justify-end px-1 cursor-pointer transition-colors"
+                    title={annot.link_uri || (annot.link_target_page ? `Jump to Page ${annot.link_target_page}` : 'Link')}
+                  >
+                    <ExternalLink size={Math.max(10 * zoom, 10)} className="text-blue-600 dark:text-blue-400" />
+                  </div>
+                )}
+
+                {annot.subtype === 'Stamp' && (
+                  <div
+                    style={{
+                      borderColor: rgbColor,
+                      color: rgbColor,
+                      transform: 'rotate(-4deg)',
+                    }}
+                    className="w-full h-full border-2 border-dashed rounded flex flex-col items-center justify-center p-1 font-sans font-black tracking-widest bg-white/90 dark:bg-neutral-900/90 shadow-sm uppercase select-none"
+                  >
+                    <div
+                      style={{ fontSize: `${Math.max(11 * zoom, 9)}px` }}
+                      className="font-extrabold text-center leading-none"
+                    >
+                      {annot.stamp_type || 'APPROVED'}
+                    </div>
+                    {annot.date_str && (
+                      <div
+                        style={{ fontSize: `${Math.max(7 * zoom, 6)}px` }}
+                        className="text-[8px] font-mono opacity-85 mt-0.5 tracking-normal"
+                      >
+                        {annot.date_str}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Floating annotation badge on select or hover */}
+                <div
+                  className={`absolute -top-6 left-0 flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono shadow-sm transition-opacity whitespace-nowrap z-30 ${
+                    isSelected
+                      ? 'bg-amber-600 text-white opacity-100'
+                      : 'bg-black/80 text-amber-300 opacity-0 group-hover:opacity-100'
+                  }`}
+                >
+                  <Highlighter size={10} />
+                  <span>
+                    {annot.subtype} #{annot.id}
+                  </span>
+                  {annot.contents && (
+                    <span className="text-white/80 max-w-[120px] truncate">
+                      ({annot.contents})
+                    </span>
+                  )}
+                  {isSelected && onDeleteAnnotation && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteAnnotation(annot.id);
+                      }}
+                      title="Delete annotation"
+                      className="ml-1 hover:text-red-300 text-white/90"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  )}
                 </div>
               </div>
             );

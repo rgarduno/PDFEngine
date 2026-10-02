@@ -5,7 +5,7 @@ interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -16,6 +16,11 @@ except ImportError:
     pdf_engine = None
 
 from app.models import (
+    AddLinkRequest,
+    AddMarkupRequest,
+    AddStampRequest,
+    AnnotationActionResponse,
+    AnnotationModel,
     BatchFillFormsRequest,
     BoundingBox,
     DeletePagesRequest,
@@ -24,11 +29,13 @@ from app.models import (
     EditParagraphRequest,
     EditParagraphResponse,
     FillFormsResponse,
+    FlattenAnnotationsResponse,
     FlattenFormsResponse,
     FormFieldModel,
     ImageModel,
     MergeDocumentsRequest,
     MergeDocumentsResponse,
+    PageAnnotationsResponse,
     PageImagesResponse,
     PageOperationResponse,
     PageSceneGraph,
@@ -567,6 +574,223 @@ def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to delete pages: {e}")
+
+
+def annot_to_model(a) -> AnnotationModel:
+    min_x, min_y, max_x, max_y = a.bbox()
+    return AnnotationModel(
+        id=a.id,
+        page_index=a.page_index,
+        page_number=a.page_number,
+        subtype=a.subtype,
+        bbox=BoundingBox(
+            min_x=round(min_x, 2),
+            min_y=round(min_y, 2),
+            max_x=round(max_x, 2),
+            max_y=round(max_y, 2),
+            width=round(max_x - min_x, 2),
+            height=round(max_y - min_y, 2),
+        ),
+        color=a.color,
+        opacity=a.opacity,
+        contents=a.contents,
+        link_type=a.link_type,
+        link_uri=a.link_uri,
+        link_target_page=a.link_target_page,
+        stamp_type=a.stamp_type,
+        date_str=a.date_str,
+    )
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations",
+    response_model=PageAnnotationsResponse,
+)
+def get_page_annotations_endpoint(doc_id: str, page_idx: int):
+    """Retrieves all non-widget annotations (highlights, underlines, links, stamps) on a page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        annots = doc.get_page_annotations(page_idx)
+        return PageAnnotationsResponse(
+            document_id=doc_id,
+            page_number=page_idx,
+            count=len(annots),
+            annotations=[annot_to_model(a) for a in annots],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to retrieve annotations: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations/markup",
+    response_model=AnnotationActionResponse,
+)
+def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupRequest):
+    """Adds a text markup annotation (Highlight, Underline, StrikeOut) to a page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        annot_id = doc.add_text_markup(
+            page_idx,
+            request.subtype,
+            request.min_x,
+            request.min_y,
+            request.max_x,
+            request.max_y,
+            request.color,
+            request.opacity,
+            request.contents,
+        )
+        return AnnotationActionResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            annotation_id=annot_id,
+            message=f"{request.subtype} markup annotation created successfully.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to add markup annotation: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations/link",
+    response_model=AnnotationActionResponse,
+)
+def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
+    """Adds an interactive URI link or internal GoTo link annotation to a page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        if request.uri:
+            annot_id = doc.add_link_uri(
+                page_idx,
+                request.min_x,
+                request.min_y,
+                request.max_x,
+                request.max_y,
+                request.uri,
+                request.show_border,
+            )
+            msg = f"Web link to '{request.uri}' created successfully."
+        elif request.target_page is not None:
+            annot_id = doc.add_link_goto(
+                page_idx,
+                request.min_x,
+                request.min_y,
+                request.max_x,
+                request.max_y,
+                request.target_page,
+            )
+            msg = f"Internal jump link to page {request.target_page} created successfully."
+        else:
+            raise HTTPException(status_code=400, detail="Either 'uri' or 'target_page' must be provided.")
+
+        return AnnotationActionResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            annotation_id=annot_id,
+            message=msg,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to add link annotation: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations/stamp",
+    response_model=AnnotationActionResponse,
+)
+def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
+    """Adds a rubber stamp annotation with vector styling and text to a page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        annot_id = doc.add_stamp(
+            page_idx,
+            request.stamp_type,
+            request.min_x,
+            request.min_y,
+            request.max_x,
+            request.max_y,
+            request.custom_text,
+            request.color,
+            request.date_str,
+        )
+        return AnnotationActionResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            annotation_id=annot_id,
+            message=f"Stamp '{request.stamp_type}' created successfully.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to add stamp annotation: {e}")
+
+
+@app.delete(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations/{annot_id}",
+    response_model=AnnotationActionResponse,
+)
+def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
+    """Deletes an annotation from a page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        deleted = doc.delete_annotation(page_idx, annot_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Annotation {annot_id} not found on page {page_idx}.")
+        return AnnotationActionResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            annotation_id=annot_id,
+            message=f"Annotation {annot_id} deleted successfully.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to delete annotation: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/annotations/flatten",
+    response_model=FlattenAnnotationsResponse,
+)
+def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None):
+    """Permanently flattens visual annotations (highlights, underlines, stamps) into page content."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        flattened_count = doc.flatten_annotations(page_number)
+        return FlattenAnnotationsResponse(
+            success=True,
+            document_id=doc_id,
+            flattened_count=flattened_count,
+            message=f"Flattened {flattened_count} annotation(s) into page graphics.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to flatten annotations: {e}")
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")

@@ -37,6 +37,7 @@ export interface PageSceneGraph {
   paragraphs: Paragraph[];
   images?: ImageElement[];
   forms?: FormFieldElement[];
+  annotations?: AnnotationElement[];
 }
 
 export type FormFieldType =
@@ -111,3 +112,80 @@ export interface MergeDocumentsResponse {
   page_count: number;
 }
 
+export type AnnotationSubtype =
+  | 'Highlight'
+  | 'Underline'
+  | 'StrikeOut'
+  | 'Link'
+  | 'Stamp'
+  | 'Other';
+
+export interface AnnotationElement {
+  id: number;
+  page_index: number;
+  page_number: number;
+  subtype: AnnotationSubtype;
+  bbox: BoundingBox;
+  color?: number[];
+  opacity: number;
+  contents?: string;
+  link_type?: 'URI' | 'GoTo';
+  link_uri?: string;
+  link_target_page?: number;
+  stamp_type?: string;
+  date_str?: string;
+}
+
+export interface PageAnnotationsResponse {
+  document_id: string;
+  page_number: number;
+  count: number;
+  annotations: AnnotationElement[];
+}
+
+export interface AddMarkupPayload {
+  subtype: 'Highlight' | 'Underline' | 'StrikeOut';
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  color?: number[];
+  opacity?: number;
+  contents?: string;
+}
+
+export interface AddLinkPayload {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  uri?: string;
+  target_page?: number;
+  show_border?: boolean;
+}
+
+export interface AddStampPayload {
+  stamp_type: string;
+  min_x?: number;
+  min_y?: number;
+  max_x?: number;
+  max_y?: number;
+  custom_text?: string;
+  color?: number[];
+  date_str?: string;
+}
+
+export interface AnnotationActionResponse {
+  success: boolean;
+  document_id: string;
+  page_number: number;
+  annotation_id: number;
+  message: string;
+}
+
+export interface FlattenAnnotationsResponse {
+  success: boolean;
+  document_id: string;
+  flattened_count: number;
+  message: string;
+}

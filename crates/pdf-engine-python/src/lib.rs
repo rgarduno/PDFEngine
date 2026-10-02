@@ -7,9 +7,13 @@ use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::fs;
 
+use pdf_engine_core::annots::{
+    AnnotationSubtype, LinkAction, StampType,
+};
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
 use pdf_engine_core::editor::SurgicalEditor;
 use pdf_engine_core::fonts::FontMetrics;
+use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
 use pdf_engine_core::stream::{
     build_ast_from_operations, serialize_ast, ContentAst, ContentStreamTokenizer,
@@ -151,6 +155,92 @@ impl PyFormField {
     /// Returns spatial bounding box coordinates as a tuple (min_x, min_y, max_x, max_y).
     pub fn bbox(&self) -> (f64, f64, f64, f64) {
         (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
+/// High-level representation of a PDF annotation in Python.
+#[pyclass(name = "Annotation")]
+#[derive(Debug, Clone)]
+pub struct PyAnnotation {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub page_index: usize,
+    #[pyo3(get)]
+    pub page_number: usize,
+    #[pyo3(get)]
+    pub subtype: String,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+    #[pyo3(get)]
+    pub color: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub opacity: f64,
+    #[pyo3(get)]
+    pub contents: Option<String>,
+    #[pyo3(get)]
+    pub link_type: Option<String>,
+    #[pyo3(get)]
+    pub link_uri: Option<String>,
+    #[pyo3(get)]
+    pub link_target_page: Option<usize>,
+    #[pyo3(get)]
+    pub stamp_type: Option<String>,
+    #[pyo3(get)]
+    pub date_str: Option<String>,
+}
+
+#[pymethods]
+impl PyAnnotation {
+    fn __repr__(&self) -> String {
+        format!(
+            "<Annotation id={} type='{}' page={} bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
+            self.id, self.subtype, self.page_number, self.min_x, self.min_y, self.max_x, self.max_y
+        )
+    }
+
+    /// Returns spatial bounding box coordinates as a tuple (min_x, min_y, max_x, max_y).
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
+impl PyAnnotation {
+    pub(crate) fn from_core(a: pdf_engine_core::annots::Annotation) -> Self {
+        let (link_type, link_uri, link_target_page) = match a.link_action {
+            Some(LinkAction::Uri(uri)) => (Some("URI".to_string()), Some(uri), None),
+            Some(LinkAction::GoTo(target_idx)) => {
+                (Some("GoTo".to_string()), None, Some(target_idx + 1))
+            }
+            None => (None, None, None),
+        };
+
+        let stamp_type = a.stamp_type.map(|s| s.text());
+
+        PyAnnotation {
+            id: a.id.number,
+            page_index: a.page_index,
+            page_number: a.page_index + 1,
+            subtype: a.subtype.as_pdf_name().to_string(),
+            min_x: a.rect.min_x,
+            min_y: a.rect.min_y,
+            max_x: a.rect.max_x,
+            max_y: a.rect.max_y,
+            color: a.color.map(|c| c.to_vec()),
+            opacity: a.opacity,
+            contents: a.contents,
+            link_type,
+            link_uri,
+            link_target_page,
+            stamp_type,
+            date_str: a.date_str,
+        }
     }
 }
 
@@ -306,6 +396,46 @@ impl PyPdfDocument {
             page_ids,
             active_pages,
         })
+    }
+
+    /// Reloads all active PyPage scene graphs to reflect recent stream mutations or flatten operations.
+    pub(crate) fn reload_active_pages(&mut self) {
+        let page_ids = self.page_ids.clone();
+        let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+        let mut reloaded_pages = Vec::with_capacity(page_ids.len());
+
+        for (idx, &page_id) in page_ids.iter().enumerate() {
+            if let Ok(page_obj) = self.doc.get_object(page_id) {
+                if let Some(dict) = page_obj.as_dict() {
+                    let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
+                    let (ast, paragraphs) = if let Some(c_ref) = contents_id {
+                        if let Ok(PdfObject::Stream(s)) = self.doc.get_object(c_ref) {
+                            let mut tokenizer = ContentStreamTokenizer::new(&s.content);
+                            let ops = tokenizer.tokenize_all().unwrap_or_default();
+                            let ast = build_ast_from_operations(ops);
+                            let reconstructor =
+                                LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
+                            let paragraphs = reconstructor.reconstruct();
+                            (ast, paragraphs)
+                        } else {
+                            (ContentAst::new(), Vec::new())
+                        }
+                    } else {
+                        (ContentAst::new(), Vec::new())
+                    };
+
+                    reloaded_pages.push(PyPage {
+                        page_number: idx + 1,
+                        page_id,
+                        contents_id,
+                        ast,
+                        paragraphs,
+                        metrics: metrics.clone(),
+                    });
+                }
+            }
+        }
+        self.active_pages = reloaded_pages;
     }
 }
 
@@ -516,44 +646,206 @@ impl PyPdfDocument {
         let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e)))?;
 
-        // Reload active pages so that get_page() reflects the newly flattened visual operations
-        let page_ids = self.page_ids.clone();
-        let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
-        let mut reloaded_pages = Vec::with_capacity(page_ids.len());
+        self.reload_active_pages();
+        Ok(count)
+    }
 
-        for (idx, &page_id) in page_ids.iter().enumerate() {
-            if let Ok(page_obj) = self.doc.get_object(page_id) {
-                if let Some(dict) = page_obj.as_dict() {
-                    let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
-                    let (ast, paragraphs) = if let Some(c_ref) = contents_id {
-                        if let Ok(PdfObject::Stream(s)) = self.doc.get_object(c_ref) {
-                            let mut tokenizer = ContentStreamTokenizer::new(&s.content);
-                            let ops = tokenizer.tokenize_all().unwrap_or_default();
-                            let ast = build_ast_from_operations(ops);
-                            let reconstructor =
-                                LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-                            let paragraphs = reconstructor.reconstruct();
-                            (ast, paragraphs)
-                        } else {
-                            (ContentAst::new(), Vec::new())
-                        }
-                    } else {
-                        (ContentAst::new(), Vec::new())
-                    };
+    /// Extracts all non-widget annotations from a specific page.
+    pub fn get_page_annotations(&mut self, page_index: usize) -> PyResult<Vec<PyAnnotation>> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let annots = pdf_engine_core::annots::extract_page_annotations(&mut self.doc, zero_idx)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract page annotations: {}", e)))?;
 
-                    reloaded_pages.push(PyPage {
-                        page_number: idx + 1,
-                        page_id,
-                        contents_id,
-                        ast,
-                        paragraphs,
-                        metrics: metrics.clone(),
-                    });
-                }
+        Ok(annots.into_iter().map(PyAnnotation::from_core).collect())
+    }
+
+    /// Extracts all non-widget annotations across the entire document.
+    pub fn get_all_annotations(&mut self) -> PyResult<Vec<PyAnnotation>> {
+        let annots = pdf_engine_core::annots::extract_all_annotations(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract document annotations: {}", e)))?;
+
+        Ok(annots.into_iter().map(PyAnnotation::from_core).collect())
+    }
+
+    /// Adds a text markup annotation (Highlight, Underline, StrikeOut) to a page.
+    #[pyo3(signature = (page_index, subtype, min_x, min_y, max_x, max_y, color=None, opacity=None, contents=None))]
+    pub fn add_text_markup(
+        &mut self,
+        page_index: usize,
+        subtype: &str,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        color: Option<Vec<f64>>,
+        opacity: Option<f64>,
+        contents: Option<String>,
+    ) -> PyResult<u32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let st = AnnotationSubtype::from_pdf_name(subtype);
+        let rect = Rect::new(min_x, min_y, max_x, max_y);
+        let rgb = color.and_then(|c| {
+            if c.len() >= 3 {
+                Some([c[0], c[1], c[2]])
+            } else {
+                None
             }
-        }
-        self.active_pages = reloaded_pages;
+        });
+        let annot_id = pdf_engine_core::annots::add_text_markup(
+            &mut self.doc,
+            zero_idx,
+            st,
+            rect,
+            None,
+            rgb,
+            opacity,
+            contents.as_deref(),
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to add text markup: {}", e)))?;
 
+        Ok(annot_id.number)
+    }
+
+    /// Adds an interactive clickable URI link annotation to a page.
+    #[pyo3(signature = (page_index, min_x, min_y, max_x, max_y, uri, show_border=None))]
+    pub fn add_link_uri(
+        &mut self,
+        page_index: usize,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        uri: &str,
+        show_border: Option<bool>,
+    ) -> PyResult<u32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let rect = Rect::new(min_x, min_y, max_x, max_y);
+        let annot_id = pdf_engine_core::annots::add_link_uri(
+            &mut self.doc,
+            zero_idx,
+            rect,
+            uri,
+            show_border.unwrap_or(false),
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to add link: {}", e)))?;
+
+        Ok(annot_id.number)
+    }
+
+    /// Adds an internal document jump link annotation targeting another page.
+    pub fn add_link_goto(
+        &mut self,
+        page_index: usize,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        target_page_index: usize,
+    ) -> PyResult<u32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let target_zero = if target_page_index > 0 && target_page_index <= self.page_ids.len() {
+            target_page_index - 1
+        } else {
+            target_page_index
+        };
+        let rect = Rect::new(min_x, min_y, max_x, max_y);
+        let annot_id = pdf_engine_core::annots::add_link_goto(
+            &mut self.doc,
+            zero_idx,
+            rect,
+            target_zero,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to add goto link: {}", e)))?;
+
+        Ok(annot_id.number)
+    }
+
+    /// Adds a vector rubber stamp annotation to a page.
+    #[pyo3(signature = (page_index, stamp_type, min_x=None, min_y=None, max_x=None, max_y=None, custom_text=None, color=None, date_str=None))]
+    pub fn add_stamp(
+        &mut self,
+        page_index: usize,
+        stamp_type: &str,
+        min_x: Option<f64>,
+        min_y: Option<f64>,
+        max_x: Option<f64>,
+        max_y: Option<f64>,
+        custom_text: Option<&str>,
+        color: Option<Vec<f64>>,
+        date_str: Option<&str>,
+    ) -> PyResult<u32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let st = StampType::from_name_or_text(stamp_type);
+        let rect = match (min_x, min_y, max_x, max_y) {
+            (Some(x1), Some(y1), Some(x2), Some(y2)) => Some(Rect::new(x1, y1, x2, y2)),
+            _ => None,
+        };
+        let rgb = color.and_then(|c| {
+            if c.len() >= 3 {
+                Some([c[0], c[1], c[2]])
+            } else {
+                None
+            }
+        });
+        let annot_id = pdf_engine_core::annots::add_stamp(
+            &mut self.doc,
+            zero_idx,
+            st,
+            rect,
+            custom_text,
+            rgb,
+            date_str,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to add stamp: {}", e)))?;
+
+        Ok(annot_id.number)
+    }
+
+    /// Deletes an annotation from a page.
+    pub fn delete_annotation(&mut self, page_index: usize, annot_id: u32) -> PyResult<bool> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        pdf_engine_core::annots::delete_annotation(&mut self.doc, zero_idx, ObjectId::new(annot_id))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete annotation: {}", e)))
+    }
+
+    /// Flattens all visual annotations (highlights, underlines, strikeouts, stamps) into permanent page graphics.
+    #[pyo3(signature = (page_index=None))]
+    pub fn flatten_annotations(&mut self, page_index: Option<usize>) -> PyResult<usize> {
+        let target_idx = page_index.map(|idx| {
+            if idx > 0 && idx <= self.page_ids.len() {
+                idx - 1
+            } else {
+                idx
+            }
+        });
+        let count = pdf_engine_core::annots::flatten_annotations(&mut self.doc, target_idx)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten annotations: {}", e)))?;
+
+        self.reload_active_pages();
         Ok(count)
     }
 
@@ -687,6 +979,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParagraph>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyFormField>()?;
+    m.add_class::<PyAnnotation>()?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

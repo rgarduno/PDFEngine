@@ -9,6 +9,7 @@ import {
   MOCK_SCENEGRAPH,
   MOCK_IMAGES,
   MOCK_FORMS,
+  MOCK_ANNOTATIONS,
   uploadPdf,
   getPageScenegraph,
   getPageImages,
@@ -23,8 +24,14 @@ import {
   splitDocument,
   mergeDocuments,
   deletePages,
+  getPageAnnotations,
+  addMarkup,
+  addLink,
+  addStamp,
+  deleteAnnotation,
+  flattenAnnotations,
 } from '@/lib/api';
-import { DocumentSession, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { AnnotationElement, DocumentSession, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 
 export default function Home() {
   const [session, setSession] = useState<DocumentSession>(MOCK_SESSION);
@@ -33,9 +40,11 @@ export default function Home() {
   const [paragraphs, setParagraphs] = useState<Paragraph[]>(MOCK_SCENEGRAPH.paragraphs);
   const [images, setImages] = useState<ImageElement[]>(MOCK_IMAGES);
   const [forms, setForms] = useState<FormFieldElement[]>(MOCK_FORMS);
+  const [annotations, setAnnotations] = useState<AnnotationElement[]>(MOCK_ANNOTATIONS);
   const [selectedParagraphId, setSelectedParagraphId] = useState<number | null>(0);
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
   const [selectedFormFieldName, setSelectedFormFieldName] = useState<string | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<number | null>(null);
   const [replacingImageId, setReplacingImageId] = useState<number | null>(null);
   const [zoom, setZoom] = useState<number>(1.0);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -218,6 +227,15 @@ export default function Home() {
       }
       setSelectedFormFieldName(null);
 
+      try {
+        const pageAnnots = await getPageAnnotations(newSession.document_id, 1);
+        setAnnotations(pageAnnots.annotations);
+      } catch (err) {
+        console.warn('No annotations extracted or endpoint unavailable', err);
+        setAnnotations([]);
+      }
+      setSelectedAnnotationId(null);
+
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
     } catch (err) {
@@ -395,6 +413,153 @@ export default function Home() {
     }
   };
 
+  // Annotations & Markup Handlers
+  const handleAddMarkup = async (subtype: 'Highlight' | 'Underline' | 'StrikeOut') => {
+    const targetPara = paragraphs.find((p) => p.id === selectedParagraphId);
+    const min_x = targetPara ? targetPara.bbox.min_x : 72;
+    const min_y = targetPara ? targetPara.bbox.min_y : 650;
+    const max_x = targetPara ? targetPara.bbox.max_x : 540;
+    const max_y = targetPara ? targetPara.bbox.max_y : 680;
+    const contents = targetPara ? targetPara.text.slice(0, 40) : `${subtype} annotation`;
+
+    try {
+      const res = await addMarkup(session.document_id, currentPage, {
+        subtype,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        contents,
+      });
+
+      const newAnnot: AnnotationElement = {
+        id: res.annotation_id,
+        page_index: currentPage - 1,
+        page_number: currentPage,
+        subtype,
+        bbox: { min_x, min_y, max_x, max_y, width: max_x - min_x, height: max_y - min_y },
+        opacity: subtype === 'Highlight' ? 0.45 : 1.0,
+        contents,
+      };
+
+      setAnnotations((prev) => [...prev, newAnnot]);
+      setSelectedAnnotationId(res.annotation_id);
+    } catch (err) {
+      console.error('Failed to add markup annotation:', err);
+    }
+  };
+
+  const handleAddLink = async (customUri?: string) => {
+    const targetPara = paragraphs.find((p) => p.id === selectedParagraphId);
+    const min_x = targetPara ? targetPara.bbox.min_x : 72;
+    const min_y = targetPara ? targetPara.bbox.min_y : 550;
+    const max_x = targetPara ? targetPara.bbox.max_x : 320;
+    const max_y = targetPara ? targetPara.bbox.max_y : 570;
+
+    const uri = customUri || prompt('Enter link URL (e.g. https://example.com):', 'https://');
+    if (!uri) return;
+
+    try {
+      const res = await addLink(session.document_id, currentPage, {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        uri,
+        show_border: true,
+      });
+
+      const newAnnot: AnnotationElement = {
+        id: res.annotation_id,
+        page_index: currentPage - 1,
+        page_number: currentPage,
+        subtype: 'Link',
+        bbox: { min_x, min_y, max_x, max_y, width: max_x - min_x, height: max_y - min_y },
+        link_type: 'URI',
+        link_uri: uri,
+        opacity: 1.0,
+      };
+
+      setAnnotations((prev) => [...prev, newAnnot]);
+      setSelectedAnnotationId(res.annotation_id);
+    } catch (err) {
+      console.error('Failed to add link annotation:', err);
+    }
+  };
+
+  const handleAddStamp = async (stampType: string) => {
+    const min_x = 380;
+    const min_y = 720;
+    const max_x = 540;
+    const max_y = 770;
+    const date_str = new Date().toISOString().slice(0, 10);
+
+    try {
+      const res = await addStamp(session.document_id, currentPage, {
+        stamp_type: stampType,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        date_str,
+      });
+
+      const newAnnot: AnnotationElement = {
+        id: res.annotation_id,
+        page_index: currentPage - 1,
+        page_number: currentPage,
+        subtype: 'Stamp',
+        stamp_type: stampType,
+        date_str,
+        bbox: { min_x, min_y, max_x, max_y, width: 160, height: 50 },
+        opacity: 1.0,
+      };
+
+      setAnnotations((prev) => [...prev, newAnnot]);
+      setSelectedAnnotationId(res.annotation_id);
+    } catch (err) {
+      console.error('Failed to add stamp annotation:', err);
+    }
+  };
+
+  const handleDeleteAnnotation = async (annotId: number) => {
+    setAnnotations((prev) => prev.filter((a) => a.id !== annotId));
+    if (selectedAnnotationId === annotId) {
+      setSelectedAnnotationId(null);
+    }
+
+    try {
+      await deleteAnnotation(session.document_id, currentPage, annotId);
+    } catch (err) {
+      console.warn('Backend deleteAnnotation failed or offline fallback:', err);
+    }
+  };
+
+  const handleFlattenAnnotations = async () => {
+    if (!confirm('Flatten all visual annotations (highlights, underlines, stamps) into permanent page content streams?')) {
+      return;
+    }
+
+    try {
+      await flattenAnnotations(session.document_id, currentPage);
+      // Reload annotations and scenegraph
+      const pageAnnots = await getPageAnnotations(session.document_id, currentPage);
+      setAnnotations(pageAnnots.annotations);
+      setSelectedAnnotationId(null);
+
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+
+      alert('Visual annotations flattened successfully into permanent vector content.');
+    } catch (err) {
+      console.error('Failed to flatten annotations', err);
+      // Client-side fallback: keep only links
+      setAnnotations((prev) => prev.filter((a) => a.subtype === 'Link'));
+      setSelectedAnnotationId(null);
+      alert('Annotations flattened (client-side simulation).');
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -472,6 +637,11 @@ export default function Home() {
         onUndo={handleUndo}
         onRedo={handleRedo}
         onRotateClockwise={handleRotateClockwise}
+        hasSelectedParagraph={selectedParagraphId !== null}
+        onAddHighlight={() => handleAddMarkup('Highlight')}
+        onAddUnderline={() => handleAddMarkup('Underline')}
+        onAddLink={() => handleAddLink()}
+        onAddStamp={handleAddStamp}
         onUploadClick={handleUploadClick}
         onExportClick={handleExportClick}
         isExporting={isExporting}
@@ -488,6 +658,7 @@ export default function Home() {
             if (id !== null) {
               setSelectedImageId(null);
               setSelectedFormFieldName(null);
+              setSelectedAnnotationId(null);
             }
           }}
           onUpdateParagraphText={handleUpdateParagraphText}
@@ -503,6 +674,7 @@ export default function Home() {
             if (id !== null) {
               setSelectedParagraphId(null);
               setSelectedFormFieldName(null);
+              setSelectedAnnotationId(null);
             }
           }}
           onTriggerReplaceImage={handleTriggerReplaceImage}
@@ -513,9 +685,22 @@ export default function Home() {
             if (name !== null) {
               setSelectedParagraphId(null);
               setSelectedImageId(null);
+              setSelectedAnnotationId(null);
             }
           }}
           onUpdateFormFieldValue={handleUpdateFormFieldValue}
+          annotations={annotations}
+          selectedAnnotationId={selectedAnnotationId}
+          onSelectAnnotation={(id) => {
+            setSelectedAnnotationId(id);
+            if (id !== null) {
+              setSelectedParagraphId(null);
+              setSelectedImageId(null);
+              setSelectedFormFieldName(null);
+            }
+          }}
+          onDeleteAnnotation={handleDeleteAnnotation}
+          onNavigatePage={(p) => setCurrentPage(p)}
         />
 
         <Sidebar
@@ -525,6 +710,7 @@ export default function Home() {
             setSelectedParagraphId(id);
             setSelectedImageId(null);
             setSelectedFormFieldName(null);
+            setSelectedAnnotationId(null);
           }}
           documentId={session.document_id}
           images={images}
@@ -533,6 +719,7 @@ export default function Home() {
             setSelectedImageId(id);
             setSelectedParagraphId(null);
             setSelectedFormFieldName(null);
+            setSelectedAnnotationId(null);
           }}
           onTriggerReplaceImage={handleTriggerReplaceImage}
           forms={forms}
@@ -541,6 +728,7 @@ export default function Home() {
             setSelectedFormFieldName(name);
             setSelectedParagraphId(null);
             setSelectedImageId(null);
+            setSelectedAnnotationId(null);
           }}
           onUpdateFormFieldValue={handleUpdateFormFieldValue}
           onFlattenForms={handleFlattenForms}
@@ -552,6 +740,19 @@ export default function Home() {
           onSplitDocument={handleSplitDocument}
           onTriggerMergeDocument={handleTriggerMergeDocument}
           onDeleteCurrentPage={handleDeleteCurrentPage}
+          annotations={annotations}
+          selectedAnnotationId={selectedAnnotationId}
+          onSelectAnnotation={(id) => {
+            setSelectedAnnotationId(id);
+            setSelectedParagraphId(null);
+            setSelectedImageId(null);
+            setSelectedFormFieldName(null);
+          }}
+          onAddMarkup={handleAddMarkup}
+          onAddLink={(uri) => handleAddLink(uri)}
+          onAddStamp={handleAddStamp}
+          onDeleteAnnotation={handleDeleteAnnotation}
+          onFlattenAnnotations={handleFlattenAnnotations}
         />
       </div>
     </div>

@@ -15,6 +15,10 @@ import {
   Sparkles,
   FileCheck2,
   RotateCw,
+  Highlighter,
+  Underline,
+  Link2,
+  Award,
 } from 'lucide-react';
 import { TextAlignment } from '@/lib/types';
 
@@ -31,6 +35,11 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   onRotateClockwise?: () => void;
+  hasSelectedParagraph?: boolean;
+  onAddHighlight?: () => void;
+  onAddUnderline?: () => void;
+  onAddLink?: () => void;
+  onAddStamp?: (stampType: string) => void;
   onUploadClick: () => void;
   onExportClick: () => void;
   isExporting: boolean;
@@ -50,6 +59,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onUndo,
   onRedo,
   onRotateClockwise,
+  hasSelectedParagraph = false,
+  onAddHighlight,
+  onAddUnderline,
+  onAddLink,
+  onAddStamp,
   onUploadClick,
   onExportClick,
   isExporting,
@@ -163,6 +177,54 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         >
           <AlignJustify size={16} />
         </button>
+
+        {/* Quick Annotations */}
+        {hasSelectedParagraph && (
+          <>
+            <div className="w-px h-5 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+            {onAddHighlight && (
+              <button
+                onClick={onAddHighlight}
+                title="Highlight Selected Block"
+                className="p-1.5 rounded hover:bg-amber-100 dark:hover:bg-amber-950/40 text-amber-600 dark:text-amber-400 transition-colors cursor-pointer"
+              >
+                <Highlighter size={16} />
+              </button>
+            )}
+            {onAddUnderline && (
+              <button
+                onClick={onAddUnderline}
+                title="Underline Selected Block"
+                className="p-1.5 rounded hover:bg-blue-100 dark:hover:bg-blue-950/40 text-blue-600 dark:text-blue-400 transition-colors cursor-pointer"
+              >
+                <Underline size={16} />
+              </button>
+            )}
+            {onAddLink && (
+              <button
+                onClick={onAddLink}
+                title="Add Interactive Web Link"
+                className="p-1.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 transition-colors cursor-pointer"
+              >
+                <Link2 size={16} />
+              </button>
+            )}
+          </>
+        )}
+
+        {onAddStamp && (
+          <>
+            <div className="w-px h-5 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+            <button
+              onClick={() => onAddStamp('APPROVED')}
+              title="Add Rubber Stamp: APPROVED"
+              className="flex items-center gap-1 px-2 py-1 rounded hover:bg-emerald-100 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <Award size={14} />
+              <span className="hidden sm:inline">Stamp</span>
+            </button>
+          </>
+        )}
 
         <div className="w-px h-5 bg-neutral-300 dark:bg-neutral-700 mx-1" />
 

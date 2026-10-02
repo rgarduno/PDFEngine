@@ -74,6 +74,13 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Pure W3C PNG & JPEG header parsers with /SMask soft mask extraction    │
 │    - Surgical in-place image swapping preserving page geometry & vectors    │
 ├─────────────────────────────────────────────────────────────────────────────┤
+│ 6. Annotations, Interactive Links & Rubber Stamps                           │
+│    - ISO 32000-1 §12.5 Annotation reader & QuadPoints geometry evaluation   │
+│    - Text markups (/Highlight, /Underline, /StrikeOut) with synthetic /AP   │
+│    - Interactive external Web URIs and internal /GoTo page destinations     │
+│    - Vector rubber stamps with dual-border styling & customizable rubrics   │
+│    - Surgical annotation flattening into permanent page content streams     │
+├─────────────────────────────────────────────────────────────────────────────┤
 │ 7. Interactive AcroForms & Form Flattening Engine                           │
 │    - ISO 32000-1 §12.7 AcroForms reader & field hierarchy traversal         │
 │    - Text, Checkbox, Radio, and Choice field filling with appearance (/AP)  │
@@ -113,12 +120,13 @@ PDFEngine/
 │   │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
 │   │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
 │   │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
+│   │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
 │   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
 │       ├── Cargo.toml
-│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField exports
+│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation exports
 ├── backend/                    # Commercial FastAPI REST & WebSocket service
 │   ├── app/
 │   │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel

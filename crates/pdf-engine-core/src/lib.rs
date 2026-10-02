@@ -16,6 +16,7 @@
 //! 6. **Security Hardening (`security`)**: Bounded memory limits, recursion caps,
 //!    and decompression bomb guards.
 
+pub mod annots;
 pub mod cos;
 pub mod editor;
 pub mod error;
@@ -54,3 +55,8 @@ pub use layout::{
 };
 pub use security::SecurityLimits;
 pub use stream::{ContentAst, ContentNode, ContentParser, GraphicsStateStack, Matrix, Operation};
+pub use annots::{
+    add_link_goto, add_link_uri, add_stamp, add_text_markup, delete_annotation,
+    extract_all_annotations, extract_page_annotations, flatten_annotations, Annotation,
+    AnnotationSubtype, LinkAction, StampType,
+};

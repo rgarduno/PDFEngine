@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
+import { AnnotationElement, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
 import { getImageBinaryUrl } from '@/lib/api';
 import {
   ShieldCheck,
@@ -20,6 +20,11 @@ import {
   Scissors,
   Trash2,
   Plus,
+  Highlighter,
+  Award,
+  ExternalLink,
+  Link2,
+  Underline,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -44,6 +49,14 @@ interface SidebarProps {
   onSplitDocument?: () => void;
   onTriggerMergeDocument?: () => void;
   onDeleteCurrentPage?: () => void;
+  annotations?: AnnotationElement[];
+  selectedAnnotationId?: number | null;
+  onSelectAnnotation?: (id: number) => void;
+  onAddMarkup?: (subtype: 'Highlight' | 'Underline' | 'StrikeOut') => void;
+  onAddLink?: (uri: string) => void;
+  onAddStamp?: (stampType: string) => void;
+  onDeleteAnnotation?: (id: number) => void;
+  onFlattenAnnotations?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -68,8 +81,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSplitDocument,
   onTriggerMergeDocument,
   onDeleteCurrentPage,
+  annotations = [],
+  selectedAnnotationId = null,
+  onSelectAnnotation,
+  onAddMarkup,
+  onAddLink,
+  onAddStamp,
+  onDeleteAnnotation,
+  onFlattenAnnotations,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'pages'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages'>('paragraphs');
+  const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
 
   return (
     <aside className="w-80 border-l border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 flex flex-col h-[calc(100vh-4rem)] select-none">
@@ -85,7 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-4 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-5 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
@@ -118,6 +140,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <FileText size={11} />
             <span>Forms</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('annots')}
+            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+              activeTab === 'annots'
+                ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            <Highlighter size={11} />
+            <span>Marks</span>
           </button>
           <button
             onClick={() => setActiveTab('pages')}
@@ -372,6 +405,177 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
           </>
+        ) : activeTab === 'annots' ? (
+          <div className="space-y-4">
+            <div className="text-[11px] font-semibold text-neutral-400 uppercase px-1 flex items-center justify-between">
+              <span>Page Annotations & Stamps</span>
+              <span className="text-amber-500 font-mono">
+                {annotations.filter((a) => a.page_number === pageNumber).length} Active
+              </span>
+            </div>
+
+            {/* Quick Creation Actions Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+              <div className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                <Highlighter size={13} className="text-amber-500" />
+                <span>Text Markups & Stamps</span>
+              </div>
+
+              {/* Text Markup quick triggers */}
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  onClick={() => onAddMarkup?.('Highlight')}
+                  className="flex items-center justify-center gap-1 py-1.5 px-2 rounded border border-amber-300/80 dark:border-amber-700/80 bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-[11px] font-medium hover:bg-amber-100 transition-colors cursor-pointer"
+                >
+                  <Highlighter size={12} />
+                  <span>Highlight</span>
+                </button>
+                <button
+                  onClick={() => onAddMarkup?.('Underline')}
+                  className="flex items-center justify-center gap-1 py-1.5 px-2 rounded border border-blue-300/80 dark:border-blue-700/80 bg-blue-50/80 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 text-[11px] font-medium hover:bg-blue-100 transition-colors cursor-pointer"
+                >
+                  <Underline size={12} />
+                  <span>Underline</span>
+                </button>
+                <button
+                  onClick={() => onAddMarkup?.('StrikeOut')}
+                  className="flex items-center justify-center gap-1 py-1.5 px-2 rounded border border-red-300/80 dark:border-red-700/80 bg-red-50/80 dark:bg-red-950/40 text-red-900 dark:text-red-200 text-[11px] font-medium hover:bg-red-100 transition-colors cursor-pointer"
+                >
+                  <span className="line-through text-xs font-bold">S</span>
+                  <span>Strike</span>
+                </button>
+              </div>
+
+              {/* Interactive Web Link Adder */}
+              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-1.5">
+                <div className="flex items-center gap-1 text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+                  <Link2 size={12} className="text-indigo-500" />
+                  <span>Add Web Link:</span>
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type="url"
+                    value={linkInputUrl}
+                    onChange={(e) => setLinkInputUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    className="flex-1 text-xs px-2 py-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    onClick={() => {
+                      if (linkInputUrl && onAddLink) {
+                        onAddLink(linkInputUrl);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Rubber Stamp Palette */}
+              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-1.5">
+                <div className="flex items-center gap-1 text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+                  <Award size={12} className="text-emerald-500" />
+                  <span>Rubber Stamps:</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {['APPROVED', 'CONFIDENTIAL', 'DRAFT', 'REJECTED', 'FINAL', 'TOP SECRET'].map((stamp) => (
+                    <button
+                      key={stamp}
+                      onClick={() => onAddStamp?.(stamp)}
+                      className="py-1 px-1.5 rounded border border-neutral-200 dark:border-neutral-700 hover:border-emerald-500 text-[10px] font-bold text-neutral-700 dark:text-neutral-300 hover:text-emerald-600 transition-colors uppercase truncate text-center cursor-pointer"
+                    >
+                      {stamp}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* List of active annotations on current page */}
+            <div className="space-y-2">
+              {annotations
+                .filter((a) => a.page_number === pageNumber)
+                .map((a) => {
+                  const isSelected = selectedAnnotationId === a.id;
+                  return (
+                    <div
+                      key={a.id}
+                      onClick={() => onSelectAnnotation?.(a.id)}
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer ${
+                        isSelected
+                          ? 'border-amber-500 bg-amber-50/30 dark:bg-amber-950/20 ring-1 ring-amber-500/50'
+                          : 'border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 bg-white dark:bg-neutral-800/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                          {a.subtype === 'Highlight' && <Highlighter size={12} className="text-amber-500" />}
+                          {a.subtype === 'Underline' && <Underline size={12} className="text-blue-500" />}
+                          {a.subtype === 'Link' && <ExternalLink size={12} className="text-indigo-500" />}
+                          {a.subtype === 'Stamp' && <Award size={12} className="text-emerald-500" />}
+                          <span>{a.subtype} #{a.id}</span>
+                        </span>
+                        {onDeleteAnnotation && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteAnnotation(a.id);
+                            }}
+                            title="Delete Annotation"
+                            className="p-1 text-neutral-400 hover:text-red-500 transition-colors cursor-pointer"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+
+                      {a.contents && (
+                        <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400 line-clamp-1 italic">
+                          "{a.contents}"
+                        </p>
+                      )}
+
+                      {a.link_uri && (
+                        <p className="mt-1 text-xs text-indigo-600 dark:text-indigo-400 line-clamp-1 font-mono">
+                          {a.link_uri}
+                        </p>
+                      )}
+
+                      {a.stamp_type && (
+                        <p className="mt-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                          Rubric: {a.stamp_type}
+                        </p>
+                      )}
+
+                      <div className="mt-1 pt-1.5 border-t border-neutral-100 dark:border-neutral-700/60 flex items-center justify-between text-[10px] text-neutral-400 font-mono">
+                        <span>
+                          [{Math.round(a.bbox.min_x)}, {Math.round(a.bbox.min_y)}] - [{Math.round(a.bbox.max_x)}, {Math.round(a.bbox.max_y)}]
+                        </span>
+                        <span>{Math.round(a.bbox.width)}x{Math.round(a.bbox.height)}pt</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Flatten Annotations Button */}
+            {onFlattenAnnotations && annotations.filter((a) => a.page_number === pageNumber).length > 0 && (
+              <div className="pt-2">
+                <button
+                  onClick={onFlattenAnnotations}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                >
+                  <Layers size={13} />
+                  <span>Flatten Visual Annotations</span>
+                </button>
+                <p className="mt-1 text-[10px] text-neutral-400 text-center">
+                  Bakes highlights, underlines & stamps into permanent page vector graphics.
+                </p>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="text-[11px] font-semibold text-neutral-400 uppercase px-1">
