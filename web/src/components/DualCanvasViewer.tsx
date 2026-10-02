@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AnnotationElement, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { AnnotationElement, DetectedTableItem, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
-import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, RefreshCw, Trash2 } from 'lucide-react';
+import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, RefreshCw, Table, Trash2 } from 'lucide-react';
 
 interface DualCanvasViewerProps {
   paragraphs: Paragraph[];
@@ -28,6 +28,9 @@ interface DualCanvasViewerProps {
   onSelectAnnotation?: (id: number | null) => void;
   onDeleteAnnotation?: (id: number) => void;
   onNavigatePage?: (page: number) => void;
+  tables?: DetectedTableItem[];
+  selectedTableIdx?: number | null;
+  onSelectTable?: (idx: number | null) => void;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -57,6 +60,9 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   onSelectAnnotation,
   onDeleteAnnotation,
   onNavigatePage,
+  tables = [],
+  selectedTableIdx = null,
+  onSelectTable,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -494,6 +500,65 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
               </div>
             );
           })}
+
+        {/* Layer 1.95: Extracted Table Bounding Boxes & Grid Badges */}
+        {tables.map((table) => {
+          const { left, top, width, height } = pdfToScreenCoordinates(table.bbox);
+          const isSelected = selectedTableIdx === table.table_idx;
+
+          return (
+            <div
+              key={`table-${table.table_idx}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTable?.(table.table_idx);
+              }}
+              style={{
+                left: `${left}px`,
+                top: `${top}px`,
+                width: `${width}px`,
+                height: `${height}px`,
+              }}
+              className={`absolute pointer-events-auto cursor-pointer rounded-sm border-2 transition-all z-15 ${
+                isSelected
+                  ? 'border-emerald-500 bg-emerald-500/10 shadow-lg ring-2 ring-emerald-400/40'
+                  : 'border-dashed border-emerald-400/60 bg-emerald-400/5 hover:border-emerald-500 hover:bg-emerald-500/10'
+              }`}
+            >
+              {/* Table identification badge */}
+              <div className="absolute -top-6 left-0 flex items-center gap-1 rounded bg-emerald-700 text-white px-2 py-0.5 text-[9px] font-mono shadow-xs select-none">
+                <Table size={10} />
+                <span>
+                  Tabla #{table.table_idx + 1} ({table.row_count}x{table.col_count})
+                </span>
+              </div>
+
+              {/* Render individual cells with subtle dotted borders */}
+              {table.cells.map((cell, cIdx) => {
+                const cLeft = (cell.bbox.min_x - table.bbox.min_x) * zoom;
+                const cTop = (table.bbox.max_y - cell.bbox.max_y) * zoom;
+                const cWidth = cell.bbox.width * zoom;
+                const cHeight = cell.bbox.height * zoom;
+
+                return (
+                  <div
+                    key={`cell-${table.table_idx}-${cIdx}`}
+                    style={{
+                      left: `${cLeft}px`,
+                      top: `${cTop}px`,
+                      width: `${cWidth}px`,
+                      height: `${cHeight}px`,
+                    }}
+                    title={`Celda [${cell.row}, ${cell.col}]: ${cell.text}`}
+                    className={`absolute border border-emerald-400/20 hover:border-emerald-500/60 hover:bg-emerald-500/20 transition-colors pointer-events-none ${
+                      cell.is_header ? 'bg-emerald-600/10 font-semibold' : ''
+                    }`}
+                  />
+                );
+              })}
+            </div>
+          );
+        })}
 
         {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
         {paragraphs.map((p) => {

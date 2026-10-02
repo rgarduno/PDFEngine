@@ -438,4 +438,46 @@ class SecurityActionResponse(BaseModel):
     signature: Optional[SignatureModel] = None
 
 
+class TableCellModel(BaseModel):
+    """A single cell inside an extracted table."""
+    row: int
+    col: int
+    row_span: int = 1
+    col_span: int = 1
+    text: str
+    is_header: bool = False
+    bbox: BoundingBox
+
+
+class TableModel(BaseModel):
+    """A structured table extracted from a page."""
+    table_idx: int
+    page_number: int
+    row_count: int
+    col_count: int
+    bbox: BoundingBox
+    headers: List[str]
+    rows: List[List[str]]
+    cells: List[TableCellModel]
+
+
+class PageTablesResponse(BaseModel):
+    """Response containing all tables detected on a page."""
+    document_id: str
+    page_number: int
+    total_tables: int
+    tables: List[TableModel]
+
+
+class TableExportResponse(BaseModel):
+    """Response containing the formatted export content of a table."""
+    document_id: str
+    page_number: int
+    table_idx: int
+    format: str
+    content: str
+    row_count: int
+    col_count: int
+
+
 

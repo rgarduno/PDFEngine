@@ -112,6 +112,10 @@ pub enum PdfError {
     #[error("Cryptography error: {0}")]
     CryptographyError(String),
 
+    /// Table detection or structure reconstruction error.
+    #[error("Table error: {0}")]
+    TableError(String),
+
     /// I/O error encountered while reading or writing PDF data.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

@@ -42,6 +42,9 @@ import {
   decryptDocument,
   signDocument,
   getSignatures,
+  getPageTables,
+  exportTableData,
+  getTableDownloadUrl,
 } from '@/lib/api';
 import {
   AddPaginationPayload,
@@ -58,6 +61,7 @@ import {
   SignatureItem,
   EncryptDocumentPayload,
   SignDocumentPayload,
+  DetectedTableItem,
 } from '@/lib/types';
 
 export default function Home() {
@@ -79,6 +83,8 @@ export default function Home() {
   const [activeReflowId, setActiveReflowId] = useState<number | null>(null);
   const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
   const [signatures, setSignatures] = useState<SignatureItem[]>([]);
+  const [tables, setTables] = useState<DetectedTableItem[]>([]);
+  const [selectedTableIdx, setSelectedTableIdx] = useState<number | null>(null);
 
   // Undo / Redo History Stacks
   const [history, setHistory] = useState<Paragraph[][]>([MOCK_SCENEGRAPH.paragraphs]);
@@ -276,6 +282,15 @@ export default function Home() {
         setIsEncrypted(false);
         setSignatures([]);
       }
+
+      try {
+        const pageTables = await getPageTables(newSession.document_id, 1);
+        setTables(pageTables.tables);
+      } catch (err) {
+        console.warn('No tables extracted or endpoint unavailable:', err);
+        setTables([]);
+      }
+      setSelectedTableIdx(null);
 
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
@@ -757,6 +772,64 @@ export default function Home() {
     }
   };
 
+  // Table Extraction & Export Handlers
+  const handleExportTable = async (
+    tableIdx: number,
+    format: 'csv' | 'json' | 'markdown' | 'html'
+  ): Promise<string> => {
+    const res = await exportTableData(session.document_id, currentPage, tableIdx, format);
+    return res.content;
+  };
+
+  const handleDownloadTable = (tableIdx: number, format: string) => {
+    const downloadUrl = getTableDownloadUrl(session.document_id, currentPage, tableIdx, format);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `table_p${currentPage}_${tableIdx + 1}.${format === 'markdown' ? 'md' : format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  // Dynamic Page Navigation Handler
+  const handleNavigatePage = async (page: number) => {
+    if (page < 1 || page > session.page_count) return;
+    setCurrentPage(page);
+    setSelectedParagraphId(null);
+    setSelectedImageId(null);
+    setSelectedFormFieldName(null);
+    setSelectedAnnotationId(null);
+    setSelectedTableIdx(null);
+
+    try {
+      const scenegraph = await getPageScenegraph(session.document_id, page);
+      setParagraphs(scenegraph.paragraphs);
+    } catch (e) {
+      console.warn('Scenegraph unavailable for page', page, e);
+    }
+
+    try {
+      const pageImages = await getPageImages(session.document_id, page);
+      setImages(pageImages.images);
+    } catch {
+      setImages([]);
+    }
+
+    try {
+      const pageAnnots = await getPageAnnotations(session.document_id, page);
+      setAnnotations(pageAnnots.annotations);
+    } catch {
+      setAnnotations([]);
+    }
+
+    try {
+      const pageTables = await getPageTables(session.document_id, page);
+      setTables(pageTables.tables);
+    } catch {
+      setTables([]);
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -906,7 +979,18 @@ export default function Home() {
             }
           }}
           onDeleteAnnotation={handleDeleteAnnotation}
-          onNavigatePage={(p) => setCurrentPage(p)}
+          onNavigatePage={handleNavigatePage}
+          tables={tables}
+          selectedTableIdx={selectedTableIdx}
+          onSelectTable={(idx) => {
+            setSelectedTableIdx(idx);
+            if (idx !== null) {
+              setSelectedParagraphId(null);
+              setSelectedImageId(null);
+              setSelectedFormFieldName(null);
+              setSelectedAnnotationId(null);
+            }
+          }}
         />
 
         <Sidebar
@@ -917,6 +1001,7 @@ export default function Home() {
             setSelectedImageId(null);
             setSelectedFormFieldName(null);
             setSelectedAnnotationId(null);
+            setSelectedTableIdx(null);
           }}
           documentId={session.document_id}
           images={images}
@@ -926,6 +1011,7 @@ export default function Home() {
             setSelectedParagraphId(null);
             setSelectedFormFieldName(null);
             setSelectedAnnotationId(null);
+            setSelectedTableIdx(null);
           }}
           onTriggerReplaceImage={handleTriggerReplaceImage}
           forms={forms}
@@ -935,6 +1021,7 @@ export default function Home() {
             setSelectedParagraphId(null);
             setSelectedImageId(null);
             setSelectedAnnotationId(null);
+            setSelectedTableIdx(null);
           }}
           onUpdateFormFieldValue={handleUpdateFormFieldValue}
           onFlattenForms={handleFlattenForms}
@@ -953,6 +1040,7 @@ export default function Home() {
             setSelectedParagraphId(null);
             setSelectedImageId(null);
             setSelectedFormFieldName(null);
+            setSelectedTableIdx(null);
           }}
           onAddMarkup={handleAddMarkup}
           onAddLink={(uri) => handleAddLink(uri)}
@@ -971,6 +1059,19 @@ export default function Home() {
           onEncryptDocument={handleEncryptDocument}
           onDecryptDocument={handleDecryptDocument}
           onSignDocument={handleSignDocument}
+          tables={tables}
+          selectedTableIdx={selectedTableIdx}
+          onSelectTable={(idx) => {
+            setSelectedTableIdx(idx);
+            if (idx !== null) {
+              setSelectedParagraphId(null);
+              setSelectedImageId(null);
+              setSelectedFormFieldName(null);
+              setSelectedAnnotationId(null);
+            }
+          }}
+          onExportTable={handleExportTable}
+          onDownloadTable={handleDownloadTable}
         />
       </div>
     </div>

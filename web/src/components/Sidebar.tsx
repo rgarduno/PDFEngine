@@ -33,6 +33,10 @@ import {
   Key,
   FileCheck,
   CheckCircle2,
+  Table as TableIcon,
+  Download,
+  Copy,
+  Check,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -43,6 +47,7 @@ import {
   SignatureItem,
   EncryptDocumentPayload,
   SignDocumentPayload,
+  DetectedTableItem,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -87,6 +92,11 @@ interface SidebarProps {
   onEncryptDocument?: (payload: EncryptDocumentPayload) => void;
   onDecryptDocument?: (password: string) => void;
   onSignDocument?: (payload: SignDocumentPayload) => void;
+  tables?: DetectedTableItem[];
+  selectedTableIdx?: number | null;
+  onSelectTable?: (idx: number | null) => void;
+  onExportTable?: (tableIdx: number, format: 'csv' | 'json' | 'markdown' | 'html') => Promise<string>;
+  onDownloadTable?: (tableIdx: number, format: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -131,8 +141,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onEncryptDocument,
   onDecryptDocument,
   onSignDocument,
+  tables = [],
+  selectedTableIdx = null,
+  onSelectTable,
+  onExportTable,
+  onDownloadTable,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables'>('paragraphs');
+  const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
+  const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
+  const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
 
   const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
@@ -191,8 +209,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-emerald-500 font-medium">AST Synced</span>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-4 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        {/* Tab Switcher: 3x3 Grid */}
+        <div className="mt-3 grid grid-cols-3 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
@@ -288,6 +306,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Lock size={10} />
             <span>Seguridad</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('tables')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'tables'
+                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                : 'text-emerald-600 hover:text-emerald-700 dark:hover:text-emerald-400'
+            }`}
+            title="Reconocimiento y Extracción de Tablas (ISO 32000 §14.8.4)"
+          >
+            <TableIcon size={10} />
+            <span>Tablas</span>
           </button>
         </div>
       </div>
@@ -1754,6 +1784,192 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                   </div>
                 ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tables' && (
+          <div className="space-y-4">
+            {/* Header info */}
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 rounded-lg border border-neutral-200 dark:border-neutral-800 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                  <TableIcon size={13} className="text-emerald-500" />
+                  Extracción de Tablas
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-semibold">
+                  ISO 32000 §14.8.4
+                </span>
+              </div>
+              <p className="text-[10px] text-neutral-500 leading-tight">
+                Reconstrucción vectorial por retícula (lattice) y flujo de texto semántico.
+              </p>
+            </div>
+
+            {/* Tables count / list */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-semibold text-neutral-400 uppercase">
+                  Tablas Detectadas ({tables.length})
+                </span>
+                <span className="text-[10px] font-mono text-neutral-400">Página {pageNumber}</span>
+              </div>
+
+              {tables.length === 0 ? (
+                <div className="p-4 rounded-lg border border-dashed border-neutral-200 dark:border-neutral-800 text-center space-y-1.5 text-neutral-400">
+                  <TableIcon size={24} className="mx-auto text-neutral-300 dark:text-neutral-600" />
+                  <div className="text-xs font-medium">No se detectaron tablas</div>
+                  <div className="text-[10px] text-neutral-500">
+                    No hay rejillas vectoriales ni patrones tabulares en esta página.
+                  </div>
+                </div>
+              ) : (
+                tables.map((table) => {
+                  const isSelected = selectedTableIdx === table.table_idx;
+                  return (
+                    <div
+                      key={table.table_idx}
+                      onClick={() => onSelectTable?.(table.table_idx)}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20 shadow-xs'
+                          : 'border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/30'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                          <TableIcon size={12} className="text-emerald-500" />
+                          Tabla #{table.table_idx + 1}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono font-medium">
+                            {table.row_count} × {table.col_count}
+                          </span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-mono">
+                            {table.cells.length} celdas
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] text-neutral-500 font-mono mb-2">
+                        BBox: [{table.bbox.min_x.toFixed(0)}, {table.bbox.min_y.toFixed(0)}, {table.bbox.max_x.toFixed(0)}, {table.bbox.max_y.toFixed(0)}]
+                      </div>
+
+                      {/* Mini table preview */}
+                      <div className="max-h-36 overflow-auto border border-neutral-200 dark:border-neutral-800 rounded bg-white dark:bg-neutral-900 text-[10px]">
+                        <table className="w-full border-collapse">
+                          {table.headers && table.headers.length > 0 && (
+                            <thead>
+                              <tr className="bg-neutral-100 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+                                {table.headers.map((h, hIdx) => (
+                                  <th
+                                    key={hIdx}
+                                    className="p-1 text-left font-semibold text-neutral-700 dark:text-neutral-300 border-r border-neutral-200 dark:border-neutral-800 last:border-r-0 truncate max-w-[80px]"
+                                    title={h}
+                                  >
+                                    {h || `Col ${hIdx + 1}`}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                          )}
+                          <tbody>
+                            {table.rows.slice(0, 5).map((row, rIdx) => (
+                              <tr
+                                key={rIdx}
+                                className="border-b border-neutral-100 dark:border-neutral-800 last:border-b-0 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                              >
+                                {row.map((val, cIdx) => (
+                                  <td
+                                    key={cIdx}
+                                    className="p-1 border-r border-neutral-100 dark:border-neutral-800 last:border-r-0 text-neutral-600 dark:text-neutral-400 truncate max-w-[80px]"
+                                    title={val}
+                                  >
+                                    {val || '-'}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {table.rows.length > 5 && (
+                          <div className="text-[9px] text-neutral-400 text-center py-0.5 bg-neutral-50 dark:bg-neutral-800/30">
+                            +{table.rows.length - 5} filas adicionales...
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Export & Download Controls */}
+                      {isSelected && (
+                        <div className="mt-3 pt-2.5 border-t border-neutral-200 dark:border-neutral-800 space-y-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-between text-[10px] font-medium text-neutral-600 dark:text-neutral-400">
+                            <span>Formato:</span>
+                            <div className="flex gap-1">
+                              {(['csv', 'json', 'markdown', 'html'] as const).map((fmt) => (
+                                <button
+                                  key={fmt}
+                                  onClick={() => setTableExportFormat(fmt)}
+                                  className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-mono transition-colors ${
+                                    tableExportFormat === fmt
+                                      ? 'bg-emerald-600 text-white font-bold'
+                                      : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                                  }`}
+                                >
+                                  {fmt === 'markdown' ? 'MD' : fmt}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <button
+                              onClick={async () => {
+                                if (!onExportTable) return;
+                                try {
+                                  setIsExportingTable(true);
+                                  const content = await onExportTable(table.table_idx, tableExportFormat);
+                                  await navigator.clipboard.writeText(content);
+                                  setCopiedFormat(tableExportFormat);
+                                  setTimeout(() => setCopiedFormat(null), 2000);
+                                } catch (err) {
+                                  console.error('Failed to copy table export:', err);
+                                  alert('Error al exportar tabla.');
+                                } finally {
+                                  setIsExportingTable(false);
+                                }
+                              }}
+                              disabled={isExportingTable}
+                              className="py-1.5 px-2 bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded text-[10px] font-medium transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              {copiedFormat === tableExportFormat ? (
+                                <>
+                                  <Check size={11} className="text-emerald-500" />
+                                  <span className="text-emerald-600 dark:text-emerald-400">¡Copiado!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={11} />
+                                  <span>Copiar {tableExportFormat.toUpperCase()}</span>
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                onDownloadTable?.(table.table_idx, tableExportFormat);
+                              }}
+                              className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                            >
+                              <Download size={11} />
+                              <span>Descargar</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>

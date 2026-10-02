@@ -30,6 +30,8 @@ import {
   SignatureItem,
   SecurityStatusResponse,
   SecurityActionResponse,
+  PageTablesResponse,
+  TableExportResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1015,6 +1017,88 @@ export async function getSignatures(docId: string): Promise<SignatureItem[]> {
     console.warn('Backend unavailable, mock get signatures:', e);
     return [];
   }
+}
+
+export async function getPageTables(
+  docId: string,
+  pageIdx: number
+): Promise<PageTablesResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables`);
+    if (!res.ok) throw new Error('Failed to extract tables');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock get tables:', e);
+    return {
+      document_id: docId,
+      page_number: pageIdx,
+      total_tables: 1,
+      tables: [
+        {
+          table_idx: 0,
+          page_number: pageIdx,
+          row_count: 3,
+          col_count: 3,
+          bbox: { min_x: 72, min_y: 400, max_x: 540, max_y: 520, width: 468, height: 120 },
+          headers: ['Servicio / Módulo', 'Nivel de Licencia', 'Costo Anual'],
+          rows: [
+            ['PDF Engine Core (Rust)', 'Enterprise Dedicated', '$12,500.00'],
+            ['Surgical Reflow & AST Mutation', 'Unlimited Nodes', '$8,000.00'],
+          ],
+          cells: [
+            { row: 0, col: 0, row_span: 1, col_span: 1, text: 'Servicio / Módulo', is_header: true, bbox: { min_x: 72, min_y: 480, max_x: 240, max_y: 520, width: 168, height: 40 } },
+            { row: 0, col: 1, row_span: 1, col_span: 1, text: 'Nivel de Licencia', is_header: true, bbox: { min_x: 240, min_y: 480, max_x: 400, max_y: 520, width: 160, height: 40 } },
+            { row: 0, col: 2, row_span: 1, col_span: 1, text: 'Costo Anual', is_header: true, bbox: { min_x: 400, min_y: 480, max_x: 540, max_y: 520, width: 140, height: 40 } },
+            { row: 1, col: 0, row_span: 1, col_span: 1, text: 'PDF Engine Core (Rust)', is_header: false, bbox: { min_x: 72, min_y: 440, max_x: 240, max_y: 480, width: 168, height: 40 } },
+            { row: 1, col: 1, row_span: 1, col_span: 1, text: 'Enterprise Dedicated', is_header: false, bbox: { min_x: 240, min_y: 440, max_x: 400, max_y: 480, width: 160, height: 40 } },
+            { row: 1, col: 2, row_span: 1, col_span: 1, text: '$12,500.00', is_header: false, bbox: { min_x: 400, min_y: 440, max_x: 540, max_y: 480, width: 140, height: 40 } },
+            { row: 2, col: 0, row_span: 1, col_span: 1, text: 'Surgical Reflow & AST Mutation', is_header: false, bbox: { min_x: 72, min_y: 400, max_x: 240, max_y: 440, width: 168, height: 40 } },
+            { row: 2, col: 1, row_span: 1, col_span: 1, text: 'Unlimited Nodes', is_header: false, bbox: { min_x: 240, min_y: 400, max_x: 400, max_y: 440, width: 160, height: 40 } },
+            { row: 2, col: 2, row_span: 1, col_span: 1, text: '$8,000.00', is_header: false, bbox: { min_x: 400, min_y: 400, max_x: 540, max_y: 440, width: 140, height: 40 } },
+          ],
+        },
+      ],
+    };
+  }
+}
+
+export async function exportTableData(
+  docId: string,
+  pageIdx: number,
+  tableIdx: number,
+  format: 'csv' | 'json' | 'markdown' | 'html' = 'csv'
+): Promise<TableExportResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables/${tableIdx}/export?format=${format}`
+    );
+    if (!res.ok) throw new Error('Failed to export table');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock export table:', e);
+    return {
+      document_id: docId,
+      page_number: pageIdx,
+      table_idx: tableIdx,
+      format,
+      content: format === 'csv'
+        ? "Servicio / Módulo,Nivel de Licencia,Costo Anual\r\nPDF Engine Core (Rust),Enterprise Dedicated,$12,500.00\r\nSurgical Reflow & AST Mutation,Unlimited Nodes,$8,000.00"
+        : format === 'markdown'
+        ? "| Servicio / Módulo | Nivel de Licencia | Costo Anual |\n| :--- | :--- | :--- |\n| PDF Engine Core (Rust) | Enterprise Dedicated | $12,500.00 |\n| Surgical Reflow & AST Mutation | Unlimited Nodes | $8,000.00 |"
+        : "{\n  \"table_index\": 0,\n  \"page_number\": 1,\n  \"headers\": [\"Servicio / Módulo\", \"Nivel de Licencia\", \"Costo Anual\"]\n}",
+      row_count: 3,
+      col_count: 3,
+    };
+  }
+}
+
+export function getTableDownloadUrl(
+  docId: string,
+  pageIdx: number,
+  tableIdx: number,
+  format: string
+): string {
+  return `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables/${tableIdx}/export?format=${format}&download=true`;
 }
 
 

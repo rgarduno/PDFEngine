@@ -471,6 +471,156 @@ impl PyVerifiedSignature {
     }
 }
 
+/// High-level representation of an extracted table cell.
+#[pyclass(name = "TableCell")]
+#[derive(Debug, Clone)]
+pub struct PyTableCell {
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub row_span: usize,
+    #[pyo3(get)]
+    pub col_span: usize,
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub is_header: bool,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+}
+
+#[pymethods]
+impl PyTableCell {
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
+/// High-level representation of a detected table on a page.
+#[pyclass(name = "DetectedTable")]
+#[derive(Debug, Clone)]
+pub struct PyDetectedTable {
+    #[pyo3(get)]
+    pub table_idx: usize,
+    #[pyo3(get)]
+    pub page_number: usize,
+    #[pyo3(get)]
+    pub row_count: usize,
+    #[pyo3(get)]
+    pub col_count: usize,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+    #[pyo3(get)]
+    pub headers: Vec<String>,
+    #[pyo3(get)]
+    pub rows: Vec<Vec<String>>,
+    #[pyo3(get)]
+    pub cells: Vec<PyTableCell>,
+}
+
+#[pymethods]
+impl PyDetectedTable {
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+
+    pub fn to_csv(&self) -> String {
+        let core_table = self.to_core();
+        pdf_engine_core::tables::export_to_csv(&core_table)
+    }
+
+    pub fn to_json(&self) -> String {
+        let core_table = self.to_core();
+        pdf_engine_core::tables::export_to_json(&core_table)
+    }
+
+    pub fn to_markdown(&self) -> String {
+        let core_table = self.to_core();
+        pdf_engine_core::tables::export_to_markdown(&core_table)
+    }
+
+    pub fn to_html(&self) -> String {
+        let core_table = self.to_core();
+        pdf_engine_core::tables::export_to_html(&core_table)
+    }
+}
+
+impl PyDetectedTable {
+    pub fn from_core(t: pdf_engine_core::tables::DetectedTable) -> Self {
+        let cells = t
+            .cells
+            .iter()
+            .map(|c| PyTableCell {
+                row: c.row_idx,
+                col: c.col_idx,
+                row_span: c.row_span,
+                col_span: c.col_span,
+                text: c.text.clone(),
+                is_header: c.is_header,
+                min_x: c.bbox.min_x,
+                min_y: c.bbox.min_y,
+                max_x: c.bbox.max_x,
+                max_y: c.bbox.max_y,
+            })
+            .collect();
+
+        Self {
+            table_idx: t.table_idx,
+            page_number: t.page_number,
+            row_count: t.row_count,
+            col_count: t.col_count,
+            min_x: t.bbox.min_x,
+            min_y: t.bbox.min_y,
+            max_x: t.bbox.max_x,
+            max_y: t.bbox.max_y,
+            headers: t.headers,
+            rows: t.rows,
+            cells,
+        }
+    }
+
+    pub fn to_core(&self) -> pdf_engine_core::tables::DetectedTable {
+        let cells = self
+            .cells
+            .iter()
+            .map(|c| pdf_engine_core::tables::TableCell {
+                row_idx: c.row,
+                col_idx: c.col,
+                row_span: c.row_span,
+                col_span: c.col_span,
+                bbox: Rect::new(c.min_x, c.min_y, c.max_x, c.max_y),
+                text: c.text.clone(),
+                is_header: c.is_header,
+            })
+            .collect();
+
+        pdf_engine_core::tables::DetectedTable {
+            table_idx: self.table_idx,
+            page_number: self.page_number,
+            bbox: Rect::new(self.min_x, self.min_y, self.max_x, self.max_y),
+            row_count: self.row_count,
+            col_count: self.col_count,
+            cells,
+            headers: self.headers.clone(),
+            rows: self.rows.clone(),
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -1563,6 +1713,45 @@ impl PyPdfDocument {
         Ok(sigs.into_iter().map(PyVerifiedSignature::from_core).collect())
     }
 
+    /// Detects all structured tables on the specified page (1-indexed).
+    pub fn extract_tables(&mut self, page_number: usize) -> PyResult<Vec<PyDetectedTable>> {
+        let tables = pdf_engine_core::tables::detect_tables(&mut self.doc, page_number)
+            .map_err(|e| PyRuntimeError::new_err(format!("Table extraction failed: {}", e)))?;
+        Ok(tables.into_iter().map(PyDetectedTable::from_core).collect())
+    }
+
+    /// Exports a detected table into the specified format ("csv", "json", "markdown", "html").
+    pub fn export_table(
+        &mut self,
+        page_number: usize,
+        table_idx: usize,
+        format: &str,
+    ) -> PyResult<String> {
+        let tables = pdf_engine_core::tables::detect_tables(&mut self.doc, page_number)
+            .map_err(|e| PyRuntimeError::new_err(format!("Table extraction failed: {}", e)))?;
+        let table = tables.get(table_idx).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Table index {} not found on page {}",
+                table_idx, page_number
+            ))
+        })?;
+
+        let export_format = match format.to_lowercase().as_str() {
+            "csv" => pdf_engine_core::tables::TableExportFormat::Csv,
+            "json" => pdf_engine_core::tables::TableExportFormat::Json,
+            "markdown" | "md" => pdf_engine_core::tables::TableExportFormat::Markdown,
+            "html" => pdf_engine_core::tables::TableExportFormat::Html,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unsupported export format '{}'. Supported: csv, json, markdown, html",
+                    format
+                )))
+            }
+        };
+
+        Ok(pdf_engine_core::tables::export_table(table, export_format))
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -1608,6 +1797,8 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRedactionSummary>()?;
     m.add_class::<PyPdfPermissions>()?;
     m.add_class::<PyVerifiedSignature>()?;
+    m.add_class::<PyTableCell>()?;
+    m.add_class::<PyDetectedTable>()?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

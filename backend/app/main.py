@@ -63,6 +63,10 @@ from app.models import (
     SignatureModel,
     SecurityStatusResponse,
     SecurityActionResponse,
+    TableCellModel,
+    TableModel,
+    PageTablesResponse,
+    TableExportResponse,
 )
 
 app = FastAPI(
@@ -1336,6 +1340,125 @@ def get_signatures_endpoint(doc_id: str):
         ]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to retrieve signatures: {e}")
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/tables",
+    response_model=PageTablesResponse,
+)
+def get_page_tables_endpoint(doc_id: str, page_idx: int):
+    """Detects and extracts all structured tables on the specified page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        raw_tables = doc.extract_tables(page_idx)
+        tables = []
+        for t in raw_tables:
+            cells = [
+                TableCellModel(
+                    row=c.row,
+                    col=c.col,
+                    row_span=c.row_span,
+                    col_span=c.col_span,
+                    text=c.text,
+                    is_header=c.is_header,
+                    bbox=BoundingBox(
+                        min_x=c.min_x,
+                        min_y=c.min_y,
+                        max_x=c.max_x,
+                        max_y=c.max_y,
+                        width=c.max_x - c.min_x,
+                        height=c.max_y - c.min_y,
+                    ),
+                )
+                for c in t.cells
+            ]
+            tables.append(
+                TableModel(
+                    table_idx=t.table_idx,
+                    page_number=t.page_number,
+                    row_count=t.row_count,
+                    col_count=t.col_count,
+                    bbox=BoundingBox(
+                        min_x=t.min_x,
+                        min_y=t.min_y,
+                        max_x=t.max_x,
+                        max_y=t.max_y,
+                        width=t.max_x - t.min_x,
+                        height=t.max_y - t.min_y,
+                    ),
+                    headers=list(t.headers),
+                    rows=[list(r) for r in t.rows],
+                    cells=cells,
+                )
+            )
+
+        return PageTablesResponse(
+            document_id=doc_id,
+            page_number=page_idx,
+            total_tables=len(tables),
+            tables=tables,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract tables: {e}")
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/tables/{table_idx}/export",
+    response_model=TableExportResponse,
+)
+def export_table_endpoint(
+    doc_id: str,
+    page_idx: int,
+    table_idx: int,
+    format: str = "csv",
+    download: bool = False,
+):
+    """Exports a detected table into the specified format (csv, json, markdown, html)."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        content = doc.export_table(page_idx, table_idx, format)
+        raw_tables = doc.extract_tables(page_idx)
+        t = raw_tables[table_idx] if table_idx < len(raw_tables) else None
+        row_count = t.row_count if t else 0
+        col_count = t.col_count if t else 0
+
+        if download:
+            media_types = {
+                "csv": "text/csv; charset=utf-8",
+                "json": "application/json",
+                "markdown": "text/markdown; charset=utf-8",
+                "md": "text/markdown; charset=utf-8",
+                "html": "text/html; charset=utf-8",
+            }
+            media_type = media_types.get(format.lower(), "text/plain; charset=utf-8")
+            ext = "md" if format.lower() == "markdown" else format.lower()
+            filename = f"table_p{page_idx}_{table_idx}.{ext}"
+            return Response(
+                content=content,
+                media_type=media_type,
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+            )
+
+        return TableExportResponse(
+            document_id=doc_id,
+            page_number=page_idx,
+            table_idx=table_idx,
+            format=format,
+            content=content,
+            row_count=row_count,
+            col_count=col_count,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to export table: {e}")
+
 
 
 

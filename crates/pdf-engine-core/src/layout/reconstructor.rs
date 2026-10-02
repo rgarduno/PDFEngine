@@ -270,8 +270,11 @@ impl<'a> LayoutReconstructor<'a> {
             let same_baseline = (prev.origin.y - glyph.origin.y).abs() < 1.0;
             let same_font = prev.font_name == glyph.font_name;
             let same_size = (prev.font_size - glyph.font_size).abs() < 0.5;
+            let same_node = prev.ast_node_id == glyph.ast_node_id;
+            let horiz_dist = glyph.origin.x - (prev.origin.x + prev.advance);
+            let not_huge_gap = horiz_dist < prev.font_size * 2.5;
 
-            if same_baseline && same_font && same_size {
+            if same_baseline && same_font && same_size && same_node && not_huge_gap {
                 cur_span_glyphs.push(glyph);
             } else {
                 if let Some(span) = TextSpan::from_glyphs(std::mem::take(&mut cur_span_glyphs)) {

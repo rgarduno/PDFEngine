@@ -29,6 +29,7 @@ pub mod ops;
 pub mod redact;
 pub mod security;
 pub mod stream;
+pub mod tables;
 pub mod watermark;
 
 // Re-export primary types for ergonomic usage
@@ -72,5 +73,9 @@ pub use redact::{
     find_phones, find_rfc, find_ssn, find_substring, prune_page_annotations, redact_document_pattern,
     redact_document_rectangles, redact_page, scrub_document_metadata, RedactionConfig, RedactionPattern,
     RedactionRect, RedactionSummary,
+};
+pub use tables::{
+    detect_borderless_tables, detect_lattice_tables, detect_tables, export_table, export_to_csv,
+    export_to_html, export_to_json, export_to_markdown, DetectedTable, TableCell, TableExportFormat,
 };
 

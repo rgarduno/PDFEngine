@@ -926,6 +926,109 @@ def test_security_and_digital_signatures_workflow():
     assert sec_resp3.json()["is_encrypted"] is False
 
 
+def create_pdf_with_table_bytes() -> bytes:
+    """Creates a valid PDF containing a 2x2 table with vector lines and cell text."""
+    pdf = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = (
+        # Horizontal lines (700, 650, 600 from 100 to 300)
+        b"100 700 m 300 700 l S\n"
+        b"100 650 m 300 650 l S\n"
+        b"100 600 m 300 600 l S\n"
+        # Vertical lines (100, 200, 300 from 600 to 700)
+        b"100 600 m 100 700 l S\n"
+        b"200 600 m 200 700 l S\n"
+        b"300 600 m 300 700 l S\n"
+        # Text in cell (0, 0)
+        b"BT\n/F1 10 Tf\n110 670 Tm\n(Item) Tj\nET\n"
+        # Text in cell (0, 1)
+        b"BT\n/F1 10 Tf\n210 670 Tm\n(Price) Tj\nET\n"
+        # Text in cell (1, 0)
+        b"BT\n/F1 10 Tf\n110 620 Tm\n(Widget) Tj\nET\n"
+        # Text in cell (1, 1)
+        b"BT\n/F1 10 Tf\n210 620 Tm\n($100) Tj\nET\n"
+    )
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"endstream\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(b"xref\n0 5\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010} 00000 n \n".encode())
+    pdf.extend(f"{off2:010} 00000 n \n".encode())
+    pdf.extend(f"{off3:010} 00000 n \n".encode())
+    pdf.extend(f"{off4:010} 00000 n \n".encode())
+
+    pdf.extend(b"trailer\n<< /Size 5 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+
+    return bytes(pdf)
+
+
+def test_table_detection_and_export_workflow():
+    pdf_bytes = create_pdf_with_table_bytes()
+
+    # 1. Upload Document with Table
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("invoice_table.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 2. Extract tables on page 1
+    tables_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables")
+    assert tables_resp.status_code == 200
+    data = tables_resp.json()
+    assert data["total_tables"] >= 1
+
+    table = data["tables"][0]
+    assert table["row_count"] == 2
+    assert table["col_count"] == 2
+    assert table["headers"] == ["Item", "Price"]
+    assert table["rows"] == [["Widget", "$100"]]
+    assert len(table["cells"]) == 4
+
+    # 3. Export table as CSV
+    csv_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=csv")
+    assert csv_resp.status_code == 200
+    csv_data = csv_resp.json()
+    assert "Item,Price" in csv_data["content"]
+    assert "Widget,$100" in csv_data["content"]
+
+    # 4. Export table as Markdown
+    md_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=markdown")
+    assert md_resp.status_code == 200
+    md_data = md_resp.json()
+    assert "| Item | Price |" in md_data["content"]
+    assert "| Widget | $100 |" in md_data["content"]
+
+    # 5. Export table as JSON
+    json_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=json")
+    assert json_resp.status_code == 200
+    json_data = json_resp.json()
+    assert "\"headers\": [\"Item\", \"Price\"]" in json_data["content"]
+
+    # 6. Test CSV file download
+    dl_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=csv&download=true")
+    assert dl_resp.status_code == 200
+    assert "attachment; filename=" in dl_resp.headers.get("Content-Disposition", "")
+    assert b"Item,Price" in dl_resp.content
+
+
+
 
 
 

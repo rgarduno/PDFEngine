@@ -344,5 +344,57 @@ export interface SecurityActionResponse {
   signature?: SignatureItem;
 }
 
+export interface TableCellItem {
+  row: number;
+  col: number;
+  row_span: number;
+  col_span: number;
+  text: string;
+  is_header: boolean;
+  bbox: {
+    min_x: number;
+    min_y: number;
+    max_x: number;
+    max_y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface DetectedTableItem {
+  table_idx: number;
+  page_number: number;
+  row_count: number;
+  col_count: number;
+  bbox: {
+    min_x: number;
+    min_y: number;
+    max_x: number;
+    max_y: number;
+    width: number;
+    height: number;
+  };
+  headers: string[];
+  rows: string[][];
+  cells: TableCellItem[];
+}
+
+export interface PageTablesResponse {
+  document_id: string;
+  page_number: number;
+  total_tables: number;
+  tables: DetectedTableItem[];
+}
+
+export interface TableExportResponse {
+  document_id: string;
+  page_number: number;
+  table_idx: number;
+  format: string;
+  content: string;
+  row_count: number;
+  col_count: number;
+}
+
 
 
