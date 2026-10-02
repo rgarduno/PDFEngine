@@ -22,10 +22,13 @@ pub use xref::{XRefEntry, XRefTable};
 use crate::error::{PdfError, PdfResult};
 use crate::security::SecurityLimits;
 
-/// Represents an in-memory parsed PDF document container.
+/// In-memory parsed PDF document.
 ///
-/// Thread-safe, stateless, and suitable for high-concurrency cloud environments
-/// and serverless workers.
+/// The value owns its file bytes and object map. It keeps no process-global
+/// state and is `Send`, so a caller may move it onto another thread. Mutating
+/// one document from several threads still requires the caller to synchronize.
+/// An API process that keeps documents for later requests has its own session
+/// table; this type does not.
 #[derive(Debug, Clone)]
 pub struct PdfDocument {
     /// Raw unparsed byte buffer of the loaded PDF.
@@ -79,6 +82,15 @@ impl PdfDocument {
     /// Returns the raw unparsed byte buffer of the loaded PDF.
     pub fn raw_data(&self) -> &[u8] {
         &self.raw_data
+    }
+
+    /// Drops the retained source file after its objects have been cached.
+    ///
+    /// The object map and cross-reference table stay. Call this only after
+    /// every object the next step needs has been loaded: an uncached object is
+    /// parsed from these bytes.
+    pub(crate) fn release_retained_file(&mut self) {
+        self.raw_data = Vec::new();
     }
 
     /// Creates an empty valid ISO 32000-1 PDF document with a clean Catalog and Pages root.

@@ -6,9 +6,18 @@ token is one tenant. The session store records only a SHA-256 subject id, so
 the raw token is never kept next to the PDF.
 
 A document id is not a capability. ``load_session`` returns a session only when
-the caller is the subject that created it. A missing session and a session
-owned by someone else both answer 404, so one tenant cannot probe another's
-documents.
+the caller is the subject that created it. A missing session, an expired
+session, and a session owned by someone else all answer 404, so one tenant
+cannot probe another's documents.
+
+The table is process-local and bounded. ``PDFENGINE_MAX_UPLOAD_BYTES``
+(default 32 MiB) caps one upload. ``PDFENGINE_MAX_SESSIONS`` (default 32) and
+``PDFENGINE_MAX_RETAINED_BYTES`` (default 256 MiB) cap how much stays resident.
+``PDFENGINE_SESSION_TTL_SECONDS`` (default 1800) is a sliding lifetime refreshed
+on each successful load. A full table answers 429. Expired rows are dropped on
+the next bind or load. A live session is never evicted to make room, including
+a session that belongs to another tenant. ``byte_size`` is the accounted file
+size used for that budget, not the process RSS.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
 import time
 import uuid
 from contextvars import ContextVar
@@ -29,8 +39,13 @@ from fastapi.responses import JSONResponse
 MIN_TOKEN_LENGTH = 16
 WS_TICKET_TTL_SECONDS = 60
 MAX_WS_TICKETS = 1024
+DEFAULT_MAX_UPLOAD_BYTES = 32 * 1024 * 1024
+DEFAULT_SESSION_TTL_SECONDS = 1800
+DEFAULT_MAX_SESSIONS = 32
+DEFAULT_MAX_RETAINED_BYTES = 256 * 1024 * 1024
 
 DOCUMENT_SESSIONS: dict[str, dict] = {}
+_sessions_lock = threading.Lock()
 
 _current_subject: ContextVar["Subject | None"] = ContextVar("pdfengine_subject", default=None)
 _ws_tickets: dict[str, tuple[str, float]] = {}
@@ -87,27 +102,139 @@ def current_subject() -> Subject:
     return subject
 
 
-def bind_session(doc: object, filename: str, raw_bytes: bytes | None = None) -> str:
-    """Store a parsed document under a new id owned by the current subject."""
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer from the environment, or return ``default``.
+
+    The value is read on each call so a test can change the limit without
+    restarting the process. Zero, negative numbers, and non-integers fall back
+    to the default rather than opening the table.
+    """
+    raw = os.environ.get(name, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if value <= 0:
+        return default
+    return value
+
+
+def max_upload_bytes() -> int:
+    """Largest accepted upload, in bytes."""
+    return _positive_int_env("PDFENGINE_MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)
+
+
+def session_ttl_seconds() -> int:
+    """Sliding lifetime of a document session, in seconds."""
+    return _positive_int_env("PDFENGINE_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS)
+
+
+def max_sessions() -> int:
+    """Maximum number of live document sessions in this process."""
+    return _positive_int_env("PDFENGINE_MAX_SESSIONS", DEFAULT_MAX_SESSIONS)
+
+
+def max_retained_bytes() -> int:
+    """Maximum accounted bytes across live document sessions."""
+    return _positive_int_env("PDFENGINE_MAX_RETAINED_BYTES", DEFAULT_MAX_RETAINED_BYTES)
+
+
+def _purge_expired_unlocked(now: float | None = None) -> None:
+    """Drop sessions whose ``expires_at`` is in the past. Caller holds the lock."""
+    moment = time.time() if now is None else now
+    expired = [
+        key
+        for key, session in DOCUMENT_SESSIONS.items()
+        if float(session.get("expires_at", 0)) <= moment
+    ]
+    for key in expired:
+        DOCUMENT_SESSIONS.pop(key, None)
+
+
+def _retained_bytes_unlocked() -> int:
+    """Sum accounted bytes. Caller holds the lock."""
+    return sum(int(session.get("byte_size", 0)) for session in DOCUMENT_SESSIONS.values())
+
+
+def ensure_session_capacity(additional: int, additional_bytes: int = 0) -> None:
+    """Reject when ``additional`` new sessions would exceed either cap.
+
+    Expired sessions are removed first. This does not reserve the slots; the
+    following ``bind_session`` checks again under the same lock.
+    """
+    if additional < 0 or additional_bytes < 0:
+        raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+    with _sessions_lock:
+        _purge_expired_unlocked()
+        if len(DOCUMENT_SESSIONS) + additional > max_sessions():
+            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+        if _retained_bytes_unlocked() + additional_bytes > max_retained_bytes():
+            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+
+
+def bind_session(doc: object, filename: str, byte_size: int = 0) -> str:
+    """Store a parsed document under a new id owned by the current subject.
+
+    ``byte_size`` is the number of file bytes this session is charged. The
+    original upload buffer is not stored again. The call fails closed when the
+    session count or the retained-byte budget cannot fit this document.
+    """
     subject = current_subject()
-    doc_id = str(uuid.uuid4())
-    DOCUMENT_SESSIONS[doc_id] = {
-        "doc": doc,
-        "filename": filename,
-        "raw_bytes": raw_bytes if raw_bytes is not None else b"",
-        "subject_id": subject.id,
-        "created_at": time.time(),
-    }
-    return doc_id
+    charged = byte_size if byte_size > 0 else 0
+    with _sessions_lock:
+        _purge_expired_unlocked()
+        if len(DOCUMENT_SESSIONS) + 1 > max_sessions():
+            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+        if _retained_bytes_unlocked() + charged > max_retained_bytes():
+            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+        doc_id = str(uuid.uuid4())
+        now = time.time()
+        DOCUMENT_SESSIONS[doc_id] = {
+            "doc": doc,
+            "filename": filename,
+            "byte_size": charged,
+            "subject_id": subject.id,
+            "created_at": now,
+            "expires_at": now + session_ttl_seconds(),
+        }
+        return doc_id
+
+
+def set_session_byte_size(doc_id: str, byte_size: int) -> None:
+    """Replace the accounted size of a session the caller owns.
+
+    The previous charge is removed before the new one is tested, so replacing a
+    document with a smaller file does not require extra budget. Growing past
+    the retained-byte cap fails and leaves the previous charge in place.
+    """
+    subject = current_subject()
+    charged = byte_size if byte_size > 0 else 0
+    with _sessions_lock:
+        _purge_expired_unlocked()
+        session = DOCUMENT_SESSIONS.get(doc_id)
+        if session is None or session.get("subject_id") != subject.id:
+            raise HTTPException(status_code=404, detail="Document session not found.")
+        others = _retained_bytes_unlocked() - int(session.get("byte_size", 0))
+        if others + charged > max_retained_bytes():
+            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+        session["byte_size"] = charged
+        session["expires_at"] = time.time() + session_ttl_seconds()
 
 
 def load_session(doc_id: str) -> dict:
-    """Return the session for ``doc_id`` when the current subject owns it."""
+    """Return the session for ``doc_id`` when the current subject owns it.
+
+    A successful load refreshes the sliding lifetime. Expired rows are removed
+    first, so an expired id answers the same 404 as a missing id.
+    """
     subject = current_subject()
-    session = DOCUMENT_SESSIONS.get(doc_id)
-    if session is None or session.get("subject_id") != subject.id:
-        raise HTTPException(status_code=404, detail="Document session not found.")
-    return session
+    with _sessions_lock:
+        _purge_expired_unlocked()
+        session = DOCUMENT_SESSIONS.get(doc_id)
+        if session is None or session.get("subject_id") != subject.id:
+            raise HTTPException(status_code=404, detail="Document session not found.")
+        session["expires_at"] = time.time() + session_ttl_seconds()
+        return session
 
 
 def issue_ws_ticket() -> str:

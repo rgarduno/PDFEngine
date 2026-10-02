@@ -5,14 +5,35 @@ import os
 
 os.environ["PDFENGINE_API_KEYS"] = "pdfengine-test-key-0001,pdfengine-test-key-0002"
 
+import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.auth import DOCUMENT_SESSIONS, _ws_tickets
 from app.main import app
 
 client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0001"})
 other_client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0002"})
 anonymous = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_document_sessions():
+    """Drop leftover sessions so the default cap of 32 does not depend on order."""
+    DOCUMENT_SESSIONS.clear()
+    _ws_tickets.clear()
+    yield
+    DOCUMENT_SESSIONS.clear()
+    _ws_tickets.clear()
+
+
+def _upload_minimal(name: str = "sample.pdf"):
+    pdf = create_minimal_pdf_bytes()
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": (name, io.BytesIO(pdf), "application/pdf")},
+    )
+    return pdf, response
 
 
 def create_minimal_pdf_bytes() -> bytes:
@@ -110,6 +131,93 @@ def test_health_endpoint():
     data = response.json()
     assert data["status"] == "healthy"
     assert data["version"] == "0.1.0"
+
+
+def test_upload_over_the_configured_limit_is_rejected(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_UPLOAD_BYTES", "64")
+    body = b"%PDF-1.7\n" + b"\x00" * 80
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("oversized.pdf", io.BytesIO(body), "application/pdf")},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Upload exceeds the configured size limit."
+    assert DOCUMENT_SESSIONS == {}
+
+
+def test_second_upload_hits_the_session_cap(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_SESSIONS", "1")
+    _, first = _upload_minimal("first.pdf")
+    assert first.status_code == 200
+    session = DOCUMENT_SESSIONS[first.json()["document_id"]]
+    assert "raw_bytes" not in session
+    assert session["byte_size"] == len(create_minimal_pdf_bytes())
+
+    _, second = _upload_minimal("second.pdf")
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Document session capacity exceeded."
+
+
+def test_upload_rejects_when_the_retained_budget_is_smaller_than_the_file(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_RETAINED_BYTES", "32")
+    pdf, response = _upload_minimal("budget.pdf")
+    assert len(pdf) > 32
+    assert response.status_code == 429
+    assert DOCUMENT_SESSIONS == {}
+
+
+def test_expired_session_is_not_found_and_frees_a_slot(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_SESSIONS", "1")
+    _, uploaded = _upload_minimal("expiring.pdf")
+    assert uploaded.status_code == 200
+    doc_id = uploaded.json()["document_id"]
+    DOCUMENT_SESSIONS[doc_id]["expires_at"] = 0
+
+    missing = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Document session not found."
+    assert doc_id not in DOCUMENT_SESSIONS
+
+    _, again = _upload_minimal("after-expiry.pdf")
+    assert again.status_code == 200
+
+
+def test_split_rejects_when_the_new_part_would_exceed_the_session_cap(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_SESSIONS", "1")
+    _, uploaded = _upload_minimal("source.pdf")
+    assert uploaded.status_code == 200
+    doc_id = uploaded.json()["document_id"]
+
+    response = client.post(
+        f"/api/documents/{doc_id}/split",
+        json={"page_indices": [0]},
+    )
+    assert response.status_code == 429
+    assert response.json()["detail"] == "Document session capacity exceeded."
+    assert list(DOCUMENT_SESSIONS) == [doc_id]
+
+
+def test_optimize_keeps_only_the_optimized_buffer(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_MAX_SESSIONS", "8")
+    _, uploaded = _upload_minimal("optimize_cap.pdf")
+    assert uploaded.status_code == 200
+    doc_id = uploaded.json()["document_id"]
+
+    response = client.post(
+        f"/api/documents/{doc_id}/optimize",
+        json={
+            "remove_unused": True,
+            "pack_object_streams": True,
+            "recompress_flate": True,
+            "deduplicate_streams": True,
+            "max_objects_per_stream": 50,
+        },
+    )
+    assert response.status_code == 200
+    session = DOCUMENT_SESSIONS[doc_id]
+    assert "raw_bytes" not in session
+    assert "optimized_bytes" in session
+    assert session["byte_size"] == len(session["optimized_bytes"])
 
 
 def test_upload_invalid_file_extension():

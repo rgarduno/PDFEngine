@@ -313,6 +313,11 @@ pub fn save_optimized_to_vec(
         let _ = working_doc.get_object(id);
     }
 
+    // The clone has cached every in-use object. Drop its copy of the source
+    // file before the rewrite so the peak is not the original buffer twice.
+    // The caller's document is left untouched.
+    working_doc.release_retained_file();
+
     crate::security::active::neutralize_active_content(&mut working_doc)?;
 
     let mut stats = OptimizationStats {
@@ -597,6 +602,44 @@ mod tests {
         // Verify dead objects cannot be found
         assert!(loaded_doc.get_object(dead_obj_1).is_err());
         assert!(loaded_doc.get_object(dead_obj_2).is_err());
+    }
+
+    #[test]
+    fn release_retained_file_drops_source_bytes_after_objects_are_cached() {
+        let mut draft = PdfDocument::empty();
+        let bytes = draft.save_to_vec().unwrap();
+        let mut loaded = PdfDocument::load(&bytes).unwrap();
+        let retained = loaded.raw_data().len();
+        assert!(retained > 0);
+
+        let ids: Vec<_> = loaded
+            .xref
+            .entries
+            .iter()
+            .filter_map(|(&id, entry)| match entry {
+                XRefEntry::InUse { .. } | XRefEntry::Compressed { .. } => Some(id),
+                XRefEntry::Free { .. } => None,
+            })
+            .collect();
+        for id in ids {
+            loaded.get_object(id).unwrap();
+        }
+        loaded.release_retained_file();
+        assert!(loaded.raw_data().is_empty());
+        let catalog_id = loaded.catalog_id().unwrap();
+        assert!(loaded.get_object(catalog_id).is_ok());
+
+        let mut caller = PdfDocument::load(&bytes).unwrap();
+        let options = OptimizationOptions {
+            remove_unused_objects: true,
+            pack_into_object_streams: false,
+            max_objects_per_stream: 10,
+            recompress_flate: false,
+            deduplicate_streams: false,
+            use_xref_stream: false,
+        };
+        let _ = save_optimized_to_vec(&mut caller, &options).unwrap();
+        assert_eq!(caller.raw_data().len(), retained);
     }
 
     #[test]

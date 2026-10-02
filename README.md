@@ -183,6 +183,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Circular Reference Loops** | Malicious indirect objects referencing each other cyclically. | Traversal depth limit (maximum 64 levels) and `HashSet<(u32, u16)>` cycle detection. |
 | **Buffer Overflows & Use-After-Free** | Pointer manipulation bugs in legacy C/C++ parsers. | **100% Safe Rust** codebase. Memory safety guaranteed at compile time without garbage collection pauses. |
 | **Malicious Active Scripts** | Exploits via embedded `/JavaScript` or `/Launch` actions. | Save removes `/JavaScript`, `/JS`, `/Launch`, `/SubmitForm`, `/OpenAction`, and `/AA`. `http` and `https` `/URI` links stay; `javascript`, `vbscript`, `file`, and `data` schemes are removed. |
+| **Unbounded uploads and sessions** | A client pins process memory by uploading without a limit or by leaving documents open. | Uploads above 32 MiB are rejected (413). The process keeps at most 32 sessions and 256 MiB of accounted file bytes, and each session expires 30 minutes after its last successful load (429). |
 
 ---
 
@@ -190,7 +191,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 
 * **Zero Memory Leaks**: Deterministic RAII memory management; completely eliminates garbage collection freezes.
 * **Low Cold-Start Latency**: Under 15ms initialization overhead, optimal for AWS Lambda, Cloud Run, and edge functions.
-* **Stateless & Thread-Safe**: All document structures implement `Send + Sync` with zero global state, allowing safe multi-tenant concurrency.
+* **Bounded sessions**: The Rust document type keeps no process-global state and is `Send`. The API keeps parsed documents in a process-local table capped by upload size (32 MiB), session count (32), accounted bytes (256 MiB), and a sliding 30-minute lifetime.
 * **Zero-Copy Byte Scanning**: High-throughput lexical scanning over contiguous byte buffers.
 
 ---

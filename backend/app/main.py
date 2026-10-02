@@ -14,9 +14,12 @@ from app.auth import (
     adopt_subject,
     bind_session,
     consume_ws_ticket,
+    ensure_session_capacity,
     issue_ws_ticket,
     load_session,
+    max_upload_bytes,
     reset_subject,
+    set_session_byte_size,
 )
 
 try:
@@ -122,13 +125,39 @@ def create_ws_ticket():
     return {"ticket": issue_ws_ticket(), "expires_in": 60}
 
 
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_bounded_upload(file: UploadFile) -> bytes:
+    """Read an upload in chunks and stop once it passes the configured cap.
+
+    At most one extra byte past the limit is read, so a client cannot make the
+    process buffer an entire oversized body before the request is rejected.
+    """
+    limit = max_upload_bytes()
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        remaining = limit - total + 1
+        if remaining <= 0:
+            raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit.")
+        chunk = await file.read(min(_UPLOAD_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/api/documents/upload", response_model=DocumentUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
     """Uploads a PDF document, indexes pages, and initializes an editing session."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
 
-    content = await file.read()
+    content = await _read_bounded_upload(file)
     if len(content) < 8 or not content.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF.")
 
@@ -143,7 +172,7 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail=f"Failed to parse PDF document: {e}")
 
     page_count = doc.page_count()
-    doc_id = bind_session(doc, file.filename, content)
+    doc_id = bind_session(doc, file.filename, len(content))
 
     return DocumentUploadResponse(
         document_id=doc_id,
@@ -674,6 +703,26 @@ def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest)
         raise HTTPException(status_code=400, detail=f"Failed to rotate page: {e}")
 
 
+def _split_part_count(doc, request: SplitDocumentRequest) -> int:
+    """How many new sessions a split will create. Zero means the loop is a no-op.
+
+    ``page_indices`` wins when both fields are set, matching the historical
+    branch. A chunk split of a document with no pages creates nothing.
+    """
+    if request.page_indices is not None:
+        return 1
+    if request.chunk_size:
+        total_pages = doc.page_count()
+        if total_pages <= 0:
+            return 0
+        chunk_size = max(1, request.chunk_size)
+        return (total_pages + chunk_size - 1) // chunk_size
+    raise HTTPException(
+        status_code=400,
+        detail="Must specify either 'page_indices' or 'chunk_size'.",
+    )
+
+
 @app.post("/api/documents/{doc_id}/split", response_model=SplitDocumentResponse)
 def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
     """Extracts specified pages or splits the document into smaller chunks."""
@@ -681,27 +730,41 @@ def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
 
     doc = session["doc"]
     try:
+        part_count = _split_part_count(doc, request)
         extracted_ids = []
+        if part_count == 0:
+            return SplitDocumentResponse(
+                success=True,
+                source_document_id=doc_id,
+                extracted_document_ids=extracted_ids,
+                count=0,
+            )
+
+        # Each extracted document is charged the source size. Extraction copies
+        # page objects, and the budget must fail closed before the loop starts.
+        part_bytes = int(session.get("byte_size", 0))
+        ensure_session_capacity(part_count, part_bytes * part_count)
+        filename = session["filename"]
         if request.page_indices is not None:
             extracted_doc = doc.extract_pages(request.page_indices)
             new_id = bind_session(
                 extracted_doc,
-                f"{session['filename'].replace('.pdf', '')}_extracted.pdf",
+                f"{filename.replace('.pdf', '')}_extracted.pdf",
+                part_bytes,
             )
             extracted_ids.append(new_id)
-        elif request.chunk_size:
+        else:
             total_pages = doc.page_count()
-            chunk_size = max(1, request.chunk_size)
+            chunk_size = max(1, request.chunk_size or 1)
             for start in range(0, total_pages, chunk_size):
                 indices = list(range(start, min(start + chunk_size, total_pages)))
                 chunk_doc = doc.extract_pages(indices)
                 new_id = bind_session(
                     chunk_doc,
-                    f"{session['filename'].replace('.pdf', '')}_part_{len(extracted_ids)+1}.pdf",
+                    f"{filename.replace('.pdf', '')}_part_{len(extracted_ids)+1}.pdf",
+                    part_bytes,
                 )
                 extracted_ids.append(new_id)
-        else:
-            raise HTTPException(status_code=400, detail="Must specify either 'page_indices' or 'chunk_size'.")
 
         return SplitDocumentResponse(
             success=True,
@@ -722,13 +785,16 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
         raise HTTPException(status_code=400, detail="At least one document ID must be provided.")
 
     docs_to_merge = []
+    accounted = 0
     for d_id in request.document_ids:
         sess = load_session(d_id)
         docs_to_merge.append(sess["doc"])
+        accounted += int(sess.get("byte_size", 0))
 
     try:
+        ensure_session_capacity(1, accounted)
         merged_doc = pdf_engine.merge_documents(docs_to_merge)
-        merged_id = bind_session(merged_doc, "merged_document.pdf")
+        merged_id = bind_session(merged_doc, "merged_document.pdf", accounted)
         return MergeDocumentsResponse(
             success=True,
             merged_document_id=merged_id,
@@ -1637,7 +1703,10 @@ async def optimize_document_endpoint(
             max_objects_per_stream=request.max_objects_per_stream,
         )
 
-        # Reload optimized document into session to keep session active and synchronized
+        # Charge the optimized file in place of the upload. The original upload
+        # buffer is not retained. The export path still returns optimized_bytes.
+        set_session_byte_size(doc_id, len(opt_bytes))
+        session.pop("raw_bytes", None)
         session["doc"] = pdf_engine.Document.from_bytes(opt_bytes)
         session["optimized_bytes"] = opt_bytes
         session["original_size"] = stats.original_size
@@ -1660,6 +1729,8 @@ async def optimize_document_endpoint(
                 f"{stats.object_streams_created} flujos /ObjStm creados)."
             ),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to optimize document: {e}")
 
