@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Toolbar } from '@/components/Toolbar';
 import { DualCanvasViewer } from '@/components/DualCanvasViewer';
 import { Sidebar } from '@/components/Sidebar';
+import { ThumbnailSidebar } from '@/components/ThumbnailSidebar';
 import {
   MOCK_SESSION,
   MOCK_SCENEGRAPH,
@@ -24,6 +25,7 @@ import {
   splitDocument,
   mergeDocuments,
   deletePages,
+  reorderPages,
   getPageAnnotations,
   addMarkup,
   addLink,
@@ -45,6 +47,8 @@ import {
   getPageTables,
   exportTableData,
   getTableDownloadUrl,
+  getDocumentOverview,
+  getPageRotation,
 } from '@/lib/api';
 import {
   AddPaginationPayload,
@@ -62,6 +66,7 @@ import {
   EncryptDocumentPayload,
   SignDocumentPayload,
   DetectedTableItem,
+  PageOverviewItem,
 } from '@/lib/types';
 
 export default function Home() {
@@ -85,6 +90,18 @@ export default function Home() {
   const [signatures, setSignatures] = useState<SignatureItem[]>([]);
   const [tables, setTables] = useState<DetectedTableItem[]>([]);
   const [selectedTableIdx, setSelectedTableIdx] = useState<number | null>(null);
+  const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
+  const [pageOverviews, setPageOverviews] = useState<PageOverviewItem[]>([
+    {
+      page_number: 1,
+      page_index: 0,
+      rotation: 0,
+      paragraph_count: MOCK_SCENEGRAPH.paragraphs.length,
+      preview_snippet: MOCK_SCENEGRAPH.paragraphs[0]?.text?.slice(0, 60) || '',
+      width: 612,
+      height: 792,
+    },
+  ]);
 
   // Undo / Redo History Stacks
   const [history, setHistory] = useState<Paragraph[][]>([MOCK_SCENEGRAPH.paragraphs]);
@@ -159,9 +176,17 @@ export default function Home() {
     }
   }, [historyIndex, history]);
 
-  // Global keyboard shortcuts for undo / redo
+  // Global keyboard shortcuts for undo / redo and multi-page navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input or textarea
+      if (
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -169,11 +194,30 @@ export default function Home() {
         } else {
           handleUndo();
         }
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        setShowThumbnails((prev) => !prev);
+      } else if (e.key === 'PageUp' || (e.altKey && e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        if (currentPage > 1) {
+          handleNavigatePage(currentPage - 1);
+        }
+      } else if (e.key === 'PageDown' || (e.altKey && e.key === 'ArrowRight')) {
+        e.preventDefault();
+        if (currentPage < session.page_count) {
+          handleNavigatePage(currentPage + 1);
+        }
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        handleNavigatePage(1);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        handleNavigatePage(session.page_count);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo]);
+  }, [handleUndo, handleRedo, currentPage, session.page_count]);
 
   // Handle paragraph text editing
   const handleUpdateParagraphText = (id: number, newText: string) => {
@@ -291,6 +335,23 @@ export default function Home() {
         setTables([]);
       }
       setSelectedTableIdx(null);
+
+      try {
+        const overview = await getDocumentOverview(newSession.document_id);
+        setPageOverviews(overview.pages);
+      } catch {
+        setPageOverviews(
+          Array.from({ length: newSession.page_count }, (_, i) => ({
+            page_number: i + 1,
+            page_index: i,
+            rotation: 0,
+            paragraph_count: i === 0 ? scenegraph.paragraphs.length : 0,
+            preview_snippet: i === 0 ? scenegraph.paragraphs[0]?.text?.slice(0, 60) || '' : '',
+            width: 612,
+            height: 792,
+          }))
+        );
+      }
 
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
@@ -802,6 +863,13 @@ export default function Home() {
     setSelectedTableIdx(null);
 
     try {
+      const rot = await getPageRotation(session.document_id, page);
+      setPageRotation(rot);
+    } catch {
+      setPageRotation(0);
+    }
+
+    try {
       const scenegraph = await getPageScenegraph(session.document_id, page);
       setParagraphs(scenegraph.paragraphs);
     } catch (e) {
@@ -827,6 +895,35 @@ export default function Home() {
       setTables(pageTables.tables);
     } catch {
       setTables([]);
+    }
+  };
+
+  // Rotate specific page handler
+  const handleRotateSpecificPage = async (pageNum: number, degrees: number) => {
+    try {
+      const res = await rotatePage(session.document_id, pageNum, degrees);
+      setPageOverviews((prev) =>
+        prev.map((p) =>
+          p.page_number === pageNum ? { ...p, rotation: res.new_rotation } : p
+        )
+      );
+      if (pageNum === currentPage) {
+        setPageRotation(res.new_rotation);
+      }
+    } catch (e) {
+      console.warn('Rotate failed:', e);
+    }
+  };
+
+  // Reorder pages handler
+  const handleReorderPages = async (newOrder: number[]) => {
+    try {
+      await reorderPages(session.document_id, newOrder);
+      const overview = await getDocumentOverview(session.document_id);
+      setPageOverviews(overview.pages);
+      handleNavigatePage(currentPage);
+    } catch (e) {
+      console.warn('Reorder failed:', e);
     }
   };
 
@@ -925,10 +1022,37 @@ export default function Home() {
         onExportClick={handleExportClick}
         isExporting={isExporting}
         wsConnected={wsConnected}
+        onNavigatePage={handleNavigatePage}
+        showThumbnails={showThumbnails}
+        onToggleThumbnails={() => setShowThumbnails((prev) => !prev)}
       />
 
-      {/* Main Studio View: Dual-Layer Canvas + SceneGraph Sidebar */}
+      {/* Main Studio View: Left Thumbnail Drawer + Dual-Layer Canvas + SceneGraph Sidebar */}
       <div className="flex-1 flex overflow-hidden">
+        {showThumbnails && (
+          <ThumbnailSidebar
+            isOpen={showThumbnails}
+            onClose={() => setShowThumbnails(false)}
+            documentId={session.document_id}
+            currentPage={currentPage}
+            totalPages={session.page_count}
+            pageOverviews={pageOverviews}
+            onSelectPage={handleNavigatePage}
+            onRotatePage={handleRotateSpecificPage}
+            onDeletePage={(pageNum) => {
+              if (pageNum === currentPage) {
+                handleDeleteCurrentPage();
+              } else {
+                deletePages(session.document_id, [pageNum]).then(() => {
+                  setSession((prev) => ({ ...prev, page_count: Math.max(1, prev.page_count - 1) }));
+                  getDocumentOverview(session.document_id).then((o) => setPageOverviews(o.pages));
+                });
+              }
+            }}
+            onReorderPages={handleReorderPages}
+          />
+        )}
+
         <DualCanvasViewer
           paragraphs={paragraphs}
           selectedParagraphId={selectedParagraphId}

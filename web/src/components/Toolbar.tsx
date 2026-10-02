@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AlignLeft,
   AlignCenter,
@@ -19,6 +19,9 @@ import {
   Underline,
   Link2,
   Award,
+  ChevronLeft,
+  ChevronRight,
+  PanelLeft,
 } from 'lucide-react';
 import { TextAlignment } from '@/lib/types';
 
@@ -44,6 +47,9 @@ interface ToolbarProps {
   onExportClick: () => void;
   isExporting: boolean;
   wsConnected: boolean;
+  onNavigatePage?: (page: number) => void;
+  showThumbnails?: boolean;
+  onToggleThumbnails?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -68,23 +74,101 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onExportClick,
   isExporting,
   wsConnected,
+  onNavigatePage,
+  showThumbnails = true,
+  onToggleThumbnails,
 }) => {
+  const [pageInputValue, setPageInputValue] = useState<string>(String(pageNumber));
+
+  useEffect(() => {
+    setPageInputValue(String(pageNumber));
+  }, [pageNumber]);
+
   return (
     <header className="h-16 border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md px-4 flex items-center justify-between select-none z-30 sticky top-0">
-      {/* Left: Document Info */}
+      {/* Left: Document Info & Page Navigator */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-sm shadow-sm">
+        {onToggleThumbnails && (
+          <button
+            onClick={onToggleThumbnails}
+            title="Ver miniaturas de páginas (Ctrl+B)"
+            className={`p-2 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${
+              showThumbnails
+                ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-300 border-blue-300 dark:border-blue-700 shadow-xs'
+                : 'bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-750'
+            }`}
+          >
+            <PanelLeft size={16} />
+            <span className="hidden sm:inline">Páginas</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-neutral-200 dark:bg-neutral-700 font-mono font-bold">
+              {totalPages}
+            </span>
+          </button>
+        )}
+
+        <div className="w-9 h-9 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shrink-0">
           PDF
         </div>
+
         <div className="truncate">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm text-neutral-900 dark:text-neutral-100 truncate max-w-[220px]">
+            <span className="font-semibold text-sm text-neutral-900 dark:text-neutral-100 truncate max-w-[180px] sm:max-w-[240px]">
               {filename}
             </span>
-            <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-              Page {pageNumber} of {totalPages}
-            </span>
+
+            {/* Interactive Page Navigator */}
+            <div className="flex items-center bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded-lg border border-neutral-200 dark:border-neutral-700 text-xs">
+              <button
+                onClick={() => onNavigatePage?.(Math.max(1, pageNumber - 1))}
+                disabled={pageNumber <= 1}
+                title="Página Anterior (PageUp / Alt+←)"
+                className="p-1 rounded hover:bg-white dark:hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors text-neutral-700 dark:text-neutral-300 cursor-pointer disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={14} />
+              </button>
+
+              <div className="flex items-center px-1 font-mono text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageInputValue}
+                  onChange={(e) => setPageInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const p = parseInt(pageInputValue, 10);
+                      if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                        onNavigatePage?.(p);
+                      } else {
+                        setPageInputValue(String(pageNumber));
+                      }
+                    }
+                  }}
+                  onBlur={() => {
+                    const p = parseInt(pageInputValue, 10);
+                    if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                      onNavigatePage?.(p);
+                    } else {
+                      setPageInputValue(String(pageNumber));
+                    }
+                  }}
+                  className="w-8 text-center bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-0.5 py-0.5 text-xs font-semibold focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                />
+                <span className="mx-1 text-neutral-400">/</span>
+                <span>{totalPages}</span>
+              </div>
+
+              <button
+                onClick={() => onNavigatePage?.(Math.min(totalPages, pageNumber + 1))}
+                disabled={pageNumber >= totalPages}
+                title="Página Siguiente (PageDown / Alt+→)"
+                className="p-1 rounded hover:bg-white dark:hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent transition-colors text-neutral-700 dark:text-neutral-300 cursor-pointer disabled:cursor-not-allowed"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
           </div>
+
           <div className="flex items-center gap-1.5 text-[11px] text-neutral-500">
             <span
               className={`inline-block w-2 h-2 rounded-full ${

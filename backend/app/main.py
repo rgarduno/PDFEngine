@@ -27,6 +27,7 @@ from app.models import (
     BoundingBox,
     DeletePagesRequest,
     DocumentFormsResponse,
+    DocumentOverviewResponse,
     DocumentUploadResponse,
     EditParagraphRequest,
     EditParagraphResponse,
@@ -40,6 +41,7 @@ from app.models import (
     PageAnnotationsResponse,
     PageImagesResponse,
     PageOperationResponse,
+    PageOverviewItem,
     PageSceneGraph,
     ParagraphModel,
     ReorderPagesRequest,
@@ -174,6 +176,67 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
         page_number=page_idx,
         paragraphs=paragraph_models,
     )
+
+
+@app.get("/api/documents/{doc_id}/pages/overview", response_model=DocumentOverviewResponse)
+def get_document_overview(doc_id: str):
+    """Returns overview metadata, layout metrics, and preview snippets for all pages in the document."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    filename = session.get("filename", "document.pdf")
+    total_pages = doc.page_count()
+    pages_overview = []
+
+    for p_num in range(1, total_pages + 1):
+        try:
+            rotation = doc.get_page_rotation(p_num)
+        except Exception:
+            rotation = 0
+
+        try:
+            page = doc.get_page(p_num)
+            paras = page.get_paragraphs()
+            para_count = len(paras)
+            preview_snippet = paras[0].text[:80].strip() if paras else ""
+        except Exception:
+            para_count = 0
+            preview_snippet = ""
+
+        pages_overview.append(
+            PageOverviewItem(
+                page_number=p_num,
+                page_index=p_num - 1,
+                rotation=rotation,
+                paragraph_count=para_count,
+                preview_snippet=preview_snippet,
+            )
+        )
+
+    return DocumentOverviewResponse(
+        document_id=doc_id,
+        filename=filename,
+        total_pages=total_pages,
+        pages=pages_overview,
+    )
+
+
+@app.get("/api/documents/{doc_id}/pages/{page_idx}/rotation")
+def get_page_rotation_endpoint(doc_id: str, page_idx: int):
+    """Gets the current rotation degrees for a specific page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        rotation = doc.get_page_rotation(page_idx)
+        return {"document_id": doc_id, "page_number": page_idx, "rotation": rotation}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 @app.post(

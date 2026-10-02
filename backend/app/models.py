@@ -34,6 +34,25 @@ class PageSceneGraph(BaseModel):
     paragraphs: List[ParagraphModel]
 
 
+class PageOverviewItem(BaseModel):
+    """Overview metadata and layout preview for a single page in thumbnail navigation."""
+    page_number: int
+    page_index: int
+    rotation: int
+    paragraph_count: int
+    preview_snippet: str
+    width: float = 612.0
+    height: float = 792.0
+
+
+class DocumentOverviewResponse(BaseModel):
+    """Collection of page summaries for multi-page thumbnail navigation."""
+    document_id: str
+    filename: str
+    total_pages: int
+    pages: List[PageOverviewItem]
+
+
 class DocumentUploadResponse(BaseModel):
     """Response returned upon successful document upload."""
     document_id: str

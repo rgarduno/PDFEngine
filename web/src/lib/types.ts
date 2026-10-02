@@ -396,5 +396,23 @@ export interface TableExportResponse {
   col_count: number;
 }
 
+export interface PageOverviewItem {
+  page_number: number;
+  page_index: number;
+  rotation: number;
+  paragraph_count: number;
+  preview_snippet: string;
+  width: number;
+  height: number;
+}
+
+export interface DocumentOverviewResponse {
+  document_id: string;
+  filename: string;
+  total_pages: number;
+  pages: PageOverviewItem[];
+}
+
+
 
 

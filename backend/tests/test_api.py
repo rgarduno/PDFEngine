@@ -1028,6 +1028,45 @@ def test_table_detection_and_export_workflow():
     assert b"Item,Price" in dl_resp.content
 
 
+def test_document_pages_overview_and_rotation_endpoints():
+    pdf_bytes = create_minimal_pdf_bytes()
+
+    # 1. Upload Doc
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("overview_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 2. Get pages overview
+    overview_resp = client.get(f"/api/documents/{doc_id}/pages/overview")
+    assert overview_resp.status_code == 200
+    data = overview_resp.json()
+    assert data["document_id"] == doc_id
+    assert data["total_pages"] == 1
+    assert len(data["pages"]) == 1
+    assert data["pages"][0]["page_number"] == 1
+    assert data["pages"][0]["rotation"] == 0
+    assert data["pages"][0]["paragraph_count"] >= 1
+
+    # 3. Rotate page and verify overview reflects new rotation
+    rot_resp = client.post(f"/api/documents/{doc_id}/pages/1/rotate", json={"degrees": 90})
+    assert rot_resp.status_code == 200
+    assert rot_resp.json()["new_rotation"] == 90
+
+    # 4. Check single page rotation endpoint
+    page_rot_resp = client.get(f"/api/documents/{doc_id}/pages/1/rotation")
+    assert page_rot_resp.status_code == 200
+    assert page_rot_resp.json()["rotation"] == 90
+
+    # 5. Check updated overview reflects 90 degrees
+    updated_overview_resp = client.get(f"/api/documents/{doc_id}/pages/overview")
+    assert updated_overview_resp.status_code == 200
+    assert updated_overview_resp.json()["pages"][0]["rotation"] == 90
+
+
+
 
 
 

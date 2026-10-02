@@ -32,6 +32,8 @@ import {
   SecurityActionResponse,
   PageTablesResponse,
   TableExportResponse,
+  PageOverviewItem,
+  DocumentOverviewResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1100,6 +1102,49 @@ export function getTableDownloadUrl(
 ): string {
   return `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables/${tableIdx}/export?format=${format}&download=true`;
 }
+
+export async function getDocumentOverview(
+  docId: string
+): Promise<DocumentOverviewResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/overview`);
+    if (!res.ok) throw new Error('Failed to get document overview');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend overview unavailable, using fallback mock:', e);
+    return {
+      document_id: docId,
+      filename: 'document.pdf',
+      total_pages: 1,
+      pages: [
+        {
+          page_number: 1,
+          page_index: 0,
+          rotation: 0,
+          paragraph_count: 3,
+          preview_snippet: 'Document Page 1 Preview',
+          width: 612,
+          height: 792,
+        },
+      ],
+    };
+  }
+}
+
+export async function getPageRotation(
+  docId: string,
+  pageIdx: number
+): Promise<number> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/rotation`);
+    if (!res.ok) throw new Error('Failed to get page rotation');
+    const data = await res.json();
+    return data.rotation ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 
 
 
