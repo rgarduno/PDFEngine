@@ -33,6 +33,10 @@ import {
   addPagination,
   addTextWatermark,
   addImageWatermark,
+  redactPattern,
+  redactText,
+  redactRegions,
+  sanitizeDocument,
 } from '@/lib/api';
 import {
   AddPaginationPayload,
@@ -43,6 +47,9 @@ import {
   ImageElement,
   Paragraph,
   TextAlignment,
+  RedactPatternPayload,
+  RedactTextPayload,
+  RedactRegionsPayload,
 } from '@/lib/types';
 
 export default function Home() {
@@ -631,6 +638,69 @@ export default function Home() {
     }
   };
 
+  // Surgical Redaction Handlers
+  const handleRedactPattern = async (payload: RedactPatternPayload) => {
+    try {
+      const res = await redactPattern(session.document_id, payload);
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      try {
+        const pageAnnots = await getPageAnnotations(session.document_id, currentPage);
+        setAnnotations(pageAnnots.annotations);
+      } catch {}
+      alert(`Redacción completada: ${res.total_purged_glyphs} glifo(s) purgados, ${res.total_blackout_boxes} caja(s) de oscurecimiento aplicadas, ${res.total_pruned_annotations} anotación(es) eliminadas.`);
+    } catch (err) {
+      console.error('Failed to redact pattern:', err);
+      alert('Error al aplicar la censura por patrón.');
+    }
+  };
+
+  const handleRedactText = async (payload: RedactTextPayload) => {
+    if (!payload.query || !payload.query.trim()) {
+      alert('Por favor ingrese el texto que desea censurar.');
+      return;
+    }
+    try {
+      const res = await redactText(session.document_id, payload);
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      try {
+        const pageAnnots = await getPageAnnotations(session.document_id, currentPage);
+        setAnnotations(pageAnnots.annotations);
+      } catch {}
+      alert(`Redacción de texto completada: ${res.total_purged_glyphs} glifo(s) purgados físicamente, ${res.total_blackout_boxes} caja(s) aplicadas.`);
+    } catch (err) {
+      console.error('Failed to redact text:', err);
+      alert('Error al censurar texto.');
+    }
+  };
+
+  const handleRedactRegions = async (payload: RedactRegionsPayload) => {
+    try {
+      const res = await redactRegions(session.document_id, payload);
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      try {
+        const pageAnnots = await getPageAnnotations(session.document_id, currentPage);
+        setAnnotations(pageAnnots.annotations);
+      } catch {}
+      alert(`Redacción por región completada en página ${payload.page_number}: ${res.total_blackout_boxes} bloque(s) censurados.`);
+    } catch (err) {
+      console.error('Failed to redact regions:', err);
+      alert('Error al censurar región.');
+    }
+  };
+
+  const handleSanitizeDocument = async (scrubMetadata: boolean = true) => {
+    try {
+      await sanitizeDocument(session.document_id, scrubMetadata);
+      alert('Higienización completada: Metadatos (/Info, XMP) eliminados con éxito.');
+    } catch (err) {
+      console.error('Failed to sanitize document:', err);
+      alert('Error al higienizar metadatos.');
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -836,6 +906,10 @@ export default function Home() {
           onApplyPagination={handleApplyPagination}
           onApplyTextWatermark={handleApplyTextWatermark}
           onTriggerImageWatermark={handleTriggerImageWatermark}
+          onRedactPattern={handleRedactPattern}
+          onRedactText={handleRedactText}
+          onRedactRegions={handleRedactRegions}
+          onSanitizeDocument={handleSanitizeDocument}
         />
       </div>
     </div>

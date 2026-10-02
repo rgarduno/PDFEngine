@@ -218,3 +218,71 @@ export interface WatermarkActionResponse {
   message: string;
 }
 
+export interface RedactionRegionItem {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+}
+
+export interface RedactRegionsPayload {
+  page_number: number;
+  regions: RedactionRegionItem[];
+  fill_color?: number[];
+  overlay_text?: string;
+  text_color?: number[];
+  font_size?: number;
+  prune_annotations?: boolean;
+}
+
+export interface RedactPatternPayload {
+  pattern_type: 'email' | 'phone' | 'ssn' | 'credit_card' | 'rfc' | 'curp' | 'text';
+  custom_query?: string;
+  case_sensitive?: boolean;
+  page_numbers?: number[];
+  fill_color?: number[];
+  overlay_text?: string;
+  text_color?: number[];
+  font_size?: number;
+  prune_annotations?: boolean;
+  scrub_metadata?: boolean;
+}
+
+export interface RedactTextPayload {
+  query: string;
+  case_sensitive?: boolean;
+  page_numbers?: number[];
+  fill_color?: number[];
+  overlay_text?: string;
+  text_color?: number[];
+  font_size?: number;
+  prune_annotations?: boolean;
+}
+
+export interface RedactionSummaryItem {
+  page_number: number;
+  purged_glyphs_count: number;
+  modified_blocks_count: number;
+  blackout_boxes_count: number;
+  pruned_annotations_count: number;
+  applied_rects: number[][];
+}
+
+export interface RedactionActionResponse {
+  success: boolean;
+  document_id: string;
+  total_purged_glyphs: number;
+  total_blackout_boxes: number;
+  total_pruned_annotations: number;
+  summaries: RedactionSummaryItem[];
+  message: string;
+}
+
+export interface SanitizeDocumentResponse {
+  success: boolean;
+  document_id: string;
+  modified: boolean;
+  message: string;
+}
+
+

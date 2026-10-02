@@ -26,10 +26,15 @@ import {
   Link2,
   Underline,
   Stamp,
+  EyeOff,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
   AddTextWatermarkPayload,
+  RedactPatternPayload,
+  RedactTextPayload,
+  RedactRegionsPayload,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -65,6 +70,10 @@ interface SidebarProps {
   onApplyPagination?: (payload: AddPaginationPayload) => void;
   onApplyTextWatermark?: (payload: AddTextWatermarkPayload) => void;
   onTriggerImageWatermark?: () => void;
+  onRedactPattern?: (payload: RedactPatternPayload) => void;
+  onRedactText?: (payload: RedactTextPayload) => void;
+  onRedactRegions?: (payload: RedactRegionsPayload) => void;
+  onSanitizeDocument?: (scrubMetadata: boolean) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -100,8 +109,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onApplyPagination,
   onApplyTextWatermark,
   onTriggerImageWatermark,
+  onRedactPattern,
+  onRedactText,
+  onRedactRegions,
+  onSanitizeDocument,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact'>('paragraphs');
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
 
   const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
@@ -117,6 +130,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [wmPlacement, setWmPlacement] = useState<'background' | 'foreground'>('background');
   const [wmTargetAll, setWmTargetAll] = useState<boolean>(true);
 
+  // Redaction & PII Sanitizer State
+  const [redactSubMode, setRedactSubMode] = useState<'pattern' | 'text' | 'region'>('pattern');
+  const [redactPatternType, setRedactPatternType] = useState<'email' | 'phone' | 'rfc' | 'curp' | 'credit_card' | 'ssn'>('email');
+  const [redactQueryText, setRedactQueryText] = useState<string>('');
+  const [redactOverlayLabel, setRedactOverlayLabel] = useState<string>('[REDACTADO]');
+  const [redactTargetAll, setRedactTargetAll] = useState<boolean>(true);
+  const [redactPruneAnnotations, setRedactPruneAnnotations] = useState<boolean>(true);
+  const [redactScrubMetadata, setRedactScrubMetadata] = useState<boolean>(true);
+  const [redactBoxMinX, setRedactBoxMinX] = useState<number>(72);
+  const [redactBoxMinY, setRedactBoxMinY] = useState<number>(700);
+  const [redactBoxMaxX, setRedactBoxMaxX] = useState<number>(250);
+  const [redactBoxMaxY, setRedactBoxMaxY] = useState<number>(720);
+
   return (
     <aside className="w-80 border-l border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 flex flex-col h-[calc(100vh-4rem)] select-none">
       {/* Header */}
@@ -131,72 +157,90 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-6 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-7 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'paragraphs'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Blocks"
           >
             <AlignLeft size={10} />
             <span>Blocks</span>
           </button>
           <button
             onClick={() => setActiveTab('images')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'images'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Images"
           >
             <ImageIcon size={10} />
             <span>Imgs</span>
           </button>
           <button
             onClick={() => setActiveTab('forms')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'forms'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Forms"
           >
             <FileText size={10} />
             <span>Forms</span>
           </button>
           <button
             onClick={() => setActiveTab('annots')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'annots'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Annotations"
           >
             <Highlighter size={10} />
             <span>Marks</span>
           </button>
           <button
             onClick={() => setActiveTab('pages')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'pages'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Pages"
           >
             <FileStack size={10} />
             <span>Pages</span>
           </button>
           <button
             onClick={() => setActiveTab('watermark')}
-            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
               activeTab === 'watermark'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
+            title="Watermark & Pagination"
           >
             <Stamp size={10} />
             <span>Folio</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('redact')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'redact'
+                ? 'bg-rose-600 text-white font-semibold shadow-xs'
+                : 'text-rose-600 hover:text-rose-700 dark:hover:text-rose-400'
+            }`}
+            title="Censura Quirúrgica e Irreversible"
+          >
+            <EyeOff size={10} />
+            <span>Censura</span>
           </button>
         </div>
       </div>
@@ -1013,6 +1057,316 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Plus size={12} />
                 <span>Upload & Apply Logo Watermark...</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 7: Redaction & Sanitization Panel */}
+        {activeTab === 'redact' && (
+          <div className="space-y-4">
+            {/* Warning Banner */}
+            <div className="p-3 rounded-lg border border-rose-300 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/30 text-rose-900 dark:text-rose-200 space-y-1.5">
+              <div className="flex items-center gap-1.5 font-semibold text-xs text-rose-700 dark:text-rose-300">
+                <ShieldAlert size={14} className="text-rose-600 dark:text-rose-400 shrink-0" />
+                <span>ISO 32000-1 §14.11 Legal Redaction</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-rose-800 dark:text-rose-300/90">
+                Los glifos y streams son destruidos e invalidados físicamente del AST binario en lugar de ocultarse con una capa visual. Operación irreversible.
+              </p>
+            </div>
+
+            {/* Sub-mode selector */}
+            <div className="grid grid-cols-3 gap-1 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setRedactSubMode('pattern')}
+                className={`py-1 text-[10px] font-medium rounded-md transition-all cursor-pointer ${
+                  redactSubMode === 'pattern'
+                    ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs font-semibold'
+                    : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                }`}
+              >
+                Patrón PII
+              </button>
+              <button
+                type="button"
+                onClick={() => setRedactSubMode('text')}
+                className={`py-1 text-[10px] font-medium rounded-md transition-all cursor-pointer ${
+                  redactSubMode === 'text'
+                    ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs font-semibold'
+                    : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                }`}
+              >
+                Texto Exacto
+              </button>
+              <button
+                type="button"
+                onClick={() => setRedactSubMode('region')}
+                className={`py-1 text-[10px] font-medium rounded-md transition-all cursor-pointer ${
+                  redactSubMode === 'region'
+                    ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs font-semibold'
+                    : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                }`}
+              >
+                Coordenadas
+              </button>
+            </div>
+
+            {/* Mode 1: PII Pattern Presets */}
+            {redactSubMode === 'pattern' && (
+              <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                    Tipo de Dato Sensible
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-mono">Regex Scan</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { id: 'email', label: 'Emails / Correo' },
+                    { id: 'phone', label: 'Teléfonos (+52 / Int)' },
+                    { id: 'rfc', label: 'RFC Mexicano' },
+                    { id: 'curp', label: 'CURP Mexicano' },
+                    { id: 'credit_card', label: 'Tarjetas (Luhn)' },
+                    { id: 'ssn', label: 'SSN (Seguro Social)' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setRedactPatternType(p.id as any)}
+                      className={`text-left text-[10px] px-2 py-1.5 rounded border transition-colors cursor-pointer ${
+                        redactPatternType === p.id
+                          ? 'border-rose-500 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 font-semibold'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Mode 2: Exact Text Query */}
+            {redactSubMode === 'text' && (
+              <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                    Buscar y Eliminar Texto
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-mono">AST Search</span>
+                </div>
+                <input
+                  type="text"
+                  value={redactQueryText}
+                  onChange={(e) => setRedactQueryText(e.target.value)}
+                  placeholder="Ej: Juan Pérez, 1234-5678..."
+                  className="w-full text-xs px-2.5 py-1.5 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-rose-500"
+                />
+                <p className="text-[10px] text-neutral-400">
+                  Búsqueda insensible a mayúsculas/minúsculas. Elimina los glifos correspondientes del flujo de texto.
+                </p>
+              </div>
+            )}
+
+            {/* Mode 3: Manual Bounding Box Coordinates */}
+            {redactSubMode === 'region' && (
+              <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                    Caja Delimitadora (Puntos PDF)
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-mono">72 pt = 1 pulg</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <label className="text-[10px] text-neutral-500 font-medium">Min X</label>
+                    <input
+                      type="number"
+                      value={redactBoxMinX}
+                      onChange={(e) => setRedactBoxMinX(Number(e.target.value))}
+                      className="w-full mt-0.5 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-neutral-500 font-medium">Min Y</label>
+                    <input
+                      type="number"
+                      value={redactBoxMinY}
+                      onChange={(e) => setRedactBoxMinY(Number(e.target.value))}
+                      className="w-full mt-0.5 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-neutral-500 font-medium">Max X</label>
+                    <input
+                      type="number"
+                      value={redactBoxMaxX}
+                      onChange={(e) => setRedactBoxMaxX(Number(e.target.value))}
+                      className="w-full mt-0.5 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-neutral-500 font-medium">Max Y</label>
+                    <input
+                      type="number"
+                      value={redactBoxMaxY}
+                      onChange={(e) => setRedactBoxMaxY(Number(e.target.value))}
+                      className="w-full mt-0.5 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Redaction Options Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2.5">
+              <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                Opciones de Censura
+              </span>
+
+              {/* Overlay Text */}
+              <div>
+                <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                  Etiqueta Superpuesta (Opcional)
+                </label>
+                <div className="flex gap-1 mt-1">
+                  <input
+                    type="text"
+                    value={redactOverlayLabel}
+                    onChange={(e) => setRedactOverlayLabel(e.target.value)}
+                    placeholder="Ej: [REDACTADO], [CENSURADO]"
+                    className="flex-1 text-xs px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRedactOverlayLabel('')}
+                    className="px-2 py-1 text-[10px] border border-neutral-300 dark:border-neutral-700 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-400 cursor-pointer"
+                    title="Caja negra pura"
+                  >
+                    Negro Puro
+                  </button>
+                </div>
+              </div>
+
+              {/* Scope */}
+              {redactSubMode !== 'region' && (
+                <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400 pt-1">
+                  <span className="text-[11px]">Alcance:</span>
+                  <div className="flex gap-2">
+                    <label className="flex items-center gap-1 cursor-pointer text-[11px]">
+                      <input
+                        type="radio"
+                        name="redactScope"
+                        checked={redactTargetAll}
+                        onChange={() => setRedactTargetAll(true)}
+                      />
+                      <span>Todo ({totalPages} págs)</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer text-[11px]">
+                      <input
+                        type="radio"
+                        name="redactScope"
+                        checked={!redactTargetAll}
+                        onChange={() => setRedactTargetAll(false)}
+                      />
+                      <span>Pág {pageNumber}</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Annotation Pruning & Metadata Scrubbing Checkboxes */}
+              <div className="space-y-1.5 pt-1">
+                <label className="flex items-start gap-1.5 cursor-pointer text-[11px] text-neutral-700 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={redactPruneAnnotations}
+                    onChange={(e) => setRedactPruneAnnotations(e.target.checked)}
+                    className="mt-0.5 rounded text-rose-600"
+                  />
+                  <span>Podar anotaciones (/Link, /Highlight) en zonas censuradas</span>
+                </label>
+
+                {redactSubMode === 'pattern' && (
+                  <label className="flex items-start gap-1.5 cursor-pointer text-[11px] text-neutral-700 dark:text-neutral-300">
+                    <input
+                      type="checkbox"
+                      checked={redactScrubMetadata}
+                      onChange={(e) => setRedactScrubMetadata(e.target.checked)}
+                      className="mt-0.5 rounded text-rose-600"
+                    />
+                    <span>Higienizar metadatos del documento (/Info, XMP)</span>
+                  </label>
+                )}
+              </div>
+
+              {/* Execute Redaction Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (redactSubMode === 'pattern') {
+                    onRedactPattern?.({
+                      pattern_type: redactPatternType,
+                      page_numbers: redactTargetAll ? undefined : [pageNumber],
+                      overlay_text: redactOverlayLabel.trim() || undefined,
+                      prune_annotations: redactPruneAnnotations,
+                      scrub_metadata: redactScrubMetadata,
+                    });
+                  } else if (redactSubMode === 'text') {
+                    if (!redactQueryText.trim()) {
+                      alert('Por favor ingrese el texto a censurar.');
+                      return;
+                    }
+                    onRedactText?.({
+                      query: redactQueryText.trim(),
+                      case_sensitive: false,
+                      page_numbers: redactTargetAll ? undefined : [pageNumber],
+                      overlay_text: redactOverlayLabel.trim() || undefined,
+                      prune_annotations: redactPruneAnnotations,
+                    });
+                  } else if (redactSubMode === 'region') {
+                    onRedactRegions?.({
+                      page_number: pageNumber,
+                      regions: [
+                        {
+                          min_x: redactBoxMinX,
+                          min_y: redactBoxMinY,
+                          max_x: redactBoxMaxX,
+                          max_y: redactBoxMaxY,
+                        },
+                      ],
+                      overlay_text: redactOverlayLabel.trim() || undefined,
+                      prune_annotations: redactPruneAnnotations,
+                    });
+                  }
+                }}
+                className="w-full mt-2 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <EyeOff size={13} />
+                <span>Aplicar Censura Quirúrgica</span>
+              </button>
+            </div>
+
+            {/* Standalone Metadata Sanitizer Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                  Higienización de Metadatos
+                </span>
+                <span className="text-[10px] text-neutral-400 font-mono">/Info + XMP</span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Purga autor, creador, software, fechas y streams de metadatos XML XMP para evitar fugas de privacidad.
+              </p>
+              <button
+                type="button"
+                onClick={() => onSanitizeDocument?.(true)}
+                className="w-full py-1.5 px-3 bg-neutral-800 hover:bg-neutral-900 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-white rounded text-xs font-medium transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <ShieldAlert size={12} className="text-amber-400" />
+                <span>Purgar Metadatos del Documento</span>
               </button>
             </div>
           </div>

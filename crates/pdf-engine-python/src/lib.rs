@@ -22,6 +22,9 @@ use pdf_engine_core::watermark::{
     ImageWatermarkConfig, PaginationConfig, PaginationPosition, TextWatermarkConfig,
     WatermarkPlacement,
 };
+use pdf_engine_core::redact::{
+    RedactionConfig, RedactionPattern, RedactionRect, RedactionSummary,
+};
 
 
 /// High-level representation of an extracted paragraph block in Python.
@@ -245,6 +248,56 @@ impl PyAnnotation {
             link_target_page,
             stamp_type,
             date_str: a.date_str,
+        }
+    }
+}
+
+/// High-level representation of an applied redaction pass in Python.
+#[pyclass(name = "RedactionSummary")]
+#[derive(Debug, Clone)]
+pub struct PyRedactionSummary {
+    #[pyo3(get)]
+    pub page_index: usize,
+    #[pyo3(get)]
+    pub page_number: usize,
+    #[pyo3(get)]
+    pub purged_glyphs_count: usize,
+    #[pyo3(get)]
+    pub modified_blocks_count: usize,
+    #[pyo3(get)]
+    pub blackout_boxes_count: usize,
+    #[pyo3(get)]
+    pub pruned_annotations_count: usize,
+    #[pyo3(get)]
+    pub applied_rects: Vec<(f64, f64, f64, f64)>,
+}
+
+#[pymethods]
+impl PyRedactionSummary {
+    fn __repr__(&self) -> String {
+        format!(
+            "<RedactionSummary page={} purged_glyphs={} blackout_boxes={} pruned_annots={}>",
+            self.page_number, self.purged_glyphs_count, self.blackout_boxes_count, self.pruned_annotations_count
+        )
+    }
+}
+
+impl PyRedactionSummary {
+    pub(crate) fn from_core(s: RedactionSummary) -> Self {
+        let rects = s
+            .applied_rects
+            .into_iter()
+            .map(|r| (r.min_x, r.min_y, r.max_x, r.max_y))
+            .collect();
+
+        PyRedactionSummary {
+            page_index: s.page_index,
+            page_number: s.page_index + 1,
+            purged_glyphs_count: s.purged_glyphs_count,
+            modified_blocks_count: s.modified_blocks_count,
+            blackout_boxes_count: s.blackout_boxes_count,
+            pruned_annotations_count: s.pruned_annotations_count,
+            applied_rects: rects,
         }
     }
 }
@@ -1069,6 +1122,211 @@ impl PyPdfDocument {
         Ok(count)
     }
 
+    /// Redacts specific rectangular bounding boxes on a target page.
+    #[pyo3(signature = (page_index, regions, fill_color=None, overlay_text=None, text_color=None, font_size=None, prune_annotations=None))]
+    pub fn redact_regions(
+        &mut self,
+        page_index: usize,
+        regions: Vec<(f64, f64, f64, f64)>,
+        fill_color: Option<(f64, f64, f64)>,
+        overlay_text: Option<String>,
+        text_color: Option<(f64, f64, f64)>,
+        font_size: Option<f64>,
+        prune_annotations: Option<bool>,
+    ) -> PyResult<PyRedactionSummary> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+
+        let mut config = RedactionConfig::default();
+        if let Some((r, g, b)) = fill_color {
+            config.fill_color = [r, g, b];
+        }
+        if let Some(text) = overlay_text {
+            config.overlay_text = Some(text);
+        }
+        if let Some((r, g, b)) = text_color {
+            config.text_color = [r, g, b];
+        }
+        if let Some(sz) = font_size {
+            config.font_size = Some(sz);
+        }
+        if let Some(prune) = prune_annotations {
+            config.prune_annotations = prune;
+        }
+
+        let rects: Vec<Rect> = regions
+            .into_iter()
+            .map(|(x1, y1, x2, y2)| Rect::new(x1, y1, x2, y2))
+            .collect();
+
+        let summary = pdf_engine_core::redact::redact_document_rectangles(
+            &mut self.doc,
+            zero_idx,
+            &rects,
+            &config,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Redaction failed: {}", e)))?;
+
+        self.reload_active_pages();
+        Ok(PyRedactionSummary::from_core(summary))
+    }
+
+    /// Scans the document for a sensitive data pattern and redacts all occurrences.
+    #[pyo3(signature = (pattern_type, custom_query=None, case_sensitive=None, page_indices=None, fill_color=None, overlay_text=None, text_color=None, font_size=None, prune_annotations=None, scrub_metadata=None, padding=None))]
+    pub fn redact_pattern(
+        &mut self,
+        pattern_type: String,
+        custom_query: Option<String>,
+        case_sensitive: Option<bool>,
+        page_indices: Option<Vec<usize>>,
+        fill_color: Option<(f64, f64, f64)>,
+        overlay_text: Option<String>,
+        text_color: Option<(f64, f64, f64)>,
+        font_size: Option<f64>,
+        prune_annotations: Option<bool>,
+        scrub_metadata: Option<bool>,
+        padding: Option<f64>,
+    ) -> PyResult<Vec<PyRedactionSummary>> {
+        let pattern = RedactionPattern::from_name(
+            &pattern_type,
+            custom_query.as_deref(),
+            case_sensitive.unwrap_or(false),
+        )
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Invalid redaction pattern type: '{}'. Valid options: email, phone, ssn, credit_card, rfc, curp, text",
+                pattern_type
+            ))
+        })?;
+
+        let mut config = RedactionConfig::default();
+        if let Some((r, g, b)) = fill_color {
+            config.fill_color = [r, g, b];
+        }
+        if let Some(text) = overlay_text {
+            config.overlay_text = Some(text);
+        }
+        if let Some((r, g, b)) = text_color {
+            config.text_color = [r, g, b];
+        }
+        if let Some(sz) = font_size {
+            config.font_size = Some(sz);
+        }
+        if let Some(prune) = prune_annotations {
+            config.prune_annotations = prune;
+        }
+        if let Some(scrub) = scrub_metadata {
+            config.scrub_metadata = scrub;
+        }
+        if let Some(pad) = padding {
+            config.padding = pad;
+        }
+
+        let zero_indices: Option<Vec<usize>> = page_indices.map(|indices| {
+            indices
+                .into_iter()
+                .map(|idx| {
+                    if idx > 0 && idx <= self.page_ids.len() {
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                })
+                .collect()
+        });
+
+        let summaries = pdf_engine_core::redact::redact_document_pattern(
+            &mut self.doc,
+            &pattern,
+            zero_indices.as_deref(),
+            &config,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Pattern redaction failed: {}", e)))?;
+
+        self.reload_active_pages();
+        Ok(summaries
+            .into_iter()
+            .map(PyRedactionSummary::from_core)
+            .collect())
+    }
+
+    /// Redacts all occurrences of a search text string across target pages.
+    #[pyo3(signature = (query, case_sensitive=None, page_indices=None, fill_color=None, overlay_text=None, text_color=None, font_size=None, prune_annotations=None, padding=None))]
+    pub fn redact_text(
+        &mut self,
+        query: String,
+        case_sensitive: Option<bool>,
+        page_indices: Option<Vec<usize>>,
+        fill_color: Option<(f64, f64, f64)>,
+        overlay_text: Option<String>,
+        text_color: Option<(f64, f64, f64)>,
+        font_size: Option<f64>,
+        prune_annotations: Option<bool>,
+        padding: Option<f64>,
+    ) -> PyResult<Vec<PyRedactionSummary>> {
+        let pattern = RedactionPattern::Text {
+            query,
+            case_sensitive: case_sensitive.unwrap_or(false),
+        };
+
+        let mut config = RedactionConfig::default();
+        if let Some((r, g, b)) = fill_color {
+            config.fill_color = [r, g, b];
+        }
+        if let Some(text) = overlay_text {
+            config.overlay_text = Some(text);
+        }
+        if let Some((r, g, b)) = text_color {
+            config.text_color = [r, g, b];
+        }
+        if let Some(sz) = font_size {
+            config.font_size = Some(sz);
+        }
+        if let Some(prune) = prune_annotations {
+            config.prune_annotations = prune;
+        }
+        if let Some(pad) = padding {
+            config.padding = pad;
+        }
+
+        let zero_indices: Option<Vec<usize>> = page_indices.map(|indices| {
+            indices
+                .into_iter()
+                .map(|idx| {
+                    if idx > 0 && idx <= self.page_ids.len() {
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                })
+                .collect()
+        });
+
+        let summaries = pdf_engine_core::redact::redact_document_pattern(
+            &mut self.doc,
+            &pattern,
+            zero_indices.as_deref(),
+            &config,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Text redaction failed: {}", e)))?;
+
+        self.reload_active_pages();
+        Ok(summaries
+            .into_iter()
+            .map(PyRedactionSummary::from_core)
+            .collect())
+    }
+
+    /// Scrubs sensitive metadata from the document (/Info dictionary and /Metadata XMP).
+    pub fn sanitize_document(&mut self) -> PyResult<bool> {
+        let modified = pdf_engine_core::redact::scrub_document_metadata(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Sanitization failed: {}", e)))?;
+        Ok(modified)
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -1111,6 +1369,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyFormField>()?;
     m.add_class::<PyAnnotation>()?;
+    m.add_class::<PyRedactionSummary>()?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

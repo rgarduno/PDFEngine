@@ -713,5 +713,126 @@ def test_pagination_and_watermarks_workflow():
     assert b"P\xc3\xa1gina 1 de 1" in export_resp.content or b"de 1" in export_resp.content
 
 
+def test_redaction_and_sanitization_workflow():
+    """Validates irreversible content redaction and document metadata scrubbing endpoints."""
+    # 1. Create a PDF with sensitive text and metadata
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R /Annots [ 5 0 R ] >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Contact agent at classified@intel.gov for code 123-45-6789) Tj\nET\n"
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"\nendstream\nendobj\n")
+
+    off5 = len(pdf)
+    pdf.extend(
+        b"5 0 obj\n<< /Type /Annot /Subtype /Link /Rect [ 150 690 300 715 ] >>\nendobj\n"
+    )
+
+    off6 = len(pdf)
+    pdf.extend(
+        b"6 0 obj\n<< /Author (Special Agent) /Title (Secret Operation) >>\nendobj\n"
+    )
+
+    xref_offset = len(pdf)
+    pdf.extend(b"xref\n0 7\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010} 00000 n \n".encode())
+    pdf.extend(f"{off2:010} 00000 n \n".encode())
+    pdf.extend(f"{off3:010} 00000 n \n".encode())
+    pdf.extend(f"{off4:010} 00000 n \n".encode())
+    pdf.extend(f"{off5:010} 00000 n \n".encode())
+    pdf.extend(f"{off6:010} 00000 n \n".encode())
+
+    pdf.extend(b"trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\n")
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+    pdf_bytes = bytes(pdf)
+
+    # 2. Upload document
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("classified.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 3. Test Pattern Redaction (Email) with metadata scrubbing and annotation pruning
+    pattern_resp = client.post(
+        f"/api/documents/{doc_id}/redact/pattern",
+        json={
+            "pattern_type": "email",
+            "overlay_text": "[CENSURADO]",
+            "scrub_metadata": True,
+            "prune_annotations": True,
+        },
+    )
+    assert pattern_resp.status_code == 200
+    pattern_data = pattern_resp.json()
+    assert pattern_data["success"] is True
+    assert pattern_data["total_blackout_boxes"] == 1
+    assert pattern_data["total_purged_glyphs"] > 0
+    assert pattern_data["total_pruned_annotations"] == 1
+
+    # Verify content stream: email MUST BE PURGED
+    export_resp1 = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp1.status_code == 200
+    assert b"classified@intel.gov" not in export_resp1.content
+    assert b"Contact agent at" in export_resp1.content
+    assert b"[CENSURADO]" in export_resp1.content
+
+    # 4. Test Text Redaction: redact "123-45-6789"
+    text_resp = client.post(
+        f"/api/documents/{doc_id}/redact/text",
+        json={
+            "query": "123-45-6789",
+            "overlay_text": "[TOP SECRET]",
+        },
+    )
+    assert text_resp.status_code == 200
+    text_data = text_resp.json()
+    assert text_data["success"] is True
+    assert text_data["total_blackout_boxes"] == 1
+
+    # Verify content stream: SSN MUST BE PURGED
+    export_resp2 = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp2.status_code == 200
+    assert b"123-45-6789" not in export_resp2.content
+    assert b"[TOP SECRET]" in export_resp2.content
+
+    # 5. Test Regions Redaction: redact coordinates [70, 695, 120, 715] ("Contact")
+    regions_resp = client.post(
+        f"/api/documents/{doc_id}/redact/regions",
+        json={
+            "page_number": 1,
+            "regions": [
+                {"min_x": 70.0, "min_y": 695.0, "max_x": 120.0, "max_y": 715.0}
+            ],
+            "overlay_text": "",
+        },
+    )
+    assert regions_resp.status_code == 200
+    assert regions_resp.json()["success"] is True
+
+    # 6. Test Document Sanitization
+    sanitize_resp = client.post(
+        f"/api/documents/{doc_id}/sanitize",
+        json={"scrub_metadata": True},
+    )
+    assert sanitize_resp.status_code == 200
+    assert sanitize_resp.json()["success"] is True
+
+
+
 
 

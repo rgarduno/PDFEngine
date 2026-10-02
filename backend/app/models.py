@@ -292,3 +292,83 @@ class WatermarkActionResponse(BaseModel):
     affected_pages: int
     message: str
 
+
+class RedactionRegionItem(BaseModel):
+    """Spatial bounding box rectangle for redaction."""
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+
+class RedactRegionsRequest(BaseModel):
+    """Request payload to redact specific rectangular areas on a page."""
+    page_number: int = Field(default=1, description="Target 1-based page number")
+    regions: List[RedactionRegionItem] = Field(description="Bounding boxes to redact")
+    fill_color: Optional[List[float]] = Field(default=[0.0, 0.0, 0.0], description="RGB fill color [r, g, b]")
+    overlay_text: Optional[str] = Field(default="[REDACTADO]", description="Overlay label centered on blackout box")
+    text_color: Optional[List[float]] = Field(default=[1.0, 1.0, 1.0], description="RGB overlay text color [r, g, b]")
+    font_size: Optional[float] = Field(default=None, description="Font size or auto-calculated if None")
+    prune_annotations: Optional[bool] = Field(default=True, description="Remove intersecting link and markup annotations")
+
+
+class RedactPatternRequest(BaseModel):
+    """Request payload to scan and redact sensitive PII patterns across pages."""
+    pattern_type: str = Field(default="email", description="email, phone, ssn, credit_card, rfc, curp, text")
+    custom_query: Optional[str] = Field(default=None, description="Search query if pattern_type is text")
+    case_sensitive: Optional[bool] = Field(default=False, description="Case-sensitive matching")
+    page_numbers: Optional[List[int]] = Field(default=None, description="1-based page numbers or null for all")
+    fill_color: Optional[List[float]] = Field(default=[0.0, 0.0, 0.0], description="RGB fill color [r, g, b]")
+    overlay_text: Optional[str] = Field(default="[REDACTADO]", description="Overlay label centered on blackout box")
+    text_color: Optional[List[float]] = Field(default=[1.0, 1.0, 1.0], description="RGB overlay text color [r, g, b]")
+    font_size: Optional[float] = Field(default=None, description="Font size or auto-calculated if None")
+    prune_annotations: Optional[bool] = Field(default=True, description="Remove intersecting link and markup annotations")
+    scrub_metadata: Optional[bool] = Field(default=False, description="Scrub Info dictionary and XMP metadata")
+
+
+class RedactTextRequest(BaseModel):
+    """Request payload to redact exact text occurrences."""
+    query: str = Field(description="Search text to excise and redact")
+    case_sensitive: Optional[bool] = Field(default=False, description="Case-sensitive search")
+    page_numbers: Optional[List[int]] = Field(default=None, description="1-based page numbers or null for all")
+    fill_color: Optional[List[float]] = Field(default=[0.0, 0.0, 0.0], description="RGB fill color [r, g, b]")
+    overlay_text: Optional[str] = Field(default="[REDACTADO]", description="Overlay label centered on blackout box")
+    text_color: Optional[List[float]] = Field(default=[1.0, 1.0, 1.0], description="RGB overlay text color [r, g, b]")
+    font_size: Optional[float] = Field(default=None, description="Font size or auto-calculated if None")
+    prune_annotations: Optional[bool] = Field(default=True, description="Remove intersecting link and markup annotations")
+
+
+class SanitizeDocumentRequest(BaseModel):
+    """Request payload to purge sensitive metadata from the document."""
+    scrub_metadata: Optional[bool] = Field(default=True, description="Wipe Author, Title, Creator, and XMP Metadata")
+
+
+class RedactionSummaryModel(BaseModel):
+    """Summary of redaction results per page."""
+    page_number: int
+    purged_glyphs_count: int
+    modified_blocks_count: int
+    blackout_boxes_count: int
+    pruned_annotations_count: int
+    applied_rects: List[List[float]]
+
+
+class RedactionActionResponse(BaseModel):
+    """Response returned upon applying redactions."""
+    success: bool
+    document_id: str
+    total_purged_glyphs: int
+    total_blackout_boxes: int
+    total_pruned_annotations: int
+    summaries: List[RedactionSummaryModel]
+    message: str
+
+
+class SanitizeDocumentResponse(BaseModel):
+    """Response returned upon sanitizing document metadata."""
+    success: bool
+    document_id: str
+    modified: bool
+    message: str
+
+

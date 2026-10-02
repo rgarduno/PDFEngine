@@ -48,6 +48,14 @@ from app.models import (
     SplitDocumentRequest,
     SplitDocumentResponse,
     WatermarkActionResponse,
+    RedactionRegionItem,
+    RedactRegionsRequest,
+    RedactPatternRequest,
+    RedactTextRequest,
+    SanitizeDocumentRequest,
+    RedactionSummaryModel,
+    RedactionActionResponse,
+    SanitizeDocumentResponse,
 )
 
 app = FastAPI(
@@ -957,4 +965,188 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int):
                 await websocket.send_json({"status": "error", "message": str(e)})
     except WebSocketDisconnect:
         pass
+
+
+@app.post(
+    "/api/documents/{doc_id}/redact/regions",
+    response_model=RedactionActionResponse,
+)
+def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
+    """Irreversibly excises text glyphs and draws opaque blackout boxes on target coordinates."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        regions_tuples = [(r.min_x, r.min_y, r.max_x, r.max_y) for r in request.regions]
+        fill_tuple = tuple(request.fill_color) if request.fill_color and len(request.fill_color) == 3 else (0.0, 0.0, 0.0)
+        text_tuple = tuple(request.text_color) if request.text_color and len(request.text_color) == 3 else (1.0, 1.0, 1.0)
+
+        summary = doc.redact_regions(
+            request.page_number,
+            regions_tuples,
+            fill_color=fill_tuple,
+            overlay_text=request.overlay_text,
+            text_color=text_tuple,
+            font_size=request.font_size,
+            prune_annotations=request.prune_annotations,
+        )
+
+        summary_model = RedactionSummaryModel(
+            page_number=summary.page_number,
+            purged_glyphs_count=summary.purged_glyphs_count,
+            modified_blocks_count=summary.modified_blocks_count,
+            blackout_boxes_count=summary.blackout_boxes_count,
+            pruned_annotations_count=summary.pruned_annotations_count,
+            applied_rects=[list(r) for r in summary.applied_rects],
+        )
+
+        return RedactionActionResponse(
+            success=True,
+            document_id=doc_id,
+            total_purged_glyphs=summary.purged_glyphs_count,
+            total_blackout_boxes=summary.blackout_boxes_count,
+            total_pruned_annotations=summary.pruned_annotations_count,
+            summaries=[summary_model],
+            message=f"Applied {summary.blackout_boxes_count} redaction(s) on page {request.page_number} (purged {summary.purged_glyphs_count} glyphs).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to redact regions: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/redact/pattern",
+    response_model=RedactionActionResponse,
+)
+def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
+    """Scans pages for sensitive PII (Email, Phone, SSN, Credit Card, RFC, CURP) and redacts matches."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        fill_tuple = tuple(request.fill_color) if request.fill_color and len(request.fill_color) == 3 else (0.0, 0.0, 0.0)
+        text_tuple = tuple(request.text_color) if request.text_color and len(request.text_color) == 3 else (1.0, 1.0, 1.0)
+
+        summaries = doc.redact_pattern(
+            pattern_type=request.pattern_type,
+            custom_query=request.custom_query,
+            case_sensitive=request.case_sensitive,
+            page_indices=request.page_numbers,
+            fill_color=fill_tuple,
+            overlay_text=request.overlay_text,
+            text_color=text_tuple,
+            font_size=request.font_size,
+            prune_annotations=request.prune_annotations,
+            scrub_metadata=request.scrub_metadata,
+        )
+
+        summary_models = [
+            RedactionSummaryModel(
+                page_number=s.page_number,
+                purged_glyphs_count=s.purged_glyphs_count,
+                modified_blocks_count=s.modified_blocks_count,
+                blackout_boxes_count=s.blackout_boxes_count,
+                pruned_annotations_count=s.pruned_annotations_count,
+                applied_rects=[list(r) for r in s.applied_rects],
+            )
+            for s in summaries
+        ]
+
+        tot_glyphs = sum(s.purged_glyphs_count for s in summaries)
+        tot_boxes = sum(s.blackout_boxes_count for s in summaries)
+        tot_annots = sum(s.pruned_annotations_count for s in summaries)
+
+        return RedactionActionResponse(
+            success=True,
+            document_id=doc_id,
+            total_purged_glyphs=tot_glyphs,
+            total_blackout_boxes=tot_boxes,
+            total_pruned_annotations=tot_annots,
+            summaries=summary_models,
+            message=f"Redacted {tot_boxes} occurrence(s) across {len(summaries)} page(s) (purged {tot_glyphs} glyphs).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to redact pattern: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/redact/text",
+    response_model=RedactionActionResponse,
+)
+def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
+    """Finds exact string matches across pages, removes them from content streams, and blacks them out."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        fill_tuple = tuple(request.fill_color) if request.fill_color and len(request.fill_color) == 3 else (0.0, 0.0, 0.0)
+        text_tuple = tuple(request.text_color) if request.text_color and len(request.text_color) == 3 else (1.0, 1.0, 1.0)
+
+        summaries = doc.redact_text(
+            query=request.query,
+            case_sensitive=request.case_sensitive,
+            page_indices=request.page_numbers,
+            fill_color=fill_tuple,
+            overlay_text=request.overlay_text,
+            text_color=text_tuple,
+            font_size=request.font_size,
+            prune_annotations=request.prune_annotations,
+        )
+
+        summary_models = [
+            RedactionSummaryModel(
+                page_number=s.page_number,
+                purged_glyphs_count=s.purged_glyphs_count,
+                modified_blocks_count=s.modified_blocks_count,
+                blackout_boxes_count=s.blackout_boxes_count,
+                pruned_annotations_count=s.pruned_annotations_count,
+                applied_rects=[list(r) for r in s.applied_rects],
+            )
+            for s in summaries
+        ]
+
+        tot_glyphs = sum(s.purged_glyphs_count for s in summaries)
+        tot_boxes = sum(s.blackout_boxes_count for s in summaries)
+        tot_annots = sum(s.pruned_annotations_count for s in summaries)
+
+        return RedactionActionResponse(
+            success=True,
+            document_id=doc_id,
+            total_purged_glyphs=tot_glyphs,
+            total_blackout_boxes=tot_boxes,
+            total_pruned_annotations=tot_annots,
+            summaries=summary_models,
+            message=f"Redacted '{request.query}': {tot_boxes} occurrence(s) across {len(summaries)} page(s).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to redact text: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/sanitize",
+    response_model=SanitizeDocumentResponse,
+)
+def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
+    """Purges sensitive document metadata (/Info dictionary and /Metadata XMP stream)."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        modified = doc.sanitize_document() if request.scrub_metadata else False
+        return SanitizeDocumentResponse(
+            success=True,
+            document_id=doc_id,
+            modified=modified,
+            message="Document metadata sanitized successfully." if modified else "No metadata modified.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to sanitize document: {e}")
+
 

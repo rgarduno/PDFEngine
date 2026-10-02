@@ -98,7 +98,15 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Semitransparent text watermarks with matrix rotation and /ExtGState /ca│
 │    - Embedded image watermarks (PNG/JPEG) with background/foreground depth  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 10. Security & Resource Hardening                                           │
+│ 10. Surgical Redaction & PII Sanitizer (ISO 32000-1 §14.11)                 │
+│    - Physical glyph & stream excision from AST (no visual-only hiding)      │
+│    - Zero layout shift: coordinates of non-redacted text preserved via Tm   │
+│    - Automated PII scanning: Email, Phone, RFC, CURP, Credit Card (Luhn)    │
+│    - Opaque blackout vector patches (`re f`) with centered overlay labels   │
+│    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
+│    - Complete metadata scrubbing: /Info dictionary & /Metadata XMP stream   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 11. Security & Resource Hardening                                           │
 │    - Bounded Flate expansion: 100:1 max ratio, 250 MB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Active code neutralization (strips /JavaScript, /Launch, /SubmitForm) │
@@ -127,11 +135,13 @@ PDFEngine/
 │   │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
 │   │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
 │   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
+│   │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
+│   │   │   ├── redact/         # ISO 32000-1 §14.11 legal redaction, PII scanning & metadata scrubbing
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
 │       ├── Cargo.toml
-│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation exports
+│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation, PyRedaction exports
 ├── backend/                    # Commercial FastAPI REST & WebSocket service
 │   ├── app/
 │   │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
@@ -312,6 +322,10 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `POST` | `/api/documents/{id}/pagination` | Apply dynamic Bates numbering & headers/footers with `{page}` and `{total}`. |
 | `POST` | `/api/documents/{id}/watermark/text` | Apply semi-transparent rotated text watermark (`/ExtGState /ca`). |
 | `POST` | `/api/documents/{id}/watermark/image` | Embed semi-transparent image watermark (PNG/JPEG) with depth placement. |
+| `POST` | `/api/documents/{id}/redact/regions` | Surgically excise glyphs in coordinate bounding boxes with blackout patches and overlay label. |
+| `POST` | `/api/documents/{id}/redact/pattern` | Scan & permanently excise PII patterns (Email, Phone, RFC, CURP, Credit Card Luhn, SSN). |
+| `POST` | `/api/documents/{id}/redact/text` | Search and permanently excise text runs with zero layout shift on non-redacted text. |
+| `POST` | `/api/documents/{id}/sanitize` | Scrub `/Info` dictionary and `/Metadata` XMP streams to prevent information leaks. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
 
@@ -325,6 +339,7 @@ PDFEngine includes a modern, high-precision web studio inside `web/` with a dual
 * **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
 * **Layer 1.8 Interactive AcroForms & Flattening**: In-situ filling for text inputs, checkboxes, and select dropdowns, coupled with single-click surgical document flattening.
 * **Layer 1.9 Visual Annotations & Interactive Links**: Real-time rendering of highlights, underlines, strikeouts, clickable links, and rotated rubber stamps.
+* **Layer 1.10 True Legal Redaction & PII Sanitizer**: Physical glyph excision conforming to ISO 32000-1 §14.11, automated PII regex scanning, interactive annotation pruning, and `/Info` & XMP metadata scrubbing.
 * **Document Assembly & Orientation Inspector**: Rotate pages (-90°, +90°, 180°), split documents into single-page chunks, merge external PDFs, and delete pages with live canvas viewport synchronization.
 * **Dynamic Foliado & Bates Numbering**: Configurable headers and footers with `{page}` and `{total}` template evaluation, 6-way spatial placement, and cover page bypass.
 * **Semi-transparent Text & Image Watermarks**: Rotated diagonal text watermarks and company logos with opacity controls and foreground/background depth placement.
@@ -360,6 +375,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 10: Document Assembly, Splitting, Merging & Page Operations** (Object cloner, rotation, split, merge, reorder, delete, PyO3 bindings, FastAPI endpoints & Web Studio UI)
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
+- [x] **Phase 13: Surgical Legal Redaction, PII Sanitizer & Metadata Scrubbing (ISO 32000-1 §14.11)** (Physical glyph & stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` & XMP metadata scrubbing, PyO3 bindings, FastAPI endpoints & Web Studio)
 
 ---
 
