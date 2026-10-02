@@ -61,6 +61,17 @@ impl SecurityLimits {
         Ok(())
     }
 
+    /// Rejects a document whose object count is above `max_object_count`.
+    pub fn validate_object_count(&self, count: usize) -> PdfResult<()> {
+        if count > self.max_object_count {
+            return Err(PdfError::SecurityLimitExceeded(format!(
+                "Object count ({}) exceeds maximum allowable limit ({})",
+                count, self.max_object_count
+            )));
+        }
+        Ok(())
+    }
+
     /// Validates whether the current traversal depth does not exceed maximum recursion threshold.
     pub fn validate_depth(&self, depth: usize, id: u32, gen: u16) -> PdfResult<()> {
         if depth > self.max_recursion_depth {

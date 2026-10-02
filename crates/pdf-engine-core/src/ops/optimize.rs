@@ -19,6 +19,20 @@ use crate::cos::PdfDocument;
 use crate::crypto::sha256::sha256;
 use crate::error::{PdfError, PdfResult};
 
+/// Streams larger than this are left unchanged by the zlib-best pass.
+const MAX_BEST_RECOMPRESS_BYTES: usize = 1024 * 1024;
+
+/// Smallest object-stream batch. A request of 0 still packs 10, matching the previous floor.
+const MIN_OBJECTS_PER_STREAM: usize = 10;
+
+/// Largest object-stream batch. One container cannot hold every object in the document.
+const MAX_OBJECTS_PER_STREAM_CAP: usize = 100;
+
+/// Clamps a requested object-stream batch into `10..=100`.
+fn clamped_objects_per_stream(requested: usize) -> usize {
+    requested.clamp(MIN_OBJECTS_PER_STREAM, MAX_OBJECTS_PER_STREAM_CAP)
+}
+
 /// Configuration parameters for PDF document optimization and stream compression.
 #[derive(Debug, Clone)]
 pub struct OptimizationOptions {
@@ -252,6 +266,10 @@ pub fn recompress_streams(doc: &mut PdfDocument) -> PdfResult<(usize, usize)> {
             }
 
             let original_len = s.content.len();
+            // zlib-best on a large buffer dominates CPU. Leave those streams as they are.
+            if original_len > MAX_BEST_RECOMPRESS_BYTES {
+                continue;
+            }
 
             if filter.is_empty() || filter == "Identity" {
                 // Completely uncompressed stream
@@ -269,6 +287,9 @@ pub fn recompress_streams(doc: &mut PdfDocument) -> PdfResult<(usize, usize)> {
                 if let Ok(decompressed) =
                     crate::cos::filters::decode_flate(&s.content, None, &doc.limits)
                 {
+                    if decompressed.len() > MAX_BEST_RECOMPRESS_BYTES {
+                        continue;
+                    }
                     if let Ok(recompressed) = encode_flate(&decompressed, Compression::best()) {
                         if recompressed.len() < original_len {
                             bytes_saved += original_len - recompressed.len();
@@ -375,7 +396,7 @@ pub fn save_optimized_to_vec(
             })
             .collect();
 
-        let batch_size = options.max_objects_per_stream.max(10);
+        let batch_size = clamped_objects_per_stream(options.max_objects_per_stream);
         let chunks: Vec<Vec<ObjectId>> = candidate_ids
             .chunks(batch_size)
             .map(|c| c.to_vec())
@@ -725,5 +746,39 @@ mod tests {
         };
 
         assert_eq!(p1_contents, p2_contents);
+    }
+
+    #[test]
+    fn object_stream_batch_is_clamped() {
+        assert_eq!(clamped_objects_per_stream(0), 10);
+        assert_eq!(clamped_objects_per_stream(50), 50);
+        assert_eq!(clamped_objects_per_stream(usize::MAX), 100);
+    }
+
+    #[test]
+    fn recompress_skips_streams_above_the_best_effort_cap() {
+        let mut doc = PdfDocument::empty();
+        let id = doc.alloc_object_id();
+        let content = vec![b'A'; MAX_BEST_RECOMPRESS_BYTES + 1];
+        let mut dict = PdfDictionary::new();
+        dict.insert("Length", content.len() as i64);
+        doc.set_object(
+            id,
+            PdfObject::Stream(PdfStream {
+                dict,
+                content,
+            }),
+        );
+
+        let (count, saved) = recompress_streams(&mut doc).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(saved, 0);
+        match doc.get_object(id).unwrap() {
+            PdfObject::Stream(stream) => {
+                assert!(stream.dict.get("Filter").is_none());
+                assert_eq!(stream.content.len(), MAX_BEST_RECOMPRESS_BYTES + 1);
+            }
+            _ => panic!("expected the oversized stream to stay a stream"),
+        }
     }
 }

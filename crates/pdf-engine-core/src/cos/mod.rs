@@ -141,23 +141,56 @@ impl PdfDocument {
 
     /// Resolves an indirect object by identifier, parsing from buffer if not yet cached.
     pub fn get_object(&mut self, id: ObjectId) -> PdfResult<PdfObject> {
+        self.resolve_object(id, &mut HashSet::new(), 0)
+    }
+
+    /// Resolves `id`, rejecting a cycle or a walk deeper than the configured limit.
+    ///
+    /// A cached object returns before it is recorded on `stack`: the cache is the
+    /// object itself, not another lookup. `stack` is the chain of objects whose
+    /// bodies are still being read.
+    fn resolve_object(
+        &mut self,
+        id: ObjectId,
+        stack: &mut HashSet<ObjectId>,
+        depth: usize,
+    ) -> PdfResult<PdfObject> {
         if let Some(obj) = self.objects.get(&id) {
             return Ok(obj.clone());
         }
 
-        let entry = self
-            .xref
-            .get(id)
-            .copied()
-            .ok_or(PdfError::ObjectNotFound {
+        self.limits.validate_depth(depth, id.number, id.generation)?;
+        if !stack.insert(id) {
+            return Err(PdfError::CircularReference {
                 id: id.number,
                 gen: id.generation,
-            })?;
+            });
+        }
+
+        let result = self.read_uncached_object(id, stack, depth);
+        stack.remove(&id);
+        result
+    }
+
+    /// Parses an object that is not in the cache and stores it when the count allows.
+    fn read_uncached_object(
+        &mut self,
+        id: ObjectId,
+        stack: &mut HashSet<ObjectId>,
+        depth: usize,
+    ) -> PdfResult<PdfObject> {
+        let entry = self.xref.get(id).copied().ok_or(PdfError::ObjectNotFound {
+            id: id.number,
+            gen: id.generation,
+        })?;
 
         match entry {
             XRefEntry::InUse { offset, .. } => {
-                let mut parser = Parser::at_offset(&self.raw_data, offset as usize);
-                let (parsed_id, obj) = parser.parse_indirect_object()?;
+                let parsed = {
+                    let mut parser = Parser::at_offset(&self.raw_data, offset as usize);
+                    parser.parse_indirect_object()?
+                };
+                let (parsed_id, obj) = parsed;
                 if parsed_id.number != id.number {
                     return Err(PdfError::InvalidXRef {
                         offset: offset as usize,
@@ -167,27 +200,24 @@ impl PdfDocument {
                         ),
                     });
                 }
-                self.objects.insert(id, obj.clone());
-                Ok(obj)
+                self.remember_object(id, obj)
             }
             XRefEntry::Compressed {
                 container_id,
                 index_in_stream,
             } => {
-                // Object stored in an Object Stream (/ObjStm)
-                let container_obj = self.get_object(ObjectId::new(container_id))?;
-                if let PdfObject::Stream(stream) = container_obj {
-                    let obj = self.extract_from_obj_stm(&stream, index_in_stream)?;
-                    self.objects.insert(id, obj.clone());
-                    Ok(obj)
-                } else {
-                    Err(PdfError::TypeMismatch {
+                let container_obj =
+                    self.resolve_object(ObjectId::new(container_id), stack, depth + 1)?;
+                let PdfObject::Stream(stream) = container_obj else {
+                    return Err(PdfError::TypeMismatch {
                         id: container_id,
                         gen: 0,
                         expected: "Stream",
                         found: "Non-stream object",
-                    })
-                }
+                    });
+                };
+                let obj = self.extract_from_obj_stm(&stream, index_in_stream)?;
+                self.remember_object(id, obj)
             }
             XRefEntry::Free { .. } => Err(PdfError::ObjectNotFound {
                 id: id.number,
@@ -196,12 +226,37 @@ impl PdfDocument {
         }
     }
 
+    /// Inserts a newly parsed object when the cache is still within `max_object_count`.
+    fn remember_object(&mut self, id: ObjectId, obj: PdfObject) -> PdfResult<PdfObject> {
+        self.limits
+            .validate_object_count(self.objects.len().saturating_add(1))?;
+        self.objects.insert(id, obj.clone());
+        Ok(obj)
+    }
+
     /// Extracts an object from an `/ObjStm` compressed stream (ISO 32000-1 §7.5.7).
     fn extract_from_obj_stm(
         &self,
         stream: &PdfStream,
         target_index: u16,
     ) -> PdfResult<PdfObject> {
+        let declared = stream
+            .dict
+            .get("N")
+            .and_then(|n| n.as_i64())
+            .ok_or_else(|| PdfError::InvalidXRef {
+                offset: 0,
+                message: "ObjStm missing /N integer".to_string(),
+            })?;
+        // A negative `/N` must not be cast to `usize` (that becomes a huge capacity).
+        if declared < 0 || (declared as u64) > self.limits.max_object_count as u64 {
+            return Err(PdfError::SecurityLimitExceeded(format!(
+                "ObjStm /N ({}) is outside the allowed object count",
+                declared
+            )));
+        }
+        let num_objects = declared as usize;
+
         let filter_name = stream
             .dict
             .get("Filter")
@@ -211,23 +266,21 @@ impl PdfDocument {
 
         let decompressed = decode_stream(filter_name, decode_parms, &stream.content, &self.limits)?;
 
-        let first_offset = stream
+        let first = stream
             .dict
             .get("First")
             .and_then(|f| f.as_i64())
             .ok_or_else(|| PdfError::InvalidXRef {
                 offset: 0,
                 message: "ObjStm missing /First integer".to_string(),
-            })? as usize;
-
-        let num_objects = stream
-            .dict
-            .get("N")
-            .and_then(|n| n.as_i64())
-            .ok_or_else(|| PdfError::InvalidXRef {
+            })?;
+        if first < 0 || (first as usize) > decompressed.len() {
+            return Err(PdfError::InvalidXRef {
                 offset: 0,
-                message: "ObjStm missing /N integer".to_string(),
-            })? as usize;
+                message: "ObjStm /First is outside the decoded stream".to_string(),
+            });
+        }
+        let first_offset = first as usize;
 
         if target_index as usize >= num_objects {
             return Err(PdfError::InvalidXRef {
@@ -565,5 +618,44 @@ impl PdfDocument {
         options: &crate::ops::OptimizationOptions,
     ) -> PdfResult<(Vec<u8>, crate::ops::OptimizationStats)> {
         crate::ops::save_optimized_to_vec(self, options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negative_objstm_count_is_rejected() {
+        let doc = PdfDocument::empty();
+        let mut dict = PdfDictionary::new();
+        dict.insert("N", -1i64);
+        dict.insert("First", 0i64);
+        let stream = PdfStream::new(dict, Vec::new());
+        let error = doc.extract_from_obj_stm(&stream, 0).unwrap_err();
+        assert!(error.to_string().contains("ObjStm /N"));
+    }
+
+    #[test]
+    fn compressed_objects_that_point_at_each_other_are_rejected() {
+        let mut doc = PdfDocument::empty();
+        let first = ObjectId::new(10);
+        let second = ObjectId::new(11);
+        doc.xref.entries.insert(
+            first,
+            XRefEntry::Compressed {
+                container_id: second.number,
+                index_in_stream: 0,
+            },
+        );
+        doc.xref.entries.insert(
+            second,
+            XRefEntry::Compressed {
+                container_id: first.number,
+                index_in_stream: 0,
+            },
+        );
+        let error = doc.get_object(first).unwrap_err();
+        assert!(error.to_string().contains("Circular"));
     }
 }

@@ -101,7 +101,7 @@ impl XRefTable {
                 Some(Token::XRef) => {
                     // Classic ASCII cross-reference table
                     let _ = lexer.next_token(); // consume 'xref'
-                    Self::parse_classic_xref(&mut lexer, &mut table)?;
+                    Self::parse_classic_xref(&mut lexer, &mut table, limits)?;
 
                     // Parse trailer dictionary
                     lexer.skip_whitespace_and_comments();
@@ -174,7 +174,11 @@ impl XRefTable {
     }
 
     /// Parses classic ASCII xref table subsections according to ISO 32000-1 §7.5.4.
-    fn parse_classic_xref(lexer: &mut Lexer, table: &mut XRefTable) -> PdfResult<()> {
+    fn parse_classic_xref(
+        lexer: &mut Lexer,
+        table: &mut XRefTable,
+        limits: &SecurityLimits,
+    ) -> PdfResult<()> {
         loop {
             lexer.skip_whitespace_and_comments();
             let first_tok = lexer.peek_token()?;
@@ -191,8 +195,8 @@ impl XRefTable {
             };
             let _ = lexer.next_token(); // consume first_id
 
-            let count = match lexer.next_token()? {
-                Some(Token::Integer(c)) => c as u32,
+            let count_i = match lexer.next_token()? {
+                Some(Token::Integer(c)) => c,
                 other => {
                     return Err(PdfError::InvalidXRef {
                         offset: lexer.cursor(),
@@ -200,9 +204,22 @@ impl XRefTable {
                     });
                 }
             };
+            if count_i < 0 {
+                return Err(PdfError::InvalidXRef {
+                    offset: lexer.cursor(),
+                    message: "XRef subsection count cannot be negative".to_string(),
+                });
+            }
+            let added = count_i as usize;
+            limits.validate_object_count(table.entries.len().saturating_add(added))?;
+            let count = count_i as u32;
 
             for i in 0..count {
-                let current_id = ObjectId::new(first_id + i);
+                let number = first_id.checked_add(i).ok_or_else(|| PdfError::InvalidXRef {
+                    offset: lexer.cursor(),
+                    message: "XRef subsection object number overflow".to_string(),
+                })?;
+                let current_id = ObjectId::new(number);
 
                 let offset_val = match lexer.next_token()? {
                     Some(Token::Integer(o)) => o as u64,
@@ -311,18 +328,31 @@ impl XRefTable {
         let index_pairs: Vec<(u32, u32)> = if let Some(idx_arr) =
             stream.dict.get("Index").and_then(|i| i.as_array())
         {
-            idx_arr
-                .chunks_exact(2)
-                .map(|pair| {
-                    let first = pair[0].as_i64().unwrap_or(0) as u32;
-                    let count = pair[1].as_i64().unwrap_or(0) as u32;
-                    (first, count)
-                })
-                .collect()
+            let mut pairs = Vec::new();
+            for pair in idx_arr.chunks_exact(2) {
+                let first = pair[0].as_i64().unwrap_or(0);
+                let count = pair[1].as_i64().unwrap_or(0);
+                if first < 0 || count < 0 {
+                    return Err(PdfError::InvalidXRef {
+                        offset: 0,
+                        message: "XRef stream /Index values cannot be negative".to_string(),
+                    });
+                }
+                limits.validate_object_count(count as usize)?;
+                pairs.push((first as u32, count as u32));
+            }
+            pairs
         } else {
             // Default: single subsection [0 /Size]
-            let size = stream.dict.get("Size").and_then(|s| s.as_i64()).unwrap_or(0) as u32;
-            vec![(0, size)]
+            let size = stream.dict.get("Size").and_then(|s| s.as_i64()).unwrap_or(0);
+            if size < 0 {
+                return Err(PdfError::InvalidXRef {
+                    offset: 0,
+                    message: "XRef stream /Size cannot be negative".to_string(),
+                });
+            }
+            limits.validate_object_count(size as usize)?;
+            vec![(0, size as u32)]
         };
 
         let mut byte_offset = 0;
@@ -332,7 +362,19 @@ impl XRefTable {
                     break;
                 }
 
-                let current_id = ObjectId::new(first_id + i);
+                let number = match first_id.checked_add(i) {
+                    Some(number) => number,
+                    None => {
+                        return Err(PdfError::InvalidXRef {
+                            offset: 0,
+                            message: "XRef stream object number overflow".to_string(),
+                        });
+                    }
+                };
+                let current_id = ObjectId::new(number);
+                if !table.entries.contains_key(&current_id) {
+                    limits.validate_object_count(table.entries.len() + 1)?;
+                }
                 let slice = &decompressed[byte_offset..byte_offset + entry_size];
                 byte_offset += entry_size;
 
@@ -379,6 +421,7 @@ fn read_int_bytes(bytes: &[u8], default_val: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::SecurityLimits;
 
     #[test]
     fn test_parse_classic_xref_subsection() {
@@ -387,7 +430,7 @@ mod tests {
         let mut lexer = Lexer::new(input);
         let _ = lexer.next_token(); // consume xref
 
-        XRefTable::parse_classic_xref(&mut lexer, &mut table).unwrap();
+        XRefTable::parse_classic_xref(&mut lexer, &mut table, &SecurityLimits::default()).unwrap();
 
         assert_eq!(
             table.get(ObjectId::new(0)),
@@ -403,5 +446,29 @@ mod tests {
                 generation: 0
             })
         );
+    }
+
+    #[test]
+    fn negative_xref_count_is_rejected() {
+        let input = b"xref\n0 -1\ntrailer\n<< /Size 1 >>";
+        let mut table = XRefTable::new();
+        let mut lexer = Lexer::new(input);
+        let _ = lexer.next_token();
+        let error = XRefTable::parse_classic_xref(&mut lexer, &mut table, &SecurityLimits::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot be negative"));
+        assert!(table.entries.is_empty());
+    }
+
+    #[test]
+    fn xref_subsection_stops_at_the_object_cap() {
+        let input = b"xref\n0 5\n0000000000 65535 f \n0000000017 00000 n \n0000000034 00000 n \n0000000051 00000 n \n0000000068 00000 n \ntrailer\n<< /Size 5 >>";
+        let mut table = XRefTable::new();
+        let mut lexer = Lexer::new(input);
+        let _ = lexer.next_token();
+        let mut limits = SecurityLimits::default();
+        limits.max_object_count = 2;
+        let error = XRefTable::parse_classic_xref(&mut lexer, &mut table, &limits).unwrap_err();
+        assert!(error.to_string().contains("Object count"));
     }
 }
