@@ -313,6 +313,8 @@ pub fn save_optimized_to_vec(
         let _ = working_doc.get_object(id);
     }
 
+    crate::security::active::neutralize_active_content(&mut working_doc)?;
+
     let mut stats = OptimizationStats {
         original_size,
         ..Default::default()

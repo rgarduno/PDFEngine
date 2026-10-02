@@ -513,6 +513,9 @@ impl PdfDocument {
             let _ = self.get_object(id);
         }
 
+        // Active actions are removed before the rewrite so the saved file does not carry them.
+        crate::security::active::neutralize_active_content(self)?;
+
         // Write all objects present in the objects map sorted by number
         let mut sorted_keys: Vec<ObjectId> = self.objects.keys().copied().collect();
         sorted_keys.sort_by_key(|id| id.number);

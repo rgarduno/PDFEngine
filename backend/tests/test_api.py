@@ -52,6 +52,58 @@ def create_minimal_pdf_bytes() -> bytes:
     return bytes(pdf)
 
 
+def create_active_content_pdf_bytes() -> bytes:
+    """PDF with a JavaScript open action, a script URI, and one https link."""
+    visible = b"BT (JavaScript is a visible word.) Tj ET\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>",
+        b"<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R /Annots [ 6 0 R 7 0 R ] >>",
+        f"<< /Length {len(visible)} >>\nstream\n".encode() + visible + b"endstream",
+        b"<< /S /JavaScript /JS (app.alert(1)) >>",
+        b"<< /Type /Annot /Subtype /Link /Rect [ 0 0 10 10 ] /A << /S /URI /URI (https://example.com/docs) >> >>",
+        b"<< /Type /Annot /Subtype /Link /Rect [ 20 0 30 10 ] /A << /S /URI /URI (javascript:alert(1)) >> >>",
+    ]
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(pdf)
+
+
+def test_export_strips_active_actions_and_keeps_https_link():
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("active.pdf", create_active_content_pdf_bytes(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    body = exported.content
+    for marker in (
+        b"/OpenAction",
+        b"/JavaScript",
+        b"/JS",
+        b"javascript:",
+        b"app.alert(1)",
+    ):
+        assert marker not in body
+    assert b"https://example.com/docs" in body
+    assert b"JavaScript is a visible word." in body
+
+
 def test_health_endpoint():
     response = client.get("/api/health")
     assert response.status_code == 200

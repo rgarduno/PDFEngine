@@ -14,7 +14,7 @@
 //! 4. **Layout Reconstruction (`layout`)**: Spatial clustering from glyphs to paragraphs.
 //! 5. **Surgical Editor (`editor`)**: Atomic in-place reflow and stream mutation.
 //! 6. **Security Hardening (`security`)**: Bounded memory limits, recursion caps,
-//!    and decompression bomb guards.
+//!    decompression guards, and active-content removal on save.
 
 pub mod annots;
 pub mod cos;

@@ -511,6 +511,9 @@ pub fn decrypt_document(doc: &mut PdfDocument, password: &str) -> PdfResult<()> 
         doc.xref.entries.remove(&eid);
     }
 
+    // Ciphertext hid URI schemes. The decrypted graph is clear, so strip actions now.
+    super::active::neutralize_active_content(doc)?;
+
     Ok(())
 }
 
