@@ -69,6 +69,8 @@ from app.models import (
     TableModel,
     PageTablesResponse,
     TableExportResponse,
+    OptimizeRequest,
+    OptimizeResponse,
 )
 
 app = FastAPI(
@@ -270,7 +272,7 @@ def edit_paragraph(
 
 
 @app.get("/api/documents/{doc_id}/export")
-def export_document(doc_id: str):
+def export_document(doc_id: str, optimized: bool = False):
     """Serializes the edited document into a downloadable PDF binary."""
     session = DOCUMENT_SESSIONS.get(doc_id)
     if not session:
@@ -278,13 +280,19 @@ def export_document(doc_id: str):
 
     doc = session["doc"]
     try:
-        pdf_bytes = doc.save_to_bytes()
+        if optimized and "optimized_bytes" in session:
+            pdf_bytes = session["optimized_bytes"]
+        elif optimized:
+            pdf_bytes, _ = doc.save_optimized_to_bytes()
+        else:
+            pdf_bytes = doc.save_to_bytes()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to serialize PDF: {e}")
 
     filename = session.get("filename", "document.pdf")
     base_name = filename.rsplit(".", 1)[0]
-    export_name = f"{base_name}_edited.pdf"
+    suffix = "_optimized.pdf" if optimized else "_edited.pdf"
+    export_name = f"{base_name}{suffix}"
 
     return Response(
         content=bytes(pdf_bytes),
@@ -1521,6 +1529,54 @@ def export_table_endpoint(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to export table: {e}")
+
+
+@app.post("/api/documents/{doc_id}/optimize", response_model=OptimizeResponse)
+async def optimize_document_endpoint(
+    doc_id: str,
+    request: OptimizeRequest,
+):
+    """Optimizes the PDF document using garbage collection, lossless Flate stream recompression,
+    stream deduplication, and Object Stream (/ObjStm) packing."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        opt_bytes, stats = doc.save_optimized_to_bytes(
+            remove_unused=request.remove_unused,
+            pack_object_streams=request.pack_object_streams,
+            recompress_flate=request.recompress_flate,
+            deduplicate_streams=request.deduplicate_streams,
+            max_objects_per_stream=request.max_objects_per_stream,
+        )
+
+        # Reload optimized document into session to keep session active and synchronized
+        session["doc"] = pdf_engine.Document.from_bytes(opt_bytes)
+        session["optimized_bytes"] = opt_bytes
+        session["original_size"] = stats.original_size
+        session["optimized_size"] = stats.optimized_size
+
+        return OptimizeResponse(
+            success=True,
+            document_id=doc_id,
+            original_size=stats.original_size,
+            optimized_size=stats.optimized_size,
+            bytes_saved=stats.bytes_saved,
+            compression_ratio_pct=stats.compression_ratio_pct,
+            objects_removed=stats.objects_removed,
+            streams_recompressed=stats.streams_recompressed,
+            object_streams_created=stats.object_streams_created,
+            streams_deduplicated=stats.streams_deduplicated,
+            message=(
+                f"Optimización completada con éxito. Reducción del {stats.compression_ratio_pct:.1f}% "
+                f"({stats.bytes_saved} bytes ahorrados, {stats.objects_removed} objetos purgados, "
+                f"{stats.object_streams_created} flujos /ObjStm creados)."
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to optimize document: {e}")
 
 
 

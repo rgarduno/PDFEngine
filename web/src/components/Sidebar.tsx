@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { AnnotationElement, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
-import { getImageBinaryUrl } from '@/lib/api';
+import { getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
 import {
   ShieldCheck,
   Cpu,
@@ -37,6 +37,9 @@ import {
   Download,
   Copy,
   Check,
+  Zap,
+  FileArchive,
+  Info,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -48,6 +51,8 @@ import {
   EncryptDocumentPayload,
   SignDocumentPayload,
   DetectedTableItem,
+  OptimizeRequest,
+  OptimizeResponse,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -97,6 +102,7 @@ interface SidebarProps {
   onSelectTable?: (idx: number | null) => void;
   onExportTable?: (tableIdx: number, format: 'csv' | 'json' | 'markdown' | 'html') => Promise<string>;
   onDownloadTable?: (tableIdx: number, format: string) => void;
+  onOptimizationComplete?: (stats: OptimizeResponse) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -146,8 +152,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTable,
   onExportTable,
   onDownloadTable,
+  onOptimizationComplete,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
@@ -158,6 +165,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [pagFontSize, setPagFontSize] = useState<number>(9);
   const [pagMargin, setPagMargin] = useState<number>(36);
   const [pagSkipFirst, setPagSkipFirst] = useState<boolean>(false);
+
+  // PDF Optimization & Compression state
+  const [optRemoveUnused, setOptRemoveUnused] = useState<boolean>(true);
+  const [optPackObjectStreams, setOptPackObjectStreams] = useState<boolean>(true);
+  const [optRecompressFlate, setOptRecompressFlate] = useState<boolean>(true);
+  const [optDeduplicateStreams, setOptDeduplicateStreams] = useState<boolean>(true);
+  const [optMaxObjectsPerStream, setOptMaxObjectsPerStream] = useState<number>(100);
+  const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
+  const [optimizeStats, setOptimizeStats] = useState<OptimizeResponse | null>(null);
+  const [optimizeError, setOptimizeError] = useState<string | null>(null);
+  const [copiedOptReport, setCopiedOptReport] = useState<boolean>(false);
 
   const [wmText, setWmText] = useState<string>('CONFIDENCIAL');
   const [wmFontSize, setWmFontSize] = useState<number>(52);
@@ -196,6 +214,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [sigLocation, setSigLocation] = useState<string>('Ciudad de México, MX');
   const [sigPage, setSigPage] = useState<number>(pageNumber || 1);
 
+  const handleRunOptimization = async () => {
+    setIsOptimizing(true);
+    setOptimizeError(null);
+    try {
+      const payload: OptimizeRequest = {
+        remove_unused: optRemoveUnused,
+        pack_object_streams: optPackObjectStreams,
+        recompress_flate: optRecompressFlate,
+        deduplicate_streams: optDeduplicateStreams,
+        max_objects_per_stream: optMaxObjectsPerStream,
+      };
+      const response = await optimizeDocument(documentId, payload);
+      setOptimizeStats(response);
+      onOptimizationComplete?.(response);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al optimizar documento';
+      setOptimizeError(msg);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
+  const formatOptBytes = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
+  const handleCopyOptReport = () => {
+    if (!optimizeStats) return;
+    const report = [
+      `=== REPORTE DE OPTIMIZACIÓN PDF (ISO 32000-1) ===`,
+      `Documento ID: ${documentId}`,
+      `Tamaño Original: ${formatOptBytes(optimizeStats.original_size)}`,
+      `Tamaño Optimizado: ${formatOptBytes(optimizeStats.optimized_size)}`,
+      `Ahorro Total: ${formatOptBytes(optimizeStats.bytes_saved)} (${optimizeStats.compression_ratio_pct.toFixed(1)}%)`,
+      `Objetos Huérfanos Purgados: ${optimizeStats.objects_removed}`,
+      `Flujos Recomprimidos: ${optimizeStats.streams_recompressed}`,
+      `Contenedores /ObjStm Creados: ${optimizeStats.object_streams_created}`,
+      `Flujos Deduplicados: ${optimizeStats.streams_deduplicated}`,
+    ].join('\n');
+    navigator.clipboard.writeText(report);
+    setCopiedOptReport(true);
+    setTimeout(() => setCopiedOptReport(false), 2000);
+  };
+
   return (
     <aside className="w-80 border-l border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 flex flex-col h-[calc(100vh-4rem)] select-none">
       {/* Header */}
@@ -209,8 +275,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-emerald-500 font-medium">AST Synced</span>
         </div>
 
-        {/* Tab Switcher: 3x3 Grid */}
-        <div className="mt-3 grid grid-cols-3 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        {/* Tab Switcher: 5x2 Grid */}
+        <div className="mt-3 grid grid-cols-5 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
@@ -305,7 +371,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title="Cifrado, Permisos y Firmas Digitales"
           >
             <Lock size={10} />
-            <span>Seguridad</span>
+            <span>Seguro</span>
           </button>
           <button
             onClick={() => setActiveTab('tables')}
@@ -318,6 +384,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <TableIcon size={10} />
             <span>Tablas</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('optimize')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'optimize'
+                ? 'bg-amber-500 text-white font-semibold shadow-xs'
+                : 'text-amber-600 hover:text-amber-700 dark:hover:text-amber-400'
+            }`}
+            title="Optimización y Compresión ISO 32000-1 §7.5.7 (/ObjStm)"
+          >
+            <Zap size={10} />
+            <span>Optim</span>
           </button>
         </div>
       </div>
@@ -1972,6 +2050,242 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 })
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'optimize' && (
+          <div className="space-y-4">
+            <div>
+              <div className="text-[11px] font-semibold text-neutral-400 uppercase px-2 mb-1 flex items-center justify-between">
+                <span>Motor de Optimización y Compresión</span>
+                <span className="text-[9px] text-amber-500 font-mono font-semibold bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded">
+                  ISO 32000-1 §7.5.7
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 px-2 leading-relaxed">
+                Empaquetado de flujos en <code className="text-amber-600 dark:text-amber-400">/ObjStm</code>, recolección de basura por análisis de alcanzabilidad y deduplicación criptográfica.
+              </p>
+            </div>
+
+            {/* Opciones de Optimización */}
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-800 rounded-lg space-y-3">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 block mb-1">
+                Estrategias de Reducción
+              </span>
+
+              {/* Garbage Collection */}
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={optRemoveUnused}
+                  onChange={(e) => setOptRemoveUnused(e.target.checked)}
+                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 border-neutral-300 dark:border-neutral-700"
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                    <Trash2 size={12} className="text-rose-500" />
+                    <span>Garbage Collection (Purga Huérfanos)</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-500">
+                    Elimina objetos COS no alcanzables desde la raíz del catálogo.
+                  </div>
+                </div>
+              </label>
+
+              {/* Object Streams (/ObjStm) */}
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={optPackObjectStreams}
+                  onChange={(e) => setOptPackObjectStreams(e.target.checked)}
+                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 border-neutral-300 dark:border-neutral-700"
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                    <FileArchive size={12} className="text-amber-500" />
+                    <span>Empaquetar en Object Streams</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-500">
+                    Comprime múltiples objetos en contenedores <code className="text-amber-600 dark:text-amber-400">/ObjStm</code> con tabla <code className="text-amber-600 dark:text-amber-400">/XRef</code> moderna.
+                  </div>
+                </div>
+              </label>
+
+              {/* Recompresión Flate */}
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={optRecompressFlate}
+                  onChange={(e) => setOptRecompressFlate(e.target.checked)}
+                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 border-neutral-300 dark:border-neutral-700"
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                    <Zap size={12} className="text-amber-500" />
+                    <span>Recompresión Flate Óptima</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-500">
+                    Recomprime flujos con Zlib Best Compression sin degradar imágenes.
+                  </div>
+                </div>
+              </label>
+
+              {/* Deduplicación Criptográfica */}
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={optDeduplicateStreams}
+                  onChange={(e) => setOptDeduplicateStreams(e.target.checked)}
+                  className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 border-neutral-300 dark:border-neutral-700"
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                    <Layers size={12} className="text-emerald-500" />
+                    <span>Deduplicación Criptográfica</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-500">
+                    Detecta streams idénticos vía SHA-256 y unifica referencias COS.
+                  </div>
+                </div>
+              </label>
+
+              {/* Slider de objetos por stream */}
+              {optPackObjectStreams && (
+                <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700/60">
+                  <div className="flex justify-between items-center text-[10px] font-medium text-neutral-600 dark:text-neutral-300 mb-1">
+                    <span>Máx. Objetos por Contenedor:</span>
+                    <span className="font-mono text-amber-600 font-bold">{optMaxObjectsPerStream}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="20"
+                    max="500"
+                    step="10"
+                    value={optMaxObjectsPerStream}
+                    onChange={(e) => setOptMaxObjectsPerStream(parseInt(e.target.value, 10))}
+                    className="w-full accent-amber-500 cursor-pointer h-1.5 bg-neutral-200 dark:bg-neutral-700 rounded-lg"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Error banner */}
+            {optimizeError && (
+              <div className="p-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-lg text-rose-600 dark:text-rose-400 text-xs">
+                {optimizeError}
+              </div>
+            )}
+
+            {/* Run Button */}
+            <button
+              onClick={handleRunOptimization}
+              disabled={isOptimizing}
+              className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-neutral-300 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              {isOptimizing ? (
+                <>
+                  <RefreshCw size={13} className="animate-spin" />
+                  <span>Optimizando Flujos y XRefs...</span>
+                </>
+              ) : (
+                <>
+                  <Zap size={13} />
+                  <span>Ejecutar Optimización</span>
+                </>
+              )}
+            </button>
+
+            {/* Metrics & Report Display */}
+            {optimizeStats && (
+              <div className="p-3 bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-800/60 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                    <CheckCircle2 size={14} className="text-emerald-500" />
+                    <span>Optimización Exitosa</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-white shadow-xs">
+                    -{optimizeStats.compression_ratio_pct.toFixed(1)}%
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2 bg-white dark:bg-neutral-800/80 rounded-lg border border-neutral-200/80 dark:border-neutral-700/60">
+                    <span className="text-[10px] text-neutral-400 block">Original</span>
+                    <span className="font-mono font-semibold text-neutral-700 dark:text-neutral-300">
+                      {formatOptBytes(optimizeStats.original_size)}
+                    </span>
+                  </div>
+                  <div className="p-2 bg-white dark:bg-neutral-800/80 rounded-lg border border-emerald-300/80 dark:border-emerald-700/60">
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block font-medium">Optimizado</span>
+                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      {formatOptBytes(optimizeStats.optimized_size)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-[10px] space-y-1 text-neutral-600 dark:text-neutral-400 pt-1 border-t border-amber-200/60 dark:border-amber-800/40">
+                  <div className="flex justify-between">
+                    <span>Ahorro neto:</span>
+                    <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                      {formatOptBytes(optimizeStats.bytes_saved)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Objetos huérfanos purgados:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                      {optimizeStats.objects_removed}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Flujos recomprimidos:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                      {optimizeStats.streams_recompressed}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Contenedores /ObjStm creados:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                      {optimizeStats.object_streams_created}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Flujos deduplicados:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                      {optimizeStats.streams_deduplicated}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={handleCopyOptReport}
+                    className="py-1.5 px-2 bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded text-[10px] font-medium transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    {copiedOptReport ? (
+                      <>
+                        <Check size={11} className="text-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-400">¡Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={11} />
+                        <span>Copiar Informe</span>
+                      </>
+                    )}
+                  </button>
+
+                  <a
+                    href={getOptimizedExportUrl(documentId)}
+                    download={`document_optimized.pdf`}
+                    className="py-1.5 px-2 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
+                  >
+                    <Download size={11} />
+                    <span>Descargar PDF</span>
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

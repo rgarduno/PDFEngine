@@ -5,12 +5,17 @@
 
 pub mod cloner;
 pub mod merge;
+pub mod optimize;
 pub mod reorder;
 pub mod rotation;
 pub mod split;
 
 pub use cloner::ObjectCloner;
 pub use merge::{merge_documents, merge_pdf_bytes};
+pub use optimize::{
+    collect_garbage, deduplicate_streams, optimize_document, recompress_streams,
+    save_optimized_to_vec, OptimizationOptions, OptimizationStats,
+};
 pub use reorder::{delete_pages, reorder_pages};
 pub use rotation::{
     get_page_rotation, normalize_rotation, rotate_all_pages, rotate_page, set_page_rotation,

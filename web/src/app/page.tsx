@@ -5,6 +5,7 @@ import { Toolbar } from '@/components/Toolbar';
 import { DualCanvasViewer } from '@/components/DualCanvasViewer';
 import { Sidebar } from '@/components/Sidebar';
 import { ThumbnailSidebar } from '@/components/ThumbnailSidebar';
+import { OptimizeModal } from '@/components/OptimizeModal';
 import {
   MOCK_SESSION,
   MOCK_SCENEGRAPH,
@@ -67,6 +68,7 @@ import {
   SignDocumentPayload,
   DetectedTableItem,
   PageOverviewItem,
+  OptimizeResponse,
 } from '@/lib/types';
 
 export default function Home() {
@@ -90,6 +92,7 @@ export default function Home() {
   const [signatures, setSignatures] = useState<SignatureItem[]>([]);
   const [tables, setTables] = useState<DetectedTableItem[]>([]);
   const [selectedTableIdx, setSelectedTableIdx] = useState<number | null>(null);
+  const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState<boolean>(false);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [pageOverviews, setPageOverviews] = useState<PageOverviewItem[]>([
     {
@@ -959,6 +962,17 @@ export default function Home() {
     }
   };
 
+  // Optimization completion handler
+  const handleOptimizationComplete = async (_stats: OptimizeResponse) => {
+    try {
+      const overview = await getDocumentOverview(session.document_id);
+      setPageOverviews(overview.pages);
+    } catch (e) {
+      console.warn('Overview refresh failed after optimization:', e);
+    }
+    handleNavigatePage(currentPage);
+  };
+
   const selectedPara = paragraphs.find((p) => p.id === selectedParagraphId);
 
   return (
@@ -1025,6 +1039,7 @@ export default function Home() {
         onNavigatePage={handleNavigatePage}
         showThumbnails={showThumbnails}
         onToggleThumbnails={() => setShowThumbnails((prev) => !prev)}
+        onOptimizeClick={() => setIsOptimizeModalOpen(true)}
       />
 
       {/* Main Studio View: Left Thumbnail Drawer + Dual-Layer Canvas + SceneGraph Sidebar */}
@@ -1196,8 +1211,18 @@ export default function Home() {
           }}
           onExportTable={handleExportTable}
           onDownloadTable={handleDownloadTable}
+          onOptimizationComplete={handleOptimizationComplete}
         />
       </div>
+
+      {/* ISO 32000-1 Compression & Optimization Modal */}
+      <OptimizeModal
+        isOpen={isOptimizeModalOpen}
+        onClose={() => setIsOptimizeModalOpen(false)}
+        documentId={session.document_id}
+        filename={session.filename}
+        onOptimizationComplete={handleOptimizationComplete}
+      />
     </div>
   );
 };

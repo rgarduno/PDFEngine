@@ -34,6 +34,8 @@ import {
   TableExportResponse,
   PageOverviewItem,
   DocumentOverviewResponse,
+  OptimizeRequest,
+  OptimizeResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1143,6 +1145,26 @@ export async function getPageRotation(
   } catch {
     return 0;
   }
+}
+
+export async function optimizeDocument(
+  docId: string,
+  options: OptimizeRequest = {}
+): Promise<OptimizeResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/optimize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to optimize document' }));
+    throw new Error(err.detail || 'Failed to optimize document');
+  }
+  return await res.json();
+}
+
+export function getOptimizedExportUrl(docId: string): string {
+  return `${API_BASE_URL}/api/documents/${docId}/export?optimized=true`;
 }
 
 

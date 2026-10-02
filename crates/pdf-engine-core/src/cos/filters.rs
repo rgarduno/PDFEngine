@@ -4,12 +4,21 @@
 //! `ASCIIHexDecode`, and `ASCII85Decode`.
 //! All decoders enforce bounded memory allocation to prevent decompression bomb attacks.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+pub use flate2::Compression;
 
 use crate::cos::object::PdfDictionary;
 use crate::error::{PdfError, PdfResult};
 use crate::security::SecurityLimits;
+
+/// Encodes raw byte slice into `FlateDecode` (zlib) compressed data.
+pub fn encode_flate(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), level);
+    encoder.write_all(data)?;
+    encoder.finish()
+}
 
 /// Decodes stream bytes according to the specified filter name and optional parameters.
 pub fn decode_stream(

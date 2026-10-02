@@ -12,7 +12,7 @@ pub mod xref;
 
 use std::collections::{BTreeMap, HashSet};
 
-pub use filters::decode_stream;
+pub use filters::{decode_stream, encode_flate, Compression};
 pub use lexer::{Lexer, Token};
 pub use object::{ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString, StringFormat};
 pub use parser::Parser;
@@ -74,6 +74,11 @@ impl PdfDocument {
             objects: BTreeMap::new(),
             limits,
         })
+    }
+
+    /// Returns the raw unparsed byte buffer of the loaded PDF.
+    pub fn raw_data(&self) -> &[u8] {
+        &self.raw_data
     }
 
     /// Creates an empty valid ISO 32000-1 PDF document with a clean Catalog and Pages root.
@@ -524,5 +529,22 @@ impl PdfDocument {
         writer.write_xref_and_trailer(&offsets, &trailer)?;
 
         Ok(out)
+    }
+
+    /// Optimizes the document in-place using reachability analysis, stream recompression,
+    /// stream deduplication, and Object Stream (/ObjStm) packing.
+    pub fn optimize(
+        &mut self,
+        options: &crate::ops::OptimizationOptions,
+    ) -> PdfResult<crate::ops::OptimizationStats> {
+        crate::ops::optimize_document(self, options)
+    }
+
+    /// Serializes the document into an optimized, compressed PDF byte vector.
+    pub fn save_optimized_to_vec(
+        &mut self,
+        options: &crate::ops::OptimizationOptions,
+    ) -> PdfResult<(Vec<u8>, crate::ops::OptimizationStats)> {
+        crate::ops::save_optimized_to_vec(self, options)
     }
 }

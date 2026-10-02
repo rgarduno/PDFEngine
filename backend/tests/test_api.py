@@ -1066,6 +1066,51 @@ def test_document_pages_overview_and_rotation_endpoints():
     assert updated_overview_resp.json()["pages"][0]["rotation"] == 90
 
 
+def test_document_optimization_and_export_endpoints():
+    pdf_bytes = create_minimal_pdf_bytes()
+
+    # 1. Upload Document
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("optimize_sample.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 2. Call Optimize Endpoint
+    opt_resp = client.post(
+        f"/api/documents/{doc_id}/optimize",
+        json={
+            "remove_unused": True,
+            "pack_object_streams": True,
+            "recompress_flate": True,
+            "deduplicate_streams": True,
+            "max_objects_per_stream": 50,
+        },
+    )
+    assert opt_resp.status_code == 200
+    data = opt_resp.json()
+    assert data["success"] is True
+    assert data["document_id"] == doc_id
+    assert data["original_size"] > 0
+    assert data["optimized_size"] > 0
+    assert "Optimización completada con éxito" in data["message"]
+
+    # 3. Export Optimized PDF
+    export_resp = client.get(f"/api/documents/{doc_id}/export?optimized=true")
+    assert export_resp.status_code == 200
+    assert export_resp.headers["content-type"] == "application/pdf"
+    assert "optimize_sample_optimized.pdf" in export_resp.headers["content-disposition"]
+    assert len(export_resp.content) == data["optimized_size"]
+
+    # 4. Verify Document Session is active and paragraphs still readable
+    para_resp = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert para_resp.status_code == 200
+    para_data = para_resp.json()
+    assert len(para_data["paragraphs"]) >= 1
+    assert "Contract Agreement Terms" in para_data["paragraphs"][0]["text"]
+
+
 
 
 

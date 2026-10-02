@@ -413,6 +413,28 @@ export interface DocumentOverviewResponse {
   pages: PageOverviewItem[];
 }
 
+export interface OptimizeRequest {
+  remove_unused?: boolean;
+  pack_object_streams?: boolean;
+  recompress_flate?: boolean;
+  deduplicate_streams?: boolean;
+  max_objects_per_stream?: number;
+}
+
+export interface OptimizeResponse {
+  success: boolean;
+  document_id: string;
+  original_size: number;
+  optimized_size: number;
+  bytes_saved: number;
+  compression_ratio_pct: number;
+  objects_removed: number;
+  streams_recompressed: number;
+  object_streams_created: number;
+  streams_deduplicated: number;
+  message: string;
+}
+
 
 
 

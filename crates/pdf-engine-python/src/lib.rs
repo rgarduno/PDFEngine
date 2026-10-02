@@ -621,6 +621,72 @@ impl PyDetectedTable {
     }
 }
 
+/// Statistics and compression metrics resulting from document optimization.
+#[pyclass(name = "OptimizationStats")]
+#[derive(Debug, Clone)]
+pub struct PyOptimizationStats {
+    #[pyo3(get)]
+    pub original_size: usize,
+    #[pyo3(get)]
+    pub optimized_size: usize,
+    #[pyo3(get)]
+    pub bytes_saved: usize,
+    #[pyo3(get)]
+    pub compression_ratio_pct: f64,
+    #[pyo3(get)]
+    pub objects_removed: usize,
+    #[pyo3(get)]
+    pub streams_recompressed: usize,
+    #[pyo3(get)]
+    pub object_streams_created: usize,
+    #[pyo3(get)]
+    pub streams_deduplicated: usize,
+}
+
+#[pymethods]
+impl PyOptimizationStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "<OptimizationStats original={} optimized={} saved={} ({:.1}%) objects_removed={} streams_recompressed={}>",
+            self.original_size,
+            self.optimized_size,
+            self.bytes_saved,
+            self.compression_ratio_pct,
+            self.objects_removed,
+            self.streams_recompressed
+        )
+    }
+
+    /// Converts the statistics object to a Python dictionary.
+    pub fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("original_size", self.original_size)?;
+        dict.set_item("optimized_size", self.optimized_size)?;
+        dict.set_item("bytes_saved", self.bytes_saved)?;
+        dict.set_item("compression_ratio_pct", self.compression_ratio_pct)?;
+        dict.set_item("objects_removed", self.objects_removed)?;
+        dict.set_item("streams_recompressed", self.streams_recompressed)?;
+        dict.set_item("object_streams_created", self.object_streams_created)?;
+        dict.set_item("streams_deduplicated", self.streams_deduplicated)?;
+        Ok(dict)
+    }
+}
+
+impl PyOptimizationStats {
+    pub fn from_core(stats: pdf_engine_core::ops::OptimizationStats) -> Self {
+        Self {
+            original_size: stats.original_size,
+            optimized_size: stats.optimized_size,
+            bytes_saved: stats.bytes_saved,
+            compression_ratio_pct: stats.compression_ratio_pct,
+            objects_removed: stats.objects_removed,
+            streams_recompressed: stats.streams_recompressed,
+            object_streams_created: stats.object_streams_created,
+            streams_deduplicated: stats.streams_deduplicated,
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -1766,6 +1832,70 @@ impl PyPdfDocument {
             .save_to_vec()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize PDF: {}", e)))
     }
+
+    /// Optimizes the PDF document in-place using reachability analysis, stream recompression,
+    /// stream deduplication, and Object Stream (/ObjStm) packing.
+    #[pyo3(signature = (
+        remove_unused = true,
+        pack_object_streams = true,
+        recompress_flate = true,
+        deduplicate_streams = true,
+        max_objects_per_stream = 100
+    ))]
+    pub fn optimize(
+        &mut self,
+        remove_unused: bool,
+        pack_object_streams: bool,
+        recompress_flate: bool,
+        deduplicate_streams: bool,
+        max_objects_per_stream: usize,
+    ) -> PyResult<PyOptimizationStats> {
+        let options = pdf_engine_core::ops::OptimizationOptions {
+            remove_unused_objects: remove_unused,
+            pack_into_object_streams: pack_object_streams,
+            max_objects_per_stream,
+            recompress_flate,
+            deduplicate_streams,
+            use_xref_stream: true,
+        };
+        let stats = self
+            .doc
+            .optimize(&options)
+            .map_err(|e| PyRuntimeError::new_err(format!("Optimization failed: {}", e)))?;
+        self.reload_active_pages();
+        Ok(PyOptimizationStats::from_core(stats))
+    }
+
+    /// Saves the optimized PDF document to an in-memory byte buffer and returns (bytes, stats).
+    #[pyo3(signature = (
+        remove_unused = true,
+        pack_object_streams = true,
+        recompress_flate = true,
+        deduplicate_streams = true,
+        max_objects_per_stream = 100
+    ))]
+    pub fn save_optimized_to_bytes(
+        &mut self,
+        remove_unused: bool,
+        pack_object_streams: bool,
+        recompress_flate: bool,
+        deduplicate_streams: bool,
+        max_objects_per_stream: usize,
+    ) -> PyResult<(Vec<u8>, PyOptimizationStats)> {
+        let options = pdf_engine_core::ops::OptimizationOptions {
+            remove_unused_objects: remove_unused,
+            pack_into_object_streams: pack_object_streams,
+            max_objects_per_stream,
+            recompress_flate,
+            deduplicate_streams,
+            use_xref_stream: true,
+        };
+        let (bytes, stats) = self
+            .doc
+            .save_optimized_to_vec(&options)
+            .map_err(|e| PyRuntimeError::new_err(format!("Optimization serialization failed: {}", e)))?;
+        Ok((bytes, PyOptimizationStats::from_core(stats)))
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -1799,6 +1929,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVerifiedSignature>()?;
     m.add_class::<PyTableCell>()?;
     m.add_class::<PyDetectedTable>()?;
+    m.add_class::<PyOptimizationStats>()?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

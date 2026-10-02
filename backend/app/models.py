@@ -499,4 +499,28 @@ class TableExportResponse(BaseModel):
     col_count: int
 
 
+class OptimizeRequest(BaseModel):
+    """Request payload to optimize document size and compress streams."""
+    remove_unused: bool = Field(default=True, description="Eliminate unreferenced orphaned objects (Garbage Collection)")
+    pack_object_streams: bool = Field(default=True, description="Pack indirect objects into compressed /ObjStm streams (PDF 1.5+)")
+    recompress_flate: bool = Field(default=True, description="Recompress streams using optimal Flate (Zlib Best)")
+    deduplicate_streams: bool = Field(default=True, description="Deduplicate identical streams and consolidate references")
+    max_objects_per_stream: int = Field(default=100, description="Max indirect objects per /ObjStm container")
+
+
+class OptimizeResponse(BaseModel):
+    """Response containing optimization results and quantitative metrics."""
+    success: bool
+    document_id: str
+    original_size: int
+    optimized_size: int
+    bytes_saved: int
+    compression_ratio_pct: float
+    objects_removed: int
+    streams_recompressed: int
+    object_streams_created: int
+    streams_deduplicated: int
+    message: str
+
+
 

@@ -22,6 +22,7 @@ import {
   ChevronLeft,
   ChevronRight,
   PanelLeft,
+  Zap,
 } from 'lucide-react';
 import { TextAlignment } from '@/lib/types';
 
@@ -50,6 +51,7 @@ interface ToolbarProps {
   onNavigatePage?: (page: number) => void;
   showThumbnails?: boolean;
   onToggleThumbnails?: () => void;
+  onOptimizeClick?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -77,6 +79,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onNavigatePage,
   showThumbnails = true,
   onToggleThumbnails,
+  onOptimizeClick,
 }) => {
   const [pageInputValue, setPageInputValue] = useState<string>(String(pageNumber));
 
@@ -341,6 +344,17 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Upload size={14} />
           <span>Upload PDF</span>
         </button>
+
+        {onOptimizeClick && (
+          <button
+            onClick={onOptimizeClick}
+            title="Optimizar y Comprimir PDF (/ObjStm & Garbage Collection)"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+          >
+            <Zap size={14} className="text-amber-600 dark:text-amber-400" />
+            <span className="hidden md:inline">Optimizar</span>
+          </button>
+        )}
 
         <button
           onClick={onExportClick}
