@@ -16,4 +16,5 @@ repository = "https://github.com/rgarduno/PDFEngine"
 thiserror = "2.0"
 flate2 = "1.0"
 log = "0.4"
+getrandom = "0.2"
 pyo3 = { version = "0.23", features = ["extension-module"] }

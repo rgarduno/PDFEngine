@@ -460,7 +460,7 @@ class PermissionsModel(BaseModel):
 class EncryptDocumentRequest(BaseModel):
     """Request payload to encrypt document with AES-128 and password protection."""
     user_password: str = Field(default="", description="Password required to open and read document")
-    owner_password: str = Field(default="admin", description="Master administrative password")
+    owner_password: str = Field(min_length=1, description="Owner password required to change permissions. No default is applied.")
     permissions: Optional[PermissionsModel] = Field(default=None, description="Granular access permissions")
     encrypt_metadata: Optional[bool] = Field(default=True, description="Whether to encrypt metadata stream")
 

@@ -266,8 +266,8 @@ impl AesKey {
     }
 }
 
-/// Encrypts plaintext with AES in Cipher Block Chaining (CBC) mode with PKCS#7 padding.
-/// Conforming to ISO 32000-1 §7.6.2, the 16-byte random IV is prepended to the ciphertext.
+/// Encrypts plaintext with AES-CBC and PKCS#7 padding.
+/// The caller supplies the 16-byte IV, and this function prepends it to the ciphertext.
 pub fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> PdfResult<Vec<u8>> {
     let cipher = AesKey::new(key)?;
 

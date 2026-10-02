@@ -960,6 +960,70 @@ def test_security_and_digital_signatures_workflow():
     assert sec_resp3.json()["is_encrypted"] is False
 
 
+def test_encrypt_requires_owner_password_and_hides_plaintext():
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("contract.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    missing = client.post(
+        f"/api/documents/{doc_id}/security/encrypt",
+        json={"user_password": "secret_user"},
+    )
+    assert missing.status_code == 422
+    assert "owner_password" in missing.text
+
+    empty = client.post(
+        f"/api/documents/{doc_id}/security/encrypt",
+        json={"user_password": "secret_user", "owner_password": ""},
+    )
+    assert empty.status_code == 422
+
+    def encrypt_fresh() -> bytes:
+        uploaded = client.post(
+            "/api/documents/upload",
+            files={"file": ("contract.pdf", pdf_bytes, "application/pdf")},
+        )
+        assert uploaded.status_code == 200
+        new_id = uploaded.json()["document_id"]
+        response = client.post(
+            f"/api/documents/{new_id}/security/encrypt",
+            json={
+                "user_password": "secret_user",
+                "owner_password": "secret_admin",
+            },
+        )
+        assert response.status_code == 200
+        exported = client.get(f"/api/documents/{new_id}/export")
+        assert exported.status_code == 200
+        assert b"/Encrypt" in exported.content
+        assert b"Contract Agreement Terms" not in exported.content
+        return exported.content
+
+    first = encrypt_fresh()
+    second = encrypt_fresh()
+    assert first != second
+
+    reupload = client.post(
+        "/api/documents/upload",
+        files={"file": ("encrypted.pdf", first, "application/pdf")},
+    )
+    assert reupload.status_code == 200
+    encrypted_id = reupload.json()["document_id"]
+    decrypted = client.post(
+        f"/api/documents/{encrypted_id}/security/decrypt",
+        json={"password": "secret_admin"},
+    )
+    assert decrypted.status_code == 200
+    restored = client.get(f"/api/documents/{encrypted_id}/export")
+    assert restored.status_code == 200
+    assert b"Contract Agreement Terms" in restored.content
+    assert b"/Encrypt" not in restored.content
+
+
 def create_pdf_with_table_bytes() -> bytes:
     """Creates a valid PDF containing a 2x2 table with vector lines and cell text."""
     pdf = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")

@@ -206,7 +206,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Security & Signature State
   const [secUserPass, setSecUserPass] = useState<string>('');
-  const [secOwnerPass, setSecOwnerPass] = useState<string>('admin');
+  const [secOwnerPass, setSecOwnerPass] = useState<string>('');
   const [secDecryptPass, setSecDecryptPass] = useState<string>('');
   const [secPermPrintHigh, setSecPermPrintHigh] = useState<boolean>(true);
   const [secPermModifyContents, setSecPermModifyContents] = useState<boolean>(false);
@@ -2001,7 +2001,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       type="password"
                       value={secOwnerPass}
                       onChange={(e) => setSecOwnerPass(e.target.value)}
-                      placeholder="admin"
+                      placeholder="Requerida"
                       className="w-full mt-0.5 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-amber-500"
                     />
                   </div>
@@ -2081,10 +2081,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 <button
                   type="button"
+                  disabled={secOwnerPass.length === 0}
                   onClick={() => {
+                    if (secOwnerPass.length === 0) {
+                      return;
+                    }
                     onEncryptDocument?.({
                       user_password: secUserPass,
-                      owner_password: secOwnerPass || 'admin',
+                      owner_password: secOwnerPass,
                       permissions: {
                         print_low_res: true,
                         print_high_res: secPermPrintHigh,
@@ -2098,7 +2102,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       encrypt_metadata: true,
                     });
                   }}
-                  className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                  className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Lock size={12} />
                   <span>Aplicar Cifrado AES-128</span>

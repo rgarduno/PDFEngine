@@ -10,5 +10,6 @@ description = "Core engine for ISO 32000 PDF parsing, layout reconstruction, and
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 log = { workspace = true }
+getrandom = { workspace = true }
 
 [dev-dependencies]

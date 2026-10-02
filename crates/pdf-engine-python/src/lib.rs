@@ -1857,8 +1857,9 @@ impl PyPdfDocument {
         Ok(modified)
     }
 
-    /// Encrypts the PDF document using AES-128 standard security handler with user/owner passwords and permissions.
-    #[pyo3(signature = (user_password="", owner_password="admin", permissions=None, encrypt_metadata=true))]
+    /// Encrypts the PDF with the standard security handler, revision 4 (AES-128).
+    /// `owner_password` is required. An empty owner password is rejected.
+    #[pyo3(signature = (user_password="", owner_password="", permissions=None, encrypt_metadata=true))]
     pub fn encrypt(
         &mut self,
         user_password: &str,

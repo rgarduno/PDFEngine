@@ -298,7 +298,7 @@ export interface PermissionsPayload {
 
 export interface EncryptDocumentPayload {
   user_password?: string;
-  owner_password?: string;
+  owner_password: string;
   permissions?: PermissionsPayload;
   encrypt_metadata?: boolean;
 }

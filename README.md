@@ -107,7 +107,7 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Complete metadata scrubbing: /Info dictionary & /Metadata XMP stream   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 11. PDF Security, Permissions & SHA-256 Attestation (ISO 32000 §7.6 & §12.8)│
-│    - Pure Rust cryptographic primitives: AES-128/256 CBC, SHA-256, MD5      │
+│    - Rev 4 security handler: AES-128 CBC, SHA-256, and MD5                  │
 │    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
 │    - Granular permissions bitmask (print, edit, extract, forms, assemble)  │
 │    - Digital signatures with AcroForm /Sig fields and /ByteRange validation │
@@ -138,7 +138,7 @@ PDFEngine/
 │   │   ├── src/
 │   │   │   ├── lib.rs          # Public crate API and layer re-exports
 │   │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
-│   │   │   ├── crypto/         # Pure Rust AES-128/256, SHA-256, MD5 primitives
+│   │   │   ├── crypto/         # AES-128 CBC, SHA-256, and MD5 primitives
 │   │   │   ├── security/       # Standard Security Handler Rev 4, permissions & signatures
 │   │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
 │   │   │   ├── stream/         # Content Stream AST & graphics state evaluator
