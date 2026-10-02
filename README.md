@@ -96,9 +96,16 @@ PDFEngine/
 │   │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
-│   └── pdf-engine-ffi/         # C-ABI & WebAssembly bindings (planned)
-└── bindings/
-    └── python/                 # PyO3 native Python package (planned)
+│   └── pdf-engine-python/      # High-performance PyO3 native Python extension
+│       ├── Cargo.toml
+│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph exports
+└── backend/                    # Commercial FastAPI REST & WebSocket service
+    ├── app/
+    │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
+    │   └── models.py           # Pydantic v2 schemas (SceneGraph, BoundingBox, Edits)
+    ├── requirements.txt
+    └── tests/
+        └── test_api.py         # Full HTTP & WebSocket integration test suite
 ```
 
 ---
@@ -197,13 +204,65 @@ fn edit_page_paragraph(page_content_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std
 
 ---
 
+## Commercial Python & FastAPI Service
+
+PDFEngine compiles to a native Python C-extension via PyO3, with a production-grade FastAPI microservice ready for containerized or serverless deployment.
+
+### 1. Direct Python API Usage
+
+```python
+import pdf_engine
+
+# Load document from file or bytes
+doc = pdf_engine.Document.load("contract.pdf")
+print(f"Total pages: {doc.page_count()}")
+
+# Inspect page layout scenegraph
+page = doc.get_page(1)
+paragraphs = page.get_paragraphs()
+
+for p in paragraphs:
+    print(f"Paragraph {p.id}: [{p.alignment}] {p.text[:40]}... (bbox: {p.bbox()})")
+
+# Surgically edit target paragraph
+page.edit_paragraph(0, "Amended Terms Approved with zero layout drift.")
+doc.update_page(page)
+
+# Export modified PDF
+doc.save("contract_edited.pdf")
+```
+
+### 2. Running the FastAPI Service
+
+```bash
+# Setup environment & install dependencies
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
+
+# Start production server
+PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3. API Endpoints
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/health` | Health check and native engine availability. |
+| `POST` | `/api/documents/upload` | Ingest PDF, validate ISO structure, and return session token. |
+| `GET` | `/api/documents/{id}/pages/{p}/scenegraph` | Retrieve semantic layout (paragraphs, bounding boxes, alignments). |
+| `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
+| `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
+| `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
+
+---
+
 ## Project Roadmap
 
 - [x] **Phase 0: Workspace Setup & Architecture** (Cargo workspace, coding standards, CI baseline)
 - [x] **Phase 1: Safe COS Core** (Lexer, Parser, XRef streams, Flate/PNG filters, Writer, Tests)
 - [x] **Phase 2: Content Streams & Typographic Engine** (AST operator parser, Graphics State, TrueType tables, ToUnicode CMaps, ligatures)
 - [x] **Phase 3: Semantic Layout & Surgical Reflow** (Glyph clustering, paragraph reflow, in-place AST mutator)
-- [ ] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, font server, WebSocket reflow)
+- [x] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, scene graph inspection, surgical edit endpoints, WebSocket reflow)
 - [ ] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, FontFace loader)
 - [ ] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing)
 

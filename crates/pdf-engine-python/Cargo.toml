@@ -1,0 +1,15 @@
+[package]
+name = "pdf-engine-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Python bindings for PDFEngine core using PyO3"
+
+[lib]
+name = "pdf_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pdf-engine-core = { path = "../pdf-engine-core" }
+pyo3 = { workspace = true }

@@ -300,15 +300,35 @@ impl PdfDocument {
 
         let mut offsets = Vec::new();
 
-        // Write all objects present in the objects map
-        let keys: Vec<ObjectId> = self.objects.keys().copied().collect();
-        for id in keys {
-            let obj = self.objects.get(&id).unwrap().clone();
-            let offset = writer.write_indirect_object(id, &obj)?;
-            offsets.push((id, offset));
+        // Collect all in-use object IDs from xref
+        let all_ids: Vec<ObjectId> = self
+            .xref
+            .entries
+            .iter()
+            .filter_map(|(&id, entry)| match entry {
+                XRefEntry::InUse { .. } | XRefEntry::Compressed { .. } => Some(id),
+                XRefEntry::Free { .. } => None,
+            })
+            .collect();
+
+        // Ensure all in-use objects are loaded into cache
+        for id in all_ids {
+            let _ = self.get_object(id);
         }
 
-        let trailer = self.xref.trailer.clone();
+        // Write all objects present in the objects map sorted by number
+        let mut sorted_keys: Vec<ObjectId> = self.objects.keys().copied().collect();
+        sorted_keys.sort_by_key(|id| id.number);
+
+        for id in sorted_keys {
+            if let Some(obj) = self.objects.get(&id) {
+                let offset = writer.write_indirect_object(id, obj)?;
+                offsets.push((id, offset));
+            }
+        }
+
+        let mut trailer = self.xref.trailer.clone();
+        trailer.insert("Size", (offsets.len() + 1) as i64);
         writer.write_xref_and_trailer(&offsets, &trailer)?;
 
         Ok(out)
