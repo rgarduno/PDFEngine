@@ -1,27 +1,44 @@
-//! Digital Signatures implementation conforming to ISO 32000-1 §12.8.
-//! Provides visual cryptographic stamp synthesis, AcroForm signature field injection,
-//! `/ByteRange` detached signature representation, and document integrity verification.
+//! SHA-256 byte-range integrity attestation.
+//!
+//! `/Filter` is `/PDFEngine.Approval` and `/SubFilter` is `/PDFEngine.sha256`.
+//! `/Contents` is the raw SHA-256 digest of the file bytes selected by `/ByteRange`.
+//! The two ranges cover the saved file exactly once and skip only the hex digits
+//! of `/Contents`. This records file integrity. It is not a CMS signature and it
+//! does not establish the signer's identity.
 
-use crate::cos::{PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString};
+use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::cos::{
+    ObjectId, Parser, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream,
+    PdfString, XRefEntry,
+};
 use crate::crypto::sha256;
 use crate::error::{PdfError, PdfResult};
 
-/// Parameters for creating and embedding a digital signature.
+const SUBFILTER_NAME: &str = "PDFEngine.sha256";
+const FILTER_NAME: &str = "PDFEngine.Approval";
+/// 32-byte hole. Its hex encoding is 64 characters, the same width as a SHA-256 digest.
+const CONTENTS_HOLE: &[u8] = b"PDFEngine-sha256-contents-hole!!";
+const SUBFILTER_MARK: &[u8] = b"/SubFilter /PDFEngine.sha256";
+const TYPE_SIG_MARK: &[u8] = b"/Type /Sig";
+
+/// Parameters for stamping an integrity attestation onto one page.
 #[derive(Debug, Clone)]
 pub struct DigitalSignatureConfig {
-    /// Common Name or Organization of the signer (`/Name`).
+    /// Common name or organization stored in `/Name`.
     pub signer_name: String,
-    /// Legal or operational rationale for signing (`/Reason`).
+    /// Operational note stored in `/Reason`.
     pub reason: String,
-    /// Physical or jurisdiction location (`/Location`).
+    /// Location stored in `/Location`.
     pub location: String,
-    /// Visual signature placement on page `[min_x, min_y, max_x, max_y]` in points.
+    /// Visual stamp rectangle `[min_x, min_y, max_x, max_y]` in points.
     pub rect: [f64; 4],
     /// Target page number (1-based).
     pub page_number: usize,
-    /// Visual style of the signature stamp.
+    /// Draw the visual stamp when true.
     pub visual_badge: bool,
-    /// Contact info or email of the signer.
+    /// Optional `/ContactInfo` value.
     pub contact_info: Option<String>,
 }
 
@@ -29,7 +46,7 @@ impl Default for DigitalSignatureConfig {
     fn default() -> Self {
         Self {
             signer_name: "PDFEngine Certified Signer".to_string(),
-            reason: "Digital Approval & Legal Conformance".to_string(),
+            reason: "Integridad del archivo".to_string(),
             location: "Mexico City, MX".to_string(),
             rect: [72.0, 72.0, 272.0, 142.0],
             page_number: 1,
@@ -39,39 +56,36 @@ impl Default for DigitalSignatureConfig {
     }
 }
 
-/// Information extracted from a verified digital signature.
+/// One signature dictionary read back from a document.
 #[derive(Debug, Clone)]
 pub struct VerifiedSignature {
-    /// Field name.
+    /// Widget field name (`/T`).
     pub field_name: String,
-    /// Signer common name or certificate identity.
+    /// `/Name` value.
     pub signer_name: String,
-    /// Reason provided in signature dict.
+    /// `/Reason` value.
     pub reason: String,
-    /// Location provided in signature dict.
+    /// `/Location` value.
     pub location: String,
-    /// Signing timestamp string.
+    /// `/M` value as stored in the file.
     pub date: String,
-    /// SubFilter format (`adbe.pkcs7.detached`, etc.).
+    /// `/SubFilter` name. Attestations produced here use `PDFEngine.sha256`.
     pub sub_filter: String,
-    /// ByteRange `[offset1, len1, offset2, len2]`.
+    /// `/ByteRange` as four non-negative integers.
     pub byte_range: Vec<usize>,
-    /// Hex-encoded signature contents.
+    /// Lowercase hex of `/Contents`. For a valid attestation this is the SHA-256 digest.
     pub contents_hex: String,
-    /// Whether the ByteRange structure is syntactically sound.
+    /// True when `/ByteRange` covers `raw_data` except the Contents hex digits and the digest matches.
     pub byte_range_valid: bool,
-    /// Visual bounding box `[min_x, min_y, max_x, max_y]`.
+    /// Widget rectangle `[min_x, min_y, max_x, max_y]`.
     pub rect: [f64; 4],
-    /// Page number where the signature widget resides.
+    /// Page number recorded for the widget. Defaults to 1 when the page is not resolved.
     pub page_number: usize,
 }
 
-/// Synthesizes a visual appearance Form XObject stream for a digital signature.
-fn synthesize_signature_appearance(
-    config: &DigitalSignatureConfig,
-    date_str: &str,
-    cert_hash: &str,
-) -> PdfStream {
+/// Draws the visual stamp. The stamp does not include the digest: the digest
+/// covers this stream, so embedding it would change the bytes being hashed.
+fn synthesize_signature_appearance(config: &DigitalSignatureConfig, date_str: &str) -> PdfStream {
     let width = (config.rect[2] - config.rect[0]).max(10.0);
     let height = (config.rect[3] - config.rect[1]).max(10.0);
 
@@ -86,7 +100,6 @@ fn synthesize_signature_appearance(
     bbox.push(PdfObject::Real(height));
     dict.insert("BBox", PdfObject::Array(bbox));
 
-    // Register standard Helvetica and Helvetica-Bold in Resources
     let mut font_dict = PdfDictionary::new();
     let mut f_helv = PdfDictionary::new();
     f_helv.insert("Type", PdfObject::Name(PdfName::new("Font")));
@@ -104,35 +117,46 @@ fn synthesize_signature_appearance(
     res_dict.insert("Font", PdfObject::Dictionary(font_dict));
     dict.insert("Resources", PdfObject::Dictionary(res_dict));
 
-    // Vector drawing: border, icon badge, and certified text
     let mut ops = String::new();
     ops.push_str("q\n");
-
-    // Background fill (light clean blue/gray tint)
     ops.push_str("0.96 0.98 1.0 rg\n");
-    ops.push_str(&format!("0.5 0.5 {:.2} {:.2} re f\n", width - 1.0, height - 1.0));
-
-    // Decorative double border
+    ops.push_str(&format!(
+        "0.5 0.5 {:.2} {:.2} re f\n",
+        width - 1.0,
+        height - 1.0
+    ));
     ops.push_str("0.15 0.35 0.70 RG 1.5 w\n");
-    ops.push_str(&format!("1.0 1.0 {:.2} {:.2} re S\n", width - 2.0, height - 2.0));
+    ops.push_str(&format!(
+        "1.0 1.0 {:.2} {:.2} re S\n",
+        width - 2.0,
+        height - 2.0
+    ));
     ops.push_str("0.40 0.60 0.90 RG 0.5 w\n");
-    ops.push_str(&format!("3.5 3.5 {:.2} {:.2} re S\n", width - 7.0, height - 7.0));
+    ops.push_str(&format!(
+        "3.5 3.5 {:.2} {:.2} re S\n",
+        width - 7.0,
+        height - 7.0
+    ));
 
-    // Left Seal Badge Icon (Checkmark / Shield circle)
     let badge_cx = 24.0;
     let badge_cy = height / 2.0;
     ops.push_str("0.15 0.45 0.85 rg\n");
-    ops.push_str(&format!("{:.2} {:.2} 16 16 re f\n", badge_cx - 8.0, badge_cy - 8.0));
+    ops.push_str(&format!(
+        "{:.2} {:.2} 16 16 re f\n",
+        badge_cx - 8.0,
+        badge_cy - 8.0
+    ));
     ops.push_str("1.0 1.0 1.0 RG 2.0 w\n");
-    // Draw vector checkmark inside shield badge
     ops.push_str(&format!(
         "{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l S\n",
-        badge_cx - 4.0, badge_cy,
-        badge_cx - 1.0, badge_cy - 4.0,
-        badge_cx + 5.0, badge_cy + 4.0
+        badge_cx - 4.0,
+        badge_cy,
+        badge_cx - 1.0,
+        badge_cy - 4.0,
+        badge_cx + 5.0,
+        badge_cy + 4.0
     ));
 
-    // Text annotations
     ops.push_str("0.1 0.1 0.15 rg\n");
     let text_x = 44.0;
     let line1_y = (height - 18.0).max(12.0);
@@ -140,31 +164,36 @@ fn synthesize_signature_appearance(
     let line3_y = (line2_y - 11.0).max(8.0);
     let line4_y = (line3_y - 10.0).max(6.0);
 
-    // Line 1: Certified Signer Name
     ops.push_str("BT\n/HelvB 9 Tf\n");
     ops.push_str(&format!("{:.2} {:.2} Td\n", text_x, line1_y));
-    ops.push_str(&format!("(Firmado Digitalmente por: {}) Tj\n", escape_pdf_str(&config.signer_name)));
+    ops.push_str(&format!(
+        "(Integridad: {}) Tj\n",
+        escape_pdf_str(&config.signer_name)
+    ));
     ops.push_str("ET\n");
 
-    // Line 2: Reason
     ops.push_str("BT\n/Helv 7.5 Tf\n");
     ops.push_str(&format!("{:.2} {:.2} Td\n", text_x, line2_y));
-    ops.push_str(&format!("(Motivo: {}) Tj\n", escape_pdf_str(&config.reason)));
+    ops.push_str(&format!(
+        "(Motivo: {}) Tj\n",
+        escape_pdf_str(&config.reason)
+    ));
     ops.push_str("ET\n");
 
-    // Line 3: Location and Date
     ops.push_str("BT\n/Helv 7 Tf\n");
     ops.push_str(&format!("{:.2} {:.2} Td\n", text_x, line3_y));
-    ops.push_str(&format!("(Lugar: {} | Fecha: {}) Tj\n", escape_pdf_str(&config.location), date_str));
+    ops.push_str(&format!(
+        "(Lugar: {} | Fecha: {}) Tj\n",
+        escape_pdf_str(&config.location),
+        date_str
+    ));
     ops.push_str("ET\n");
 
-    // Line 4: Cryptographic SHA-256 fingerprint badge
     ops.push_str("0.4 0.45 0.55 rg\n");
     ops.push_str("BT\n/Helv 6 Tf\n");
     ops.push_str(&format!("{:.2} {:.2} Td\n", text_x, line4_y));
-    ops.push_str(&format!("(SHA-256: {}) Tj\n", &cert_hash[..16.min(cert_hash.len())]));
+    ops.push_str("(SHA-256 sobre el rango de bytes) Tj\n");
     ops.push_str("ET\n");
-
     ops.push_str("Q\n");
 
     let content = ops.into_bytes();
@@ -178,7 +207,14 @@ fn escape_pdf_str(s: &str) -> String {
         .replace(')', "\\)")
 }
 
-/// Inscribes a cryptographic digital signature into the `PdfDocument`.
+fn padded_byte_range(a: u64, b: u64, c: u64, d: u64) -> String {
+    format!("[ {:010} {:010} {:010} {:010} ]", a, b, c, d)
+}
+
+/// Stamps an integrity attestation and reloads `doc` from the sealed bytes.
+///
+/// The returned value is read back from those bytes, so `byte_range_valid`
+/// reflects the digest of the buffer now stored in the document.
 pub fn sign_document(
     doc: &mut PdfDocument,
     config: &DigitalSignatureConfig,
@@ -192,55 +228,69 @@ pub fn sign_document(
         });
     }
 
-    let now_date = "2026-10-02T15:20:00Z";
-    let pdf_date = "D:20261002152000+00'00'";
+    let (iso_date, pdf_date) = utc_timestamps();
 
-    // Compute placeholder detached SHA-256 signature hash over signer details
-    let mut sign_payload = Vec::new();
-    sign_payload.extend_from_slice(config.signer_name.as_bytes());
-    sign_payload.extend_from_slice(config.reason.as_bytes());
-    sign_payload.extend_from_slice(config.location.as_bytes());
-    sign_payload.extend_from_slice(pdf_date.as_bytes());
-    let sig_hash = sha256(&sign_payload);
-    let sig_hash_hex = sig_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-
-    // 1. Create Signature dictionary (/Type /Sig)
-    let mut sig_dict = PdfDictionary::new();
-    sig_dict.insert("Type", PdfObject::Name(PdfName::new("Sig")));
-    sig_dict.insert("Filter", PdfObject::Name(PdfName::new("Adobe.PPKLite")));
-    sig_dict.insert("SubFilter", PdfObject::Name(PdfName::new("adbe.pkcs7.detached")));
-    sig_dict.insert("Name", PdfObject::String(PdfString::literal(config.signer_name.as_bytes())));
-    sig_dict.insert("Reason", PdfObject::String(PdfString::literal(config.reason.as_bytes())));
-    sig_dict.insert("Location", PdfObject::String(PdfString::literal(config.location.as_bytes())));
-    sig_dict.insert("M", PdfObject::String(PdfString::literal(pdf_date.as_bytes())));
-
-    // Placeholder ByteRange [0, 1000, 2000, 3000]
     let mut byte_range_arr = PdfArray::new();
     byte_range_arr.push(PdfObject::Integer(0));
-    byte_range_arr.push(PdfObject::Integer(1024));
-    byte_range_arr.push(PdfObject::Integer(2048));
-    byte_range_arr.push(PdfObject::Integer(4096));
-    sig_dict.insert("ByteRange", PdfObject::Array(byte_range_arr));
+    byte_range_arr.push(PdfObject::Integer(0));
+    byte_range_arr.push(PdfObject::Integer(0));
+    byte_range_arr.push(PdfObject::Integer(0));
 
-    // Hex-encoded signature contents
-    sig_dict.insert("Contents", PdfObject::String(PdfString::hex(sig_hash.to_vec())));
+    let mut sig_dict = PdfDictionary::new();
+    sig_dict.insert("Type", PdfObject::Name(PdfName::new("Sig")));
+    sig_dict.insert("Filter", PdfObject::Name(PdfName::new(FILTER_NAME)));
+    sig_dict.insert("SubFilter", PdfObject::Name(PdfName::new(SUBFILTER_NAME)));
+    sig_dict.insert(
+        "Name",
+        PdfObject::String(PdfString::literal(config.signer_name.as_bytes())),
+    );
+    sig_dict.insert(
+        "Reason",
+        PdfObject::String(PdfString::literal(config.reason.as_bytes())),
+    );
+    sig_dict.insert(
+        "Location",
+        PdfObject::String(PdfString::literal(config.location.as_bytes())),
+    );
+    sig_dict.insert(
+        "M",
+        PdfObject::String(PdfString::literal(pdf_date.as_bytes())),
+    );
+    if let Some(contact) = config
+        .contact_info
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        sig_dict.insert(
+            "ContactInfo",
+            PdfObject::String(PdfString::literal(contact.as_bytes())),
+        );
+    }
+    sig_dict.insert("ByteRange", PdfObject::Array(byte_range_arr));
+    sig_dict.insert(
+        "Contents",
+        PdfObject::String(PdfString::hex(CONTENTS_HOLE.to_vec())),
+    );
 
     let sig_dict_id = doc.alloc_object_id();
-    doc.objects.insert(sig_dict_id, PdfObject::Dictionary(sig_dict));
+    doc.objects
+        .insert(sig_dict_id, PdfObject::Dictionary(sig_dict));
 
-    // 2. Synthesize visual appearance stream
-    let ap_stream = synthesize_signature_appearance(config, now_date, &sig_hash_hex);
+    let ap_stream = synthesize_signature_appearance(config, &iso_date);
     let ap_stream_id = doc.alloc_object_id();
-    doc.objects.insert(ap_stream_id, PdfObject::Stream(ap_stream));
+    doc.objects
+        .insert(ap_stream_id, PdfObject::Stream(ap_stream));
 
-    // 3. Create Signature Field / Widget Annotation
     let field_name = format!("SignatureField_{}", sig_dict_id.number);
     let mut annot_dict = PdfDictionary::new();
     annot_dict.insert("Type", PdfObject::Name(PdfName::new("Annot")));
     annot_dict.insert("Subtype", PdfObject::Name(PdfName::new("Widget")));
     annot_dict.insert("FT", PdfObject::Name(PdfName::new("Sig")));
-    annot_dict.insert("T", PdfObject::String(PdfString::literal(field_name.as_bytes())));
-    annot_dict.insert("F", PdfObject::Integer(132)); // Print + Locked
+    annot_dict.insert(
+        "T",
+        PdfObject::String(PdfString::literal(field_name.as_bytes())),
+    );
+    annot_dict.insert("F", PdfObject::Integer(132));
 
     let mut rect_arr = PdfArray::new();
     rect_arr.push(PdfObject::Real(config.rect[0]));
@@ -255,12 +305,10 @@ pub fn sign_document(
     annot_dict.insert("V", PdfObject::Reference(sig_dict_id));
 
     let annot_id = doc.alloc_object_id();
-
-    // 4. Attach Widget to Target Page
     let page_id = pages[config.page_number - 1];
-
     annot_dict.insert("P", PdfObject::Reference(page_id));
-    doc.objects.insert(annot_id, PdfObject::Dictionary(annot_dict));
+    doc.objects
+        .insert(annot_id, PdfObject::Dictionary(annot_dict));
 
     if let Some(page_obj) = doc.objects.get_mut(&page_id) {
         if let Some(dict) = page_obj.as_dict_mut() {
@@ -273,9 +321,15 @@ pub fn sign_document(
         }
     }
 
-    // 5. Ensure AcroForm is registered in Catalog
-    let root_ref = doc.xref.trailer.get("Root").and_then(|o| o.as_reference())
-        .ok_or_else(|| PdfError::ParseError { offset: 0, message: "Missing /Root in trailer".to_string() })?;
+    let root_ref = doc
+        .xref
+        .trailer
+        .get("Root")
+        .and_then(|o| o.as_reference())
+        .ok_or_else(|| PdfError::ParseError {
+            offset: 0,
+            message: "Missing /Root in trailer".to_string(),
+        })?;
 
     let acroform_ref = if let Some(PdfObject::Dictionary(cat)) = doc.objects.get(&root_ref) {
         cat.get("AcroForm").and_then(|o| o.as_reference())
@@ -289,7 +343,7 @@ pub fn sign_document(
             let aid = doc.alloc_object_id();
             let mut af_dict = PdfDictionary::new();
             af_dict.insert("Fields", PdfObject::Array(PdfArray::new()));
-            af_dict.insert("SigFlags", PdfObject::Integer(3)); // SignaturesExist (1) + AppendOnly (2)
+            af_dict.insert("SigFlags", PdfObject::Integer(3));
             doc.objects.insert(aid, PdfObject::Dictionary(af_dict));
             if let Some(PdfObject::Dictionary(cat)) = doc.objects.get_mut(&root_ref) {
                 cat.insert("AcroForm", PdfObject::Reference(aid));
@@ -298,7 +352,6 @@ pub fn sign_document(
         }
     };
 
-    // Add signature field to AcroForm /Fields
     if let Some(PdfObject::Dictionary(af)) = doc.objects.get_mut(&acroform_id) {
         af.insert("SigFlags", PdfObject::Integer(3));
         if !af.contains_key("Fields") {
@@ -309,107 +362,482 @@ pub fn sign_document(
         }
     }
 
-    Ok(VerifiedSignature {
-        field_name,
-        signer_name: config.signer_name.clone(),
-        reason: config.reason.clone(),
-        location: config.location.clone(),
-        date: now_date.to_string(),
-        sub_filter: "adbe.pkcs7.detached".to_string(),
-        byte_range: vec![0, 1024, 2048, 4096],
-        contents_hex: sig_hash_hex,
-        byte_range_valid: true,
-        rect: config.rect,
-        page_number: config.page_number,
-    })
+    let limits = doc.limits.clone();
+    let sealed = doc.save_to_vec()?;
+    *doc = PdfDocument::load_with_limits(&sealed, limits)?;
+
+    verify_document_signatures(doc)
+        .into_iter()
+        .rev()
+        .find(|sig| sig.field_name == field_name)
+        .ok_or_else(|| {
+            PdfError::CryptographyError(
+                "The integrity attestation was written but could not be read back.".to_string(),
+            )
+        })
 }
 
-/// Scans the document and extracts all embedded digital signatures and validation states.
+/// Reads every `/Sig` dictionary and checks `/Contents` against `/ByteRange`.
 pub fn verify_document_signatures(doc: &PdfDocument) -> Vec<VerifiedSignature> {
+    let objects = objects_for_verification(doc);
     let mut signatures = Vec::new();
 
-    // 1. Scan objects for /Type /Sig
-    for (id, obj) in &doc.objects {
-        if let Some(dict) = obj.as_dict() {
-            let is_sig = dict.get("Type").and_then(|o| o.as_name()) == Some("Sig");
-            if !is_sig {
-                continue;
-            }
+    for (id, obj) in &objects {
+        let Some(dict) = obj.as_dict() else {
+            continue;
+        };
+        if dict.get("Type").and_then(|o| o.as_name()) != Some("Sig") {
+            continue;
+        }
 
-            let signer_name = dict.get("Name").and_then(|o| o.as_string())
-                .map(|s| String::from_utf8_lossy(&s.bytes).to_string())
-                .unwrap_or_else(|| "Unknown Signer".to_string());
+        let signer_name = dict_text(dict, "Name").unwrap_or_else(|| "Unknown Signer".to_string());
+        let reason = dict_text(dict, "Reason").unwrap_or_default();
+        let location = dict_text(dict, "Location").unwrap_or_default();
+        let date = dict_text(dict, "M").unwrap_or_default();
+        let sub_filter = dict
+            .get("SubFilter")
+            .and_then(|o| o.as_name())
+            .unwrap_or("")
+            .to_string();
 
-            let reason = dict.get("Reason").and_then(|o| o.as_string())
-                .map(|s| String::from_utf8_lossy(&s.bytes).to_string())
-                .unwrap_or_default();
+        let contents = dict
+            .get("Contents")
+            .and_then(|o| o.as_string())
+            .map(|value| value.bytes.clone())
+            .unwrap_or_default();
+        let contents_hex = contents
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect();
 
-            let location = dict.get("Location").and_then(|o| o.as_string())
-                .map(|s| String::from_utf8_lossy(&s.bytes).to_string())
-                .unwrap_or_default();
-
-            let date = dict.get("M").and_then(|o| o.as_string())
-                .map(|s| String::from_utf8_lossy(&s.bytes).to_string())
-                .unwrap_or_default();
-
-            let sub_filter = dict.get("SubFilter").and_then(|o| o.as_name())
-                .unwrap_or("adbe.pkcs7.detached")
-                .to_string();
-
-            let contents_hex = dict.get("Contents").and_then(|o| o.as_string())
-                .map(|s| s.bytes.iter().map(|b| format!("{:02x}", b)).collect())
-                .unwrap_or_default();
-
-            let byte_range: Vec<usize> = dict.get("ByteRange").and_then(|o| o.as_array())
-                .map(|arr| arr.iter().filter_map(|item| item.as_integer().map(|i| i as usize)).collect())
-                .unwrap_or_default();
-
-            let byte_range_valid = byte_range.len() == 4 && byte_range[0] == 0;
-
-            // Find associated widget annotation
-            let mut field_name = format!("Signature_{}", id.number);
-            let mut rect = [0.0, 0.0, 0.0, 0.0];
-            let page_num = 1;
-
-            for (_aid, aobj) in &doc.objects {
-                if let Some(adict) = aobj.as_dict() {
-                    let has_v = adict.get("V").and_then(|o| o.as_reference()) == Some(*id);
-                    if has_v {
-                        if let Some(name) = adict.get("T").and_then(|o| o.as_string()) {
-                            field_name = String::from_utf8_lossy(&name.bytes).to_string();
-                        }
-                        if let Some(rarr) = adict.get("Rect").and_then(|o| o.as_array()) {
-                            if rarr.len() == 4 {
-                                rect = [
-                                    rarr[0].as_real().unwrap_or(0.0),
-                                    rarr[1].as_real().unwrap_or(0.0),
-                                    rarr[2].as_real().unwrap_or(0.0),
-                                    rarr[3].as_real().unwrap_or(0.0),
-                                ];
-                            }
-                        }
-                        break;
-                    }
+        let mut byte_range = Vec::new();
+        let mut ranges_ok = true;
+        if let Some(arr) = dict.get("ByteRange").and_then(|o| o.as_array()) {
+            for item in arr {
+                match item.as_integer() {
+                    Some(value) if value >= 0 => match usize::try_from(value) {
+                        Ok(parsed) => byte_range.push(parsed),
+                        Err(_) => ranges_ok = false,
+                    },
+                    _ => ranges_ok = false,
                 }
             }
-
-            signatures.push(VerifiedSignature {
-                field_name,
-                signer_name,
-                reason,
-                location,
-                date,
-                sub_filter,
-                byte_range,
-                contents_hex,
-                byte_range_valid,
-                rect,
-                page_number: page_num,
-            });
+        } else {
+            ranges_ok = false;
         }
+
+        let byte_range_valid =
+            ranges_ok && attestation_matches(doc.raw_data(), &byte_range, &contents);
+
+        let mut field_name = format!("Signature_{}", id.number);
+        let mut rect = [0.0, 0.0, 0.0, 0.0];
+        let page_num = 1;
+        for aobj in objects.values() {
+            let Some(adict) = aobj.as_dict() else {
+                continue;
+            };
+            if adict.get("V").and_then(|o| o.as_reference()) != Some(*id) {
+                continue;
+            }
+            if let Some(name) = dict_text(adict, "T") {
+                field_name = name;
+            }
+            if let Some(rarr) = adict.get("Rect").and_then(|o| o.as_array()) {
+                if rarr.len() == 4 {
+                    rect = [
+                        rarr[0].as_real().unwrap_or(0.0),
+                        rarr[1].as_real().unwrap_or(0.0),
+                        rarr[2].as_real().unwrap_or(0.0),
+                        rarr[3].as_real().unwrap_or(0.0),
+                    ];
+                }
+            }
+            break;
+        }
+
+        signatures.push(VerifiedSignature {
+            field_name,
+            signer_name,
+            reason,
+            location,
+            date,
+            sub_filter,
+            byte_range,
+            contents_hex,
+            byte_range_valid,
+            rect,
+            page_number: page_num,
+        });
     }
 
     signatures
+}
+
+/// Rewrites the newest `PDFEngine.sha256` attestation so its digest matches `file`.
+///
+/// A full save changes offsets, so the previous digest cannot stay valid.
+/// Documents without this subfilter are returned unchanged.
+pub(crate) fn seal_saved_bytes(file: &mut Vec<u8>) -> PdfResult<()> {
+    let Some(sub_at) = find_attestation(file) else {
+        return Ok(());
+    };
+    // String encryption replaces the clear 32-byte digest with ciphertext.
+    // Resealing that ciphertext belongs to the encryption writer, not here.
+    if !clear_digest_hole(file, sub_at) {
+        if file
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt")
+        {
+            return Ok(());
+        }
+        return Err(PdfError::CryptographyError(
+            "Integrity attestation /Contents must be a 32-byte hex string.".into(),
+        ));
+    }
+    let obj_start = object_start(file, sub_at);
+    let bracket = find_byte_range_bracket(file, obj_start, sub_at)?;
+    let array_end = file[bracket..]
+        .iter()
+        .position(|byte| *byte == b']')
+        .map(|rel| bracket + rel + 1)
+        .ok_or_else(|| {
+            PdfError::CryptographyError("Integrity attestation /ByteRange is not closed.".into())
+        })?;
+    let padded = padded_byte_range(0, 0, 0, 0);
+    if &file[bracket..array_end] != padded.as_bytes() {
+        let delta = padded.len() as i64 - (array_end - bracket) as i64;
+        file.splice(bracket..array_end, padded.bytes());
+        adjust_classic_xref(file, bracket, delta)?;
+    }
+    write_digest(file)
+}
+
+fn write_digest(file: &mut Vec<u8>) -> PdfResult<()> {
+    let sub_at = find_attestation(file).ok_or_else(|| {
+        PdfError::CryptographyError("Integrity attestation disappeared while sealing.".into())
+    })?;
+    let obj_start = object_start(file, sub_at);
+    let contents_at = rfind(&file[obj_start..sub_at], b"/Contents <")
+        .map(|rel| obj_start + rel)
+        .ok_or_else(|| {
+            PdfError::CryptographyError("Integrity attestation is missing /Contents.".into())
+        })?;
+    let hex_start = contents_at + b"/Contents <".len();
+    let hex_len = file[hex_start..sub_at]
+        .iter()
+        .position(|byte| *byte == b'>')
+        .ok_or_else(|| {
+            PdfError::CryptographyError("Integrity attestation /Contents is not closed.".into())
+        })?;
+    if hex_len != 64
+        || !file[hex_start..hex_start + hex_len]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+    {
+        return Err(PdfError::CryptographyError(
+            "Integrity attestation /Contents must be a 32-byte hex string.".into(),
+        ));
+    }
+    let hex_end = hex_start + hex_len;
+    let bracket = find_byte_range_bracket(file, obj_start, hex_start)?;
+    let padded = padded_byte_range(0, 0, 0, 0);
+    let array_end = bracket + padded.len();
+    if array_end > file.len() || &file[bracket..array_end] != padded.as_bytes() {
+        return Err(PdfError::CryptographyError(
+            "Integrity attestation /ByteRange could not be reserved at a fixed width.".into(),
+        ));
+    }
+
+    let len1 = hex_start;
+    let start2 = hex_end;
+    let len2 = file.len() - start2;
+    if len1 > 9_999_999_999 || start2 > 9_999_999_999 || len2 > 9_999_999_999 {
+        return Err(PdfError::CryptographyError(
+            "Integrity attestation does not support files whose offsets exceed 10 digits.".into(),
+        ));
+    }
+    let rendered = padded_byte_range(0, len1 as u64, start2 as u64, len2 as u64);
+    file[bracket..array_end].copy_from_slice(rendered.as_bytes());
+
+    let mut covered = Vec::with_capacity(len1 + len2);
+    covered.extend_from_slice(&file[..len1]);
+    covered.extend_from_slice(&file[start2..]);
+    let digest = sha256(&covered);
+    let encoded: String = digest.iter().map(|byte| format!("{:02X}", byte)).collect();
+    file[hex_start..hex_end].copy_from_slice(encoded.as_bytes());
+    Ok(())
+}
+
+fn attestation_matches(file: &[u8], byte_range: &[usize], contents: &[u8]) -> bool {
+    if byte_range.len() != 4 || contents.len() != 32 {
+        return false;
+    }
+    let start1 = byte_range[0];
+    let len1 = byte_range[1];
+    let start2 = byte_range[2];
+    let len2 = byte_range[3];
+    if start1 != 0 || len1 > file.len() || start2 > file.len() {
+        return false;
+    }
+    let Some(end1) = start1.checked_add(len1) else {
+        return false;
+    };
+    let Some(end2) = start2.checked_add(len2) else {
+        return false;
+    };
+    if end1 != len1 || start2 != len1 + 64 || end2 != file.len() {
+        return false;
+    }
+    if file.get(len1.wrapping_sub(1)) != Some(&b'<') || file.get(start2) != Some(&b'>') {
+        return false;
+    }
+    let mut covered = Vec::with_capacity(len1 + len2);
+    covered.extend_from_slice(&file[..len1]);
+    covered.extend_from_slice(&file[start2..]);
+    sha256(&covered).as_slice() == contents
+}
+
+fn objects_for_verification(doc: &PdfDocument) -> BTreeMap<ObjectId, PdfObject> {
+    let mut objects = BTreeMap::new();
+    for (&id, entry) in &doc.xref.entries {
+        let XRefEntry::InUse { offset, .. } = entry else {
+            continue;
+        };
+        let mut parser = Parser::at_offset(doc.raw_data(), *offset as usize);
+        if let Ok((parsed_id, obj)) = parser.parse_indirect_object() {
+            if parsed_id == id {
+                objects.insert(id, obj);
+            }
+        }
+    }
+    for (id, obj) in &doc.objects {
+        objects.entry(*id).or_insert_with(|| obj.clone());
+    }
+    objects
+}
+
+fn dict_text(dict: &PdfDictionary, key: &str) -> Option<String> {
+    dict.get(key)
+        .and_then(|obj| obj.as_string())
+        .map(|value| String::from_utf8_lossy(&value.bytes).into_owned())
+}
+
+fn find_attestation(file: &[u8]) -> Option<usize> {
+    let mut search_from = 0;
+    let mut found = None;
+    while search_from + SUBFILTER_MARK.len() <= file.len() {
+        let Some(rel) = file[search_from..]
+            .windows(SUBFILTER_MARK.len())
+            .position(|window| window == SUBFILTER_MARK)
+        else {
+            break;
+        };
+        let at = search_from + rel;
+        let after = at + SUBFILTER_MARK.len();
+        let window_end = (after + 32).min(file.len());
+        if file[after..window_end]
+            .windows(TYPE_SIG_MARK.len())
+            .any(|window| window == TYPE_SIG_MARK)
+        {
+            found = Some(at);
+        }
+        search_from = after;
+    }
+    found
+}
+
+fn clear_digest_hole(file: &[u8], sub_at: usize) -> bool {
+    let obj_start = object_start(file, sub_at);
+    let Some(rel) = rfind(&file[obj_start..sub_at], b"/Contents <") else {
+        return false;
+    };
+    let hex_start = obj_start + rel + b"/Contents <".len();
+    let Some(hex_len) = file[hex_start..sub_at]
+        .iter()
+        .position(|byte| *byte == b'>')
+    else {
+        return false;
+    };
+    hex_len == 64
+        && file[hex_start..hex_start + hex_len]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+}
+
+fn object_start(file: &[u8], position: usize) -> usize {
+    rfind(&file[..position], b"endobj")
+        .map(|at| at + b"endobj".len())
+        .unwrap_or(0)
+}
+
+fn find_byte_range_bracket(file: &[u8], start: usize, end: usize) -> PdfResult<usize> {
+    let key = rfind(&file[start..end], b"/ByteRange ").ok_or_else(|| {
+        PdfError::CryptographyError("Integrity attestation is missing /ByteRange.".into())
+    })?;
+    let after_key = start + key + b"/ByteRange ".len();
+    file[after_key..end]
+        .iter()
+        .position(|byte| *byte == b'[')
+        .map(|rel| after_key + rel)
+        .ok_or_else(|| {
+            PdfError::CryptographyError("Integrity attestation /ByteRange has no array.".into())
+        })
+}
+
+fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .rposition(|window| window == needle)
+}
+
+/// Shifts classic xref offsets and `startxref` after an insertion at `pivot`.
+fn adjust_classic_xref(file: &mut Vec<u8>, pivot: usize, delta: i64) -> PdfResult<()> {
+    if delta == 0 {
+        return Ok(());
+    }
+    let xref_at = rfind(file, b"\nxref\n").map(|at| at + 1).ok_or_else(|| {
+        PdfError::CryptographyError(
+            "Sealed file is missing a classic cross-reference table.".into(),
+        )
+    })?;
+    let mut pos = xref_at + b"xref\n".len();
+    while pos < file.len() && !file[pos..].starts_with(b"trailer") {
+        let (next, line) = read_line(file, pos)?;
+        let (_, count) = parse_subsection_header(line)?;
+        if count > file.len() {
+            return Err(PdfError::CryptographyError(
+                "Cross-reference subsection is larger than the file.".into(),
+            ));
+        }
+        pos = next;
+        for _ in 0..count {
+            if pos + 20 > file.len() {
+                return Err(PdfError::CryptographyError(
+                    "Cross-reference entry runs past the end of the file.".into(),
+                ));
+            }
+            let flag = file[pos + 17];
+            let newline = file[pos + 19];
+            if newline != b'\n' || (flag != b'n' && flag != b'f') {
+                return Err(PdfError::CryptographyError(
+                    "Cross-reference entry is not a 20-byte classic record.".into(),
+                ));
+            }
+            if flag == b'n' {
+                let mut digits = [0u8; 10];
+                digits.copy_from_slice(&file[pos..pos + 10]);
+                let offset = parse_u64(&digits)?;
+                if offset > pivot as u64 {
+                    let updated = offset as i64 + delta;
+                    if !(0..=9_999_999_999).contains(&updated) {
+                        return Err(PdfError::CryptographyError(
+                            "Cross-reference offset does not fit in 10 digits after sealing."
+                                .into(),
+                        ));
+                    }
+                    let rendered = format!("{:010}", updated as u64);
+                    file[pos..pos + 10].copy_from_slice(rendered.as_bytes());
+                }
+            }
+            pos += 20;
+        }
+    }
+    if pos >= file.len() || !file[pos..].starts_with(b"trailer") {
+        return Err(PdfError::CryptographyError(
+            "Cross-reference table does not end at trailer.".into(),
+        ));
+    }
+
+    let startxref_at = rfind(file, b"\nstartxref\n")
+        .ok_or_else(|| PdfError::CryptographyError("Sealed file is missing startxref.".into()))?;
+    let num_start = startxref_at + 1 + b"startxref\n".len();
+    let num_len = file[num_start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| PdfError::CryptographyError("startxref offset is not terminated.".into()))?;
+    let old = parse_u64(&file[num_start..num_start + num_len])?;
+    let new = old as i64 + delta;
+    if new < 0 {
+        return Err(PdfError::CryptographyError(
+            "startxref became negative while sealing.".into(),
+        ));
+    }
+    file.splice(num_start..num_start + num_len, new.to_string().bytes());
+    Ok(())
+}
+
+fn read_line<'a>(file: &'a [u8], pos: usize) -> PdfResult<(usize, &'a [u8])> {
+    let rel = file[pos..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| {
+            PdfError::CryptographyError("Cross-reference table ended before trailer.".into())
+        })?;
+    Ok((pos + rel + 1, &file[pos..pos + rel]))
+}
+
+fn parse_subsection_header(line: &[u8]) -> PdfResult<(u64, usize)> {
+    let text = std::str::from_utf8(line)
+        .map_err(|_| PdfError::CryptographyError("Cross-reference header is not ASCII.".into()))?;
+    let mut parts = text.split_whitespace();
+    let start = parts.next().ok_or_else(|| {
+        PdfError::CryptographyError("Cross-reference header is missing its start.".into())
+    })?;
+    let count = parts.next().ok_or_else(|| {
+        PdfError::CryptographyError("Cross-reference header is missing its count.".into())
+    })?;
+    let start = start.parse::<u64>().map_err(|_| {
+        PdfError::CryptographyError("Cross-reference header start is not an integer.".into())
+    })?;
+    let count = count.parse::<usize>().map_err(|_| {
+        PdfError::CryptographyError("Cross-reference header count is not an integer.".into())
+    })?;
+    Ok((start, count))
+}
+
+fn parse_u64(bytes: &[u8]) -> PdfResult<u64> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| PdfError::CryptographyError("Offset is not ASCII.".into()))?;
+    text.trim()
+        .parse::<u64>()
+        .map_err(|_| PdfError::CryptographyError(format!("Offset '{text}' is not an integer.")))
+}
+
+fn utc_timestamps() -> (String, String) {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let (year, month, day, hour, minute, second) = civil_utc(seconds);
+    let iso = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+    let pdf = format!("D:{year:04}{month:02}{day:02}{hour:02}{minute:02}{second:02}Z");
+    (iso, pdf)
+}
+
+/// Converts a Unix timestamp to a UTC civil date. Howard Hinnant's algorithm.
+fn civil_utc(seconds: u64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = (seconds / 86_400) as i64;
+    let rem = (seconds % 86_400) as u32;
+    let hour = rem / 3_600;
+    let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
+
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year as i32, month as u32, day as u32, hour, minute, second)
 }
 
 #[cfg(test)]
@@ -443,6 +871,13 @@ mod tests {
         PdfDocument::load(&pdf).expect("Load test PDF")
     }
 
+    fn covered_digest(file: &[u8], byte_range: &[usize]) -> [u8; 32] {
+        let mut covered = Vec::new();
+        covered.extend_from_slice(&file[byte_range[0]..byte_range[0] + byte_range[1]]);
+        covered.extend_from_slice(&file[byte_range[2]..byte_range[2] + byte_range[3]]);
+        sha256(&covered)
+    }
+
     #[test]
     fn test_sign_and_verify_signature_roundtrip() {
         let mut doc = create_test_page_doc();
@@ -459,12 +894,81 @@ mod tests {
         let sig = sign_document(&mut doc, &config).unwrap();
         assert_eq!(sig.signer_name, "Lic. Roberto Garduño");
         assert_eq!(sig.reason, "Contrato Comercial Aprobado");
+        assert_eq!(sig.sub_filter, "PDFEngine.sha256");
+        assert_ne!(sig.byte_range, vec![0, 1024, 2048, 4096]);
         assert!(sig.byte_range_valid);
+        assert_eq!(sig.contents_hex.len(), 64);
+        assert!(sig.date.starts_with("D:"));
+        assert!(!sig.date.contains("20261002152000"));
+
+        let file = doc.raw_data();
+        assert!(file
+            .windows(b"/PDFEngine.sha256".len())
+            .any(|w| w == b"/PDFEngine.sha256"));
+        assert!(file
+            .windows(b"/PDFEngine.Approval".len())
+            .any(|w| w == b"/PDFEngine.Approval"));
+        assert!(!file
+            .windows(b"adbe.pkcs7.detached".len())
+            .any(|w| w == b"adbe.pkcs7.detached"));
+        assert!(!file
+            .windows(b"Adobe.PPKLite".len())
+            .any(|w| w == b"Adobe.PPKLite"));
+        assert!(file
+            .windows(b"rgarduno@company.com".len())
+            .any(|w| w == b"rgarduno@company.com"));
+
+        let digest = covered_digest(file, &sig.byte_range);
+        let digest_hex = digest
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>();
+        assert_eq!(sig.contents_hex, digest_hex);
+        assert_eq!(
+            sig.byte_range[0] + sig.byte_range[1] + 64 + sig.byte_range[3],
+            file.len()
+        );
 
         let list = verify_document_signatures(&doc);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].signer_name, "Lic. Roberto Garduño");
         assert_eq!(list[0].location, "CDMX");
         assert_eq!(list[0].rect, [100.0, 100.0, 300.0, 160.0]);
+        assert!(list[0].byte_range_valid);
+
+        let mut tampered = file.to_vec();
+        tampered[10] ^= 0xFF;
+        let tampered_doc = PdfDocument::load(&tampered).unwrap();
+        let tampered_sigs = verify_document_signatures(&tampered_doc);
+        assert_eq!(tampered_sigs.len(), 1);
+        assert!(!tampered_sigs[0].byte_range_valid);
+
+        let exported = doc.save_to_vec().unwrap();
+        let exported_doc = PdfDocument::load(&exported).unwrap();
+        let exported_sigs = verify_document_signatures(&exported_doc);
+        assert_eq!(exported_sigs.len(), 1);
+        assert!(exported_sigs[0].byte_range_valid);
+        let exported_digest = covered_digest(exported_doc.raw_data(), &exported_sigs[0].byte_range);
+        let exported_hex = exported_digest
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>();
+        assert_eq!(exported_sigs[0].contents_hex, exported_hex);
+    }
+
+    #[test]
+    fn test_reason_text_cannot_spoof_the_attestation_marker() {
+        let mut doc = create_test_page_doc();
+        let mut config = DigitalSignatureConfig::default();
+        config.reason = "note /SubFilter /PDFEngine.sha256 trailing".to_string();
+        let sig = sign_document(&mut doc, &config).unwrap();
+        assert!(sig.byte_range_valid);
+        assert_eq!(sig.sub_filter, "PDFEngine.sha256");
+    }
+
+    #[test]
+    fn test_civil_utc_unix_epoch() {
+        assert_eq!(civil_utc(0), (1970, 1, 1, 0, 0, 0));
+        assert_eq!(civil_utc(86_400), (1970, 1, 2, 0, 0, 0));
     }
 }

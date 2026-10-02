@@ -471,9 +471,9 @@ class DecryptDocumentRequest(BaseModel):
 
 
 class SignDocumentRequest(BaseModel):
-    """Request payload to apply a cryptographic digital signature stamp."""
-    signer_name: str = Field(default="PDFEngine Certified Signer", description="Signer identity or common name")
-    reason: str = Field(default="Aprobación y Certificación Digital", description="Operational/legal reason for signing")
+    """Request payload to stamp a SHA-256 byte-range integrity attestation."""
+    signer_name: str = Field(default="PDFEngine Certified Signer", description="Name stored in /Name. This does not prove identity.")
+    reason: str = Field(default="Integridad del archivo", description="Note stored in /Reason")
     location: str = Field(default="Ciudad de México, MX", description="Physical or corporate signing location")
     page_number: int = Field(default=1, description="1-based page number where signature badge will appear")
     rect: Optional[List[float]] = Field(default=None, description="[min_x, min_y, max_x, max_y] bounding box or default placement")
@@ -481,7 +481,7 @@ class SignDocumentRequest(BaseModel):
 
 
 class SignatureModel(BaseModel):
-    """Verified digital signature information."""
+    """Signature dictionary plus the SHA-256 byte-range check. contents_hex is the digest, not CMS."""
     field_name: str
     signer_name: str
     reason: str
@@ -496,7 +496,7 @@ class SignatureModel(BaseModel):
 
 
 class SecurityStatusResponse(BaseModel):
-    """Response detailing encryption and digital signature status."""
+    """Response detailing encryption and byte-range attestation status."""
     document_id: str
     is_encrypted: bool
     signatures: List[SignatureModel]

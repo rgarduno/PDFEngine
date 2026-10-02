@@ -415,7 +415,7 @@ impl PyPdfPermissions {
     }
 }
 
-/// Cryptographic verification data of an embedded digital signature.
+/// Read-back of an embedded signature dictionary and its byte-range digest check.
 #[pyclass(name = "VerifiedSignature")]
 #[derive(Debug, Clone)]
 pub struct PyVerifiedSignature {
@@ -1892,7 +1892,7 @@ impl PyPdfDocument {
         self.doc.xref.trailer.contains_key("Encrypt")
     }
 
-    /// Embeds an ISO 32000-1 §12.8 cryptographic digital signature stamp into the document.
+    /// Stamps a SHA-256 byte-range integrity attestation. This does not produce CMS or PKCS#7.
     #[pyo3(signature = (signer_name, reason, location, rect, page_number=1, contact_info=None))]
     pub fn sign(
         &mut self,
@@ -1918,7 +1918,7 @@ impl PyPdfDocument {
         Ok(PyVerifiedSignature::from_core(sig))
     }
 
-    /// Extracts and cryptographically verifies all embedded digital signatures in the document.
+    /// Reads signature dictionaries and checks each SHA-256 byte-range digest against the file.
     pub fn verify_signatures(&self) -> PyResult<Vec<PyVerifiedSignature>> {
         let sigs = pdf_engine_core::security::verify_document_signatures(&self.doc);
         Ok(sigs.into_iter().map(PyVerifiedSignature::from_core).collect())

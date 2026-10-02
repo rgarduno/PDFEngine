@@ -1,6 +1,6 @@
-//! Security policies, encryption, permissions, and digital signatures.
-//! Conforming to ISO 32000-1 §7.6 (Security), §12.8 (Digital Signatures),
-//! and resource hardening limits.
+//! Security policies, encryption, permissions, and SHA-256 byte-range attestations.
+//! Encryption follows ISO 32000-1 §7.6. Attestations reuse the `/Sig` and `/ByteRange`
+//! dictionaries from §12.8 to record a file digest. They are not CMS signatures.
 
 pub mod handler;
 pub mod limits;

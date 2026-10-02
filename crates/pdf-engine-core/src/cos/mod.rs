@@ -528,6 +528,10 @@ impl PdfDocument {
         trailer.insert("Size", (offsets.len() + 1) as i64);
         writer.write_xref_and_trailer(&offsets, &trailer)?;
 
+        // A full rewrite moves every offset, so an existing SHA-256 attestation
+        // has to be recomputed against these exact bytes before they leave.
+        crate::security::signatures::seal_saved_bytes(&mut out)?;
+
         Ok(out)
     }
 

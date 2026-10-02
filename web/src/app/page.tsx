@@ -895,12 +895,12 @@ export default function Home() {
   const handleSignDocument = async (payload: SignDocumentPayload) => {
     try {
       const res = await signDocument(session.document_id, payload);
-      alert(res.message || 'Firma digital generada con éxito. Sello visual estampado.');
+      alert(res.message || 'Atestación SHA-256 estampada. El sello cubre el rango de bytes del archivo.');
       const sigs = await getSignatures(session.document_id);
       setSignatures(sigs);
     } catch (err) {
-      console.error('Failed to sign document:', err);
-      alert('Error al firmar digitalmente el documento.');
+      console.error('Failed to stamp integrity attestation:', err);
+      alert('Error al estampar la atestación de integridad del documento.');
     }
   };
 

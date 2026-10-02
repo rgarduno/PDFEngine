@@ -106,7 +106,7 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
 │    - Complete metadata scrubbing: /Info dictionary & /Metadata XMP stream   │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 11. PDF Security, Permissions & PKCS#7 Signatures (ISO 32000 §7.6 & §12.8)  │
+│ 11. PDF Security, Permissions & SHA-256 Attestation (ISO 32000 §7.6 & §12.8)│
 │    - Pure Rust cryptographic primitives: AES-128/256 CBC, SHA-256, MD5      │
 │    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
 │    - Granular permissions bitmask (print, edit, extract, forms, assemble)  │
@@ -412,7 +412,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
 - [x] **Phase 13: Surgical Legal Redaction, PII Sanitizer & Metadata Scrubbing (ISO 32000-1 §14.11)** (Physical glyph & stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` & XMP metadata scrubbing, PyO3 bindings, FastAPI endpoints & Web Studio)
-- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, granular permissions bitmask, PKCS#7 /ByteRange digital signatures)
+- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, granular permissions bitmask, SHA-256 /ByteRange integrity attestation)
 - [x] **Phase 15: Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4)** (Vector lattice grid solver, borderless fallback, multi-format CSV/JSON/MD/HTML exporters)
 - [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)

@@ -1338,7 +1338,7 @@ def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
     response_model=SecurityStatusResponse,
 )
 def get_security_status_endpoint(doc_id: str):
-    """Retrieves document encryption and digital signature verification state."""
+    """Retrieves encryption state and SHA-256 byte-range attestation checks."""
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -1436,7 +1436,7 @@ def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
     response_model=SecurityActionResponse,
 )
 def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
-    """Inscribes a visual cryptographic digital signature into the document."""
+    """Stamps a SHA-256 byte-range integrity attestation. This is not a CMS signature."""
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -1466,7 +1466,7 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
         return SecurityActionResponse(
             success=True,
             document_id=doc_id,
-            message=f"Digital signature created for {request.signer_name}.",
+            message=f"SHA-256 byte-range attestation created for {request.signer_name}.",
             signature=sig_model,
         )
     except Exception as e:
@@ -1478,7 +1478,7 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
     response_model=List[SignatureModel],
 )
 def get_signatures_endpoint(doc_id: str):
-    """Lists all verified digital signatures in the document."""
+    """Lists signature dictionaries and whether each SHA-256 byte range still matches."""
     session = load_session(doc_id)
 
     doc = session["doc"]

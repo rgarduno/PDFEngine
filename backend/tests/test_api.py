@@ -877,7 +877,30 @@ def test_security_and_digital_signatures_workflow():
     sign_data = sign_resp.json()
     assert sign_data["success"] is True
     assert sign_data["signature"]["signer_name"] == "Lic. Roberto Garduño"
+    assert sign_data["signature"]["sub_filter"] == "PDFEngine.sha256"
+    assert sign_data["signature"]["byte_range"] != [0, 1024, 2048, 4096]
+    assert len(sign_data["signature"]["contents_hex"]) == 64
     assert sign_data["signature"]["byte_range_valid"] is True
+
+    signed_export = client.get(f"/api/documents/{doc_id}/export")
+    assert signed_export.status_code == 200
+    assert b"/PDFEngine.sha256" in signed_export.content
+    assert b"/PDFEngine.Approval" in signed_export.content
+    assert b"adbe.pkcs7.detached" not in signed_export.content
+    assert b"Adobe.PPKLite" not in signed_export.content
+
+    reupload = client.post(
+        "/api/documents/upload",
+        files={"file": ("signed.pdf", signed_export.content, "application/pdf")},
+    )
+    assert reupload.status_code == 200
+    signed_id = reupload.json()["document_id"]
+    reread = client.get(f"/api/documents/{signed_id}/security/signatures")
+    assert reread.status_code == 200
+    reread_sigs = reread.json()
+    assert len(reread_sigs) == 1
+    assert reread_sigs[0]["byte_range_valid"] is True
+    assert reread_sigs[0]["sub_filter"] == "PDFEngine.sha256"
 
     # 3. Verify signatures list endpoint
     sigs_resp = client.get(f"/api/documents/{doc_id}/security/signatures")

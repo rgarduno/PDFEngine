@@ -1031,31 +1031,13 @@ export async function signDocument(
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Digital signing failed' }));
-      throw new Error(err.detail || 'Digital signing failed');
+      const err = await res.json().catch(() => ({ detail: 'Integrity attestation failed' }));
+      throw new Error(err.detail || 'Integrity attestation failed');
     }
     return await res.json();
   } catch (e) {
-    console.warn('Backend unavailable, mock sign document:', e);
-    const mockSig: SignatureItem = {
-      field_name: 'Signature_mock_1',
-      signer_name: payload.signer_name,
-      reason: payload.reason,
-      location: payload.location,
-      date: new Date().toISOString(),
-      sub_filter: 'adbe.pkcs7.detached',
-      byte_range: [0, 1024, 2048, 4096],
-      contents_hex: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-      byte_range_valid: true,
-      rect: payload.rect || [72, 72, 272, 142],
-      page_number: payload.page_number || 1,
-    };
-    return {
-      success: true,
-      document_id: docId,
-      message: `Digital signature generated for ${payload.signer_name}.`,
-      signature: mockSig,
-    };
+    const message = e instanceof Error ? e.message : 'Integrity attestation failed';
+    throw new Error(message);
   }
 }
 

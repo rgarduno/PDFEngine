@@ -2111,9 +2111,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
                   <FileCheck size={13} className="text-blue-500" />
-                  <span>Firma Digital PKCS#7</span>
+                  <span>Atestación SHA-256</span>
                 </div>
-                <span className="text-[10px] text-neutral-400 font-mono">ISO 32000 §12.8</span>
+                <span className="text-[10px] text-neutral-400 font-mono">ByteRange</span>
               </div>
 
               <div className="space-y-2">
@@ -2188,7 +2188,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 size={13} />
-                <span>Estampar Sello de Firma Criptográfica</span>
+                <span>Estampar atestación SHA-256</span>
               </button>
             </div>
 
@@ -2196,7 +2196,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="space-y-2">
               <div className="flex items-center justify-between px-1">
                 <span className="text-[11px] font-semibold text-neutral-400 uppercase">
-                  Firmas Verificadas ({signatures.length})
+                  Atestaciones ({signatures.length})
                 </span>
                 <span className="text-[10px] font-mono text-neutral-400">ByteRange</span>
               </div>
@@ -2215,9 +2215,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200">
                         {sig.signer_name}
                       </span>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-medium flex items-center gap-1 ${
+                        sig.byte_range_valid
+                          ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300'
+                      }`}>
                         <CheckCircle2 size={10} />
-                        Válida
+                        {sig.byte_range_valid ? 'Íntegra' : 'No coincide'}
                       </span>
                     </div>
                     <div className="text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
