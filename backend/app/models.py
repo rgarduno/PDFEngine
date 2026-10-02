@@ -127,3 +127,62 @@ class FlattenFormsResponse(BaseModel):
     message: str
 
 
+class RotatePageRequest(BaseModel):
+    """Request payload to rotate a page."""
+    degrees: int = Field(default=90, description="Degrees to rotate: 90, 180, 270, or relative offset")
+
+
+class RotatePageResponse(BaseModel):
+    """Response returned after page rotation."""
+    success: bool
+    document_id: str
+    page_number: int
+    new_rotation: int
+
+
+class SplitDocumentRequest(BaseModel):
+    """Request payload to extract or split pages from a document."""
+    page_indices: Optional[List[int]] = None
+    chunk_size: Optional[int] = None
+
+
+class SplitDocumentResponse(BaseModel):
+    """Response returned after splitting document."""
+    success: bool
+    source_document_id: str
+    extracted_document_ids: List[str]
+    count: int
+
+
+class MergeDocumentsRequest(BaseModel):
+    """Request payload to merge multiple documents into one."""
+    document_ids: List[str] = Field(description="Ordered list of document IDs to merge")
+
+
+class MergeDocumentsResponse(BaseModel):
+    """Response returned after merging documents."""
+    success: bool
+    merged_document_id: str
+    filename: str
+    page_count: int
+
+
+class ReorderPagesRequest(BaseModel):
+    """Request payload to reorder pages in a document."""
+    new_order: List[int] = Field(description="Permutation of 0-based or 1-based page indices")
+
+
+class DeletePagesRequest(BaseModel):
+    """Request payload to delete pages from a document."""
+    page_indices: List[int] = Field(description="List of 0-based or 1-based page indices to delete")
+
+
+class PageOperationResponse(BaseModel):
+    """General response for page assembly/manipulation operations."""
+    success: bool
+    document_id: str
+    page_count: int
+    message: str
+
+
+

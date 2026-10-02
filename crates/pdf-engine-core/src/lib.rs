@@ -23,6 +23,7 @@ pub mod fonts;
 pub mod forms;
 pub mod images;
 pub mod layout;
+pub mod ops;
 pub mod security;
 pub mod stream;
 
@@ -41,6 +42,11 @@ pub use forms::{
 pub use images::{
     encode_png, extract_page_images, get_image_binary, parse_jpeg, parse_png_header,
     parse_png_pixels, replace_image_content, ImageInfo, JpegHeader, PngHeader,
+};
+pub use ops::{
+    delete_pages, extract_pages, get_page_rotation, merge_documents, merge_pdf_bytes,
+    reorder_pages, rotate_all_pages, rotate_page, set_page_rotation, split_by_ranges,
+    split_document, ObjectCloner,
 };
 pub use layout::{
     LayoutReconstructor, ParagraphBlock, Point, PositionedGlyph, Rect, TextAlignment, TextLine,

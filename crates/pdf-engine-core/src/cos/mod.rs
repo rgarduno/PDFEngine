@@ -76,6 +76,52 @@ impl PdfDocument {
         })
     }
 
+    /// Creates an empty valid ISO 32000-1 PDF document with a clean Catalog and Pages root.
+    pub fn empty() -> Self {
+        let mut doc = Self {
+            raw_data: Vec::new(),
+            xref: XRefTable::new(),
+            objects: BTreeMap::new(),
+            limits: SecurityLimits::default(),
+        };
+
+        let catalog_id = ObjectId::new(1);
+        let pages_id = ObjectId::new(2);
+
+        let mut pages_dict = PdfDictionary::new();
+        pages_dict.insert("Type", PdfName::new("Pages"));
+        pages_dict.insert("Kids", PdfArray::new());
+        pages_dict.insert("Count", 0i64);
+        doc.set_object(pages_id, PdfObject::Dictionary(pages_dict));
+
+        let mut catalog_dict = PdfDictionary::new();
+        catalog_dict.insert("Type", PdfName::new("Catalog"));
+        catalog_dict.insert("Pages", pages_id);
+        doc.set_object(catalog_id, PdfObject::Dictionary(catalog_dict));
+
+        doc.xref.trailer.insert("Root", catalog_id);
+        doc.xref.trailer.insert("Size", 3i64);
+
+        doc
+    }
+
+    /// Returns the object ID of the `/Catalog` root dictionary from the trailer.
+    pub fn catalog_id(&self) -> Option<ObjectId> {
+        self.xref.trailer.get("Root").and_then(|r| r.as_reference())
+    }
+
+    /// Returns the object ID of the root `/Pages` dictionary.
+    pub fn pages_id(&mut self) -> PdfResult<ObjectId> {
+        let catalog = self.catalog()?;
+        catalog
+            .get("Pages")
+            .and_then(|p| p.as_reference())
+            .ok_or_else(|| PdfError::InvalidXRef {
+                offset: 0,
+                message: "Catalog missing /Pages reference".to_string(),
+            })
+    }
+
     /// Resolves an indirect object by identifier, parsing from buffer if not yet cached.
     pub fn get_object(&mut self, id: ObjectId) -> PdfResult<PdfObject> {
         if let Some(obj) = self.objects.get(&id) {

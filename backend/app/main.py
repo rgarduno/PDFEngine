@@ -18,6 +18,7 @@ except ImportError:
 from app.models import (
     BatchFillFormsRequest,
     BoundingBox,
+    DeletePagesRequest,
     DocumentFormsResponse,
     DocumentUploadResponse,
     EditParagraphRequest,
@@ -26,9 +27,17 @@ from app.models import (
     FlattenFormsResponse,
     FormFieldModel,
     ImageModel,
+    MergeDocumentsRequest,
+    MergeDocumentsResponse,
     PageImagesResponse,
+    PageOperationResponse,
     PageSceneGraph,
     ParagraphModel,
+    ReorderPagesRequest,
+    RotatePageRequest,
+    RotatePageResponse,
+    SplitDocumentRequest,
+    SplitDocumentResponse,
 )
 
 app = FastAPI(
@@ -422,6 +431,142 @@ def flatten_document_forms_endpoint(doc_id: str):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to flatten form fields: {e}")
+
+
+@app.post("/api/documents/{doc_id}/pages/{page_idx}/rotate", response_model=RotatePageResponse)
+def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest):
+    """Rotates a specific page by the given degrees (0, 90, 180, 270, or relative offset)."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        new_rotation = doc.rotate_page(page_idx, request.degrees)
+        return RotatePageResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            new_rotation=new_rotation,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to rotate page: {e}")
+
+
+@app.post("/api/documents/{doc_id}/split", response_model=SplitDocumentResponse)
+def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
+    """Extracts specified pages or splits the document into smaller chunks."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        extracted_ids = []
+        if request.page_indices is not None:
+            extracted_doc = doc.extract_pages(request.page_indices)
+            new_id = str(uuid.uuid4())
+            DOCUMENT_SESSIONS[new_id] = {
+                "doc": extracted_doc,
+                "filename": f"{session['filename'].replace('.pdf', '')}_extracted.pdf",
+            }
+            extracted_ids.append(new_id)
+        elif request.chunk_size:
+            total_pages = doc.page_count()
+            chunk_size = max(1, request.chunk_size)
+            for start in range(0, total_pages, chunk_size):
+                indices = list(range(start, min(start + chunk_size, total_pages)))
+                chunk_doc = doc.extract_pages(indices)
+                new_id = str(uuid.uuid4())
+                DOCUMENT_SESSIONS[new_id] = {
+                    "doc": chunk_doc,
+                    "filename": f"{session['filename'].replace('.pdf', '')}_part_{len(extracted_ids)+1}.pdf",
+                }
+                extracted_ids.append(new_id)
+        else:
+            raise HTTPException(status_code=400, detail="Must specify either 'page_indices' or 'chunk_size'.")
+
+        return SplitDocumentResponse(
+            success=True,
+            source_document_id=doc_id,
+            extracted_document_ids=extracted_ids,
+            count=len(extracted_ids),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to split document: {e}")
+
+
+@app.post("/api/documents/merge", response_model=MergeDocumentsResponse)
+def merge_documents_endpoint(request: MergeDocumentsRequest):
+    """Merges multiple existing document sessions in order into a new combined document."""
+    if not request.document_ids:
+        raise HTTPException(status_code=400, detail="At least one document ID must be provided.")
+
+    docs_to_merge = []
+    for d_id in request.document_ids:
+        sess = DOCUMENT_SESSIONS.get(d_id)
+        if not sess:
+            raise HTTPException(status_code=404, detail=f"Document session '{d_id}' not found.")
+        docs_to_merge.append(sess["doc"])
+
+    try:
+        merged_doc = pdf_engine.merge_documents(docs_to_merge)
+        merged_id = str(uuid.uuid4())
+        DOCUMENT_SESSIONS[merged_id] = {
+            "doc": merged_doc,
+            "filename": "merged_document.pdf",
+        }
+        return MergeDocumentsResponse(
+            success=True,
+            merged_document_id=merged_id,
+            filename="merged_document.pdf",
+            page_count=merged_doc.page_count(),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to merge documents: {e}")
+
+
+@app.post("/api/documents/{doc_id}/pages/reorder", response_model=PageOperationResponse)
+def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
+    """Reorders the pages of a document according to a given permutation."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        order = request.new_order
+        if order and min(order) == 1 and max(order) == len(order):
+            order = [i - 1 for i in order]
+        doc.reorder_pages(order)
+        return PageOperationResponse(
+            success=True,
+            document_id=doc_id,
+            page_count=doc.page_count(),
+            message="Pages reordered successfully.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to reorder pages: {e}")
+
+
+@app.post("/api/documents/{doc_id}/pages/delete", response_model=PageOperationResponse)
+def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
+    """Deletes specified pages from a document."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        doc.delete_pages(request.page_indices)
+        return PageOperationResponse(
+            success=True,
+            document_id=doc_id,
+            page_count=doc.page_count(),
+            message=f"Deleted {len(request.page_indices)} page(s) successfully.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to delete pages: {e}")
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")

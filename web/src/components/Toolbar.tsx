@@ -14,6 +14,7 @@ import {
   ZoomOut,
   Sparkles,
   FileCheck2,
+  RotateCw,
 } from 'lucide-react';
 import { TextAlignment } from '@/lib/types';
 
@@ -29,6 +30,7 @@ interface ToolbarProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onRotateClockwise?: () => void;
   onUploadClick: () => void;
   onExportClick: () => void;
   isExporting: boolean;
@@ -47,6 +49,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canRedo,
   onUndo,
   onRedo,
+  onRotateClockwise,
   onUploadClick,
   onExportClick,
   isExporting,
@@ -100,6 +103,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </button>
 
         <div className="w-px h-5 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+
+        {/* Rotate Page */}
+        {onRotateClockwise && (
+          <>
+            <button
+              onClick={onRotateClockwise}
+              title="Rotate Page 90° Clockwise"
+              className="p-1.5 rounded hover:bg-white dark:hover:bg-neutral-700 transition-colors text-neutral-700 dark:text-neutral-300 cursor-pointer"
+            >
+              <RotateCw size={16} />
+            </button>
+            <div className="w-px h-5 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+          </>
+        )}
 
         {/* Alignment */}
         <button

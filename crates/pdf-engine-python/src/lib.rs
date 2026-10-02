@@ -251,22 +251,9 @@ pub struct PyPdfDocument {
     active_pages: Vec<PyPage>,
 }
 
-#[pymethods]
 impl PyPdfDocument {
-    /// Loads a PDF document from a filesystem file path.
-    #[staticmethod]
-    pub fn load(path: &str) -> PyResult<Self> {
-        let bytes = fs::read(path)
-            .map_err(|e| PyIOError::new_err(format!("Failed to read file '{}': {}", path, e)))?;
-        Self::from_bytes(&bytes)
-    }
-
-    /// Loads a PDF document from an in-memory byte slice.
-    #[staticmethod]
-    pub fn from_bytes(bytes: &[u8]) -> PyResult<Self> {
-        let mut doc = PdfDocument::load(bytes)
-            .map_err(|e| PyRuntimeError::new_err(format!("PDF parse error: {}", e)))?;
-
+    /// Internal factory reconstructing active page scene graphs from a core PdfDocument.
+    pub fn from_doc(mut doc: PdfDocument) -> PyResult<Self> {
         let page_ids = doc
             .get_pages()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve pages: {}", e)))?;
@@ -319,6 +306,25 @@ impl PyPdfDocument {
             page_ids,
             active_pages,
         })
+    }
+}
+
+#[pymethods]
+impl PyPdfDocument {
+    /// Loads a PDF document from a filesystem file path.
+    #[staticmethod]
+    pub fn load(path: &str) -> PyResult<Self> {
+        let bytes = fs::read(path)
+            .map_err(|e| PyIOError::new_err(format!("Failed to read file '{}': {}", path, e)))?;
+        Self::from_bytes(&bytes)
+    }
+
+    /// Loads a PDF document from an in-memory byte slice.
+    #[staticmethod]
+    pub fn from_bytes(bytes: &[u8]) -> PyResult<Self> {
+        let doc = PdfDocument::load(bytes)
+            .map_err(|e| PyRuntimeError::new_err(format!("PDF parse error: {}", e)))?;
+        Self::from_doc(doc)
     }
 
     /// Returns the total number of pages in the document.
@@ -551,6 +557,95 @@ impl PyPdfDocument {
         Ok(count)
     }
 
+    /// Rotates a page (0-based or 1-based index) by degrees (normalized to 0, 90, 180, 270).
+    pub fn rotate_page(&mut self, page_index: usize, degrees: i32) -> PyResult<i32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        pdf_engine_core::ops::rotate_page(&mut self.doc, zero_idx, degrees)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to rotate page: {}", e)))
+    }
+
+    /// Gets the current rotation of a page in degrees.
+    pub fn get_page_rotation(&mut self, page_index: usize) -> PyResult<i32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        pdf_engine_core::ops::get_page_rotation(&mut self.doc, zero_idx)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to get page rotation: {}", e)))
+    }
+
+    /// Rotates all pages in the document by `degrees`.
+    pub fn rotate_all_pages(&mut self, degrees: i32) -> PyResult<()> {
+        pdf_engine_core::ops::rotate_all_pages(&mut self.doc, degrees)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to rotate all pages: {}", e)))
+    }
+
+    /// Extracts specified pages into a new self-contained PyPdfDocument.
+    pub fn extract_pages(&mut self, page_indices: Vec<usize>) -> PyResult<Self> {
+        let zero_indices: Vec<usize> = page_indices
+            .into_iter()
+            .map(|idx| {
+                if idx > 0 && idx <= self.page_ids.len() {
+                    idx - 1
+                } else {
+                    idx
+                }
+            })
+            .collect();
+        let extracted = pdf_engine_core::ops::extract_pages(&mut self.doc, &zero_indices)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract pages: {}", e)))?;
+        Self::from_doc(extracted)
+    }
+
+    /// Deletes specified pages from the document.
+    pub fn delete_pages(&mut self, page_indices: Vec<usize>) -> PyResult<()> {
+        let zero_indices: Vec<usize> = page_indices
+            .into_iter()
+            .map(|idx| {
+                if idx > 0 && idx <= self.page_ids.len() {
+                    idx - 1
+                } else {
+                    idx
+                }
+            })
+            .collect();
+        pdf_engine_core::ops::delete_pages(&mut self.doc, &zero_indices)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete pages: {}", e)))?;
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+        Ok(())
+    }
+
+    /// Reorders the document pages according to a 0-based permutation.
+    pub fn reorder_pages(&mut self, new_order: Vec<usize>) -> PyResult<()> {
+        pdf_engine_core::ops::reorder_pages(&mut self.doc, &new_order)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to reorder pages: {}", e)))?;
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+        Ok(())
+    }
+
+    /// Merges another document's pages into this document.
+    pub fn merge_with(&mut self, other: &PyPdfDocument) -> PyResult<()> {
+        let mut docs = [self.doc.clone(), other.doc.clone()];
+        let merged = pdf_engine_core::ops::merge_documents(&mut docs)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge: {}", e)))?;
+        let updated = Self::from_doc(merged)?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+        Ok(())
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -567,6 +662,23 @@ impl PyPdfDocument {
     }
 }
 
+/// Merges multiple Python PDF documents sequentially into a single unified document.
+#[pyfunction]
+pub fn merge_documents(docs: Vec<PyRef<'_, PyPdfDocument>>) -> PyResult<PyPdfDocument> {
+    let mut raw_docs: Vec<PdfDocument> = docs.iter().map(|d| d.doc.clone()).collect();
+    let merged = pdf_engine_core::ops::merge_documents(&mut raw_docs)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge documents: {}", e)))?;
+    PyPdfDocument::from_doc(merged)
+}
+
+/// Merges multiple raw PDF byte buffers into a single serialized PDF byte vector.
+#[pyfunction]
+pub fn merge_pdf_bytes(pdf_buffers: Vec<Vec<u8>>) -> PyResult<Vec<u8>> {
+    let slices: Vec<&[u8]> = pdf_buffers.iter().map(|b| b.as_slice()).collect();
+    pdf_engine_core::ops::merge_pdf_bytes(&slices)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge PDF bytes: {}", e)))
+}
+
 /// The native Python module entrypoint for `pdf_engine`.
 #[pymodule]
 fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -575,5 +687,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParagraph>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyFormField>()?;
+    m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
+    m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())
 }

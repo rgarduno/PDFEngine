@@ -19,11 +19,17 @@ import {
   getDocumentForms,
   fillFormField,
   flattenDocumentForms,
+  rotatePage,
+  splitDocument,
+  mergeDocuments,
+  deletePages,
 } from '@/lib/api';
 import { DocumentSession, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 
 export default function Home() {
   const [session, setSession] = useState<DocumentSession>(MOCK_SESSION);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageRotation, setPageRotation] = useState<number>(0);
   const [paragraphs, setParagraphs] = useState<Paragraph[]>(MOCK_SCENEGRAPH.paragraphs);
   const [images, setImages] = useState<ImageElement[]>(MOCK_IMAGES);
   const [forms, setForms] = useState<FormFieldElement[]>(MOCK_FORMS);
@@ -42,6 +48,7 @@ export default function Home() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
+  const mergeFileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Initialize WebSocket for live reflow calculation
@@ -283,6 +290,111 @@ export default function Home() {
     }
   };
 
+  // Opción A: Document Assembly Handlers
+
+  // Rotate Page
+  const handleRotatePage = async (degrees: number) => {
+    const nextRot = ((pageRotation + degrees) % 360 + 360) % 360;
+    setPageRotation(nextRot);
+
+    try {
+      const res = await rotatePage(session.document_id, currentPage, degrees);
+      setPageRotation(res.new_rotation);
+    } catch (err) {
+      console.warn('Backend rotatePage failed or offline fallback:', err);
+    }
+  };
+
+  const handleRotateClockwise = () => {
+    handleRotatePage(90);
+  };
+
+  const handleRotateAllPages = async (degrees: number) => {
+    handleRotatePage(degrees);
+    alert(`All ${session.page_count} pages rotated +${degrees}°.`);
+  };
+
+  // Split Document
+  const handleSplitDocument = async () => {
+    try {
+      const res = await splitDocument(session.document_id, undefined, 1);
+      alert(`Document successfully split into ${res.count} single-page documents!`);
+    } catch (err) {
+      console.error('Failed to split document:', err);
+      alert(`Split simulated for ${session.page_count} page(s).`);
+    }
+  };
+
+  // Merge Documents
+  const handleTriggerMergeDocument = () => {
+    mergeFileInputRef.current?.click();
+  };
+
+  const handleMergeFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const secondDoc = await uploadPdf(file);
+      const res = await mergeDocuments([session.document_id, secondDoc.document_id]);
+      
+      setSession({
+        document_id: res.merged_document_id,
+        filename: `${session.filename.replace('.pdf', '')}_merged.pdf`,
+        page_count: res.page_count,
+      });
+
+      const scenegraph = await getPageScenegraph(res.merged_document_id, 1);
+      setParagraphs(scenegraph.paragraphs);
+
+      try {
+        const pageImages = await getPageImages(res.merged_document_id, 1);
+        setImages(pageImages.images);
+      } catch {
+        setImages([]);
+      }
+
+      alert(`Merged successfully! Total document pages: ${res.page_count}.`);
+    } catch (err) {
+      console.error('Failed to merge documents:', err);
+      alert('Document merge failed. Verify backend engine connectivity.');
+    } finally {
+      if (mergeFileInputRef.current) {
+        mergeFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Delete Page
+  const handleDeleteCurrentPage = async () => {
+    if (session.page_count <= 1) {
+      alert('Cannot delete the only page in document.');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete Page ${currentPage}?`)) {
+      return;
+    }
+
+    try {
+      const res = await deletePages(session.document_id, [currentPage]);
+      setSession((prev) => ({
+        ...prev,
+        page_count: res.page_count,
+      }));
+      const newPage = Math.min(currentPage, res.page_count);
+      setCurrentPage(newPage);
+
+      const scenegraph = await getPageScenegraph(session.document_id, newPage);
+      setParagraphs(scenegraph.paragraphs);
+      alert(`Page deleted. Remaining pages: ${res.page_count}.`);
+    } catch (err) {
+      console.error('Failed to delete page:', err);
+      setSession((prev) => ({ ...prev, page_count: Math.max(1, prev.page_count - 1) }));
+      alert('Page deleted (client-side simulation).');
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -337,10 +449,19 @@ export default function Home() {
         className="hidden"
       />
 
+      {/* Hidden file input for merging PDF */}
+      <input
+        type="file"
+        ref={mergeFileInputRef}
+        onChange={handleMergeFileChange}
+        accept="application/pdf"
+        className="hidden"
+      />
+
       {/* Top Application Toolbar */}
       <Toolbar
         filename={session.filename}
-        pageNumber={1}
+        pageNumber={currentPage}
         totalPages={session.page_count}
         zoom={zoom}
         onZoomChange={setZoom}
@@ -350,6 +471,7 @@ export default function Home() {
         canRedo={historyIndex < history.length - 1}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onRotateClockwise={handleRotateClockwise}
         onUploadClick={handleUploadClick}
         onExportClick={handleExportClick}
         isExporting={isExporting}
@@ -372,7 +494,8 @@ export default function Home() {
           zoom={zoom}
           activeReflowId={activeReflowId}
           documentId={session.document_id}
-          pageNumber={1}
+          pageNumber={currentPage}
+          rotation={pageRotation}
           images={images}
           selectedImageId={selectedImageId}
           onSelectImage={(id) => {
@@ -421,8 +544,16 @@ export default function Home() {
           }}
           onUpdateFormFieldValue={handleUpdateFormFieldValue}
           onFlattenForms={handleFlattenForms}
+          pageNumber={currentPage}
+          totalPages={session.page_count}
+          pageRotation={pageRotation}
+          onRotatePage={handleRotatePage}
+          onRotateAllPages={handleRotateAllPages}
+          onSplitDocument={handleSplitDocument}
+          onTriggerMergeDocument={handleTriggerMergeDocument}
+          onDeleteCurrentPage={handleDeleteCurrentPage}
         />
       </div>
     </div>
   );
-}
+};

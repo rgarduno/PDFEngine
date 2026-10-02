@@ -347,3 +347,9 @@ impl From<Vec<PdfObject>> for PdfObject {
         Self::Array(a)
     }
 }
+
+impl From<ObjectId> for PdfObject {
+    fn from(id: ObjectId) -> Self {
+        Self::Reference(id)
+    }
+}

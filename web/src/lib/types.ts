@@ -89,3 +89,25 @@ export interface HistoryEntry {
   description: string;
   timestamp: number;
 }
+
+export interface RotatePageResponse {
+  success: boolean;
+  document_id: string;
+  page_number: number;
+  new_rotation: number;
+}
+
+export interface SplitDocumentResponse {
+  success: boolean;
+  source_document_id: string;
+  extracted_document_ids: string[];
+  count: number;
+}
+
+export interface MergeDocumentsResponse {
+  success: boolean;
+  merged_document_id: string;
+  filename: string;
+  page_count: number;
+}
+

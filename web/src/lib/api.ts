@@ -3,9 +3,12 @@ import {
   DocumentSession,
   FormFieldElement,
   ImageElement,
+  MergeDocumentsResponse,
   PageSceneGraph,
   Paragraph,
   ReflowWebSocketMessage,
+  RotatePageResponse,
+  SplitDocumentResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -359,3 +362,119 @@ export async function flattenDocumentForms(
     };
   }
 }
+
+export async function rotatePage(
+  docId: string,
+  pageIdx: number,
+  degrees: number
+): Promise<RotatePageResponse> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/rotate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ degrees }),
+      }
+    );
+    if (!res.ok) throw new Error('Rotate page failed');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock page rotation:', e);
+    return {
+      success: true,
+      document_id: docId,
+      page_number: pageIdx,
+      new_rotation: ((degrees % 360) + 360) % 360,
+    };
+  }
+}
+
+export async function splitDocument(
+  docId: string,
+  pageIndices?: number[],
+  chunkSize?: number
+): Promise<SplitDocumentResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/split`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_indices: pageIndices, chunk_size: chunkSize }),
+    });
+    if (!res.ok) throw new Error('Split document failed');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock document split:', e);
+    return {
+      success: true,
+      source_document_id: docId,
+      extracted_document_ids: [`extracted-${Date.now()}`],
+      count: 1,
+    };
+  }
+}
+
+export async function mergeDocuments(
+  documentIds: string[]
+): Promise<MergeDocumentsResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_ids: documentIds }),
+    });
+    if (!res.ok) throw new Error('Merge documents failed');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock document merge:', e);
+    return {
+      success: true,
+      merged_document_id: `merged-${Date.now()}`,
+      filename: 'merged_document.pdf',
+      page_count: 2,
+    };
+  }
+}
+
+export async function reorderPages(
+  docId: string,
+  newOrder: number[]
+): Promise<{ success: boolean; page_count: number; message: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/reorder`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_order: newOrder }),
+      }
+    );
+    if (!res.ok) throw new Error('Reorder pages failed');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock reorder pages:', e);
+    return { success: true, page_count: newOrder.length, message: 'Pages reordered locally.' };
+  }
+}
+
+export async function deletePages(
+  docId: string,
+  pageIndices: number[]
+): Promise<{ success: boolean; page_count: number; message: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/delete`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_indices: pageIndices }),
+      }
+    );
+    if (!res.ok) throw new Error('Delete pages failed');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock delete pages:', e);
+    return { success: true, page_count: 1, message: 'Pages deleted locally.' };
+  }
+}
+

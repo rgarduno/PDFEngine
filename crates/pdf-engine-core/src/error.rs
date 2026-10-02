@@ -97,6 +97,17 @@ pub enum PdfError {
     #[error("Layout error: {0}")]
     LayoutError(String),
 
+    /// Invalid page number requested for document.
+    #[error("Invalid page index {page} (document has {total} pages)")]
+    InvalidPageNumber {
+        page: usize,
+        total: usize,
+    },
+
+    /// Document assembly or manipulation operation error.
+    #[error("Document operation error: {0}")]
+    OperationError(String),
+
     /// I/O error encountered while reading or writing PDF data.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

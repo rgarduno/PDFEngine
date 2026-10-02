@@ -465,3 +465,70 @@ def test_acroform_endpoints():
     assert b"Flattened AcroForm Fields" in export_resp.content
 
 
+def test_document_operations_rotate_split_merge_reorder_delete():
+    # 1. Upload Doc A (1 page) and Doc B (1 page)
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp_a = client.post(
+        "/api/documents/upload",
+        files={"file": ("doc_a.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp_a.status_code == 200
+    doc_id_a = upload_resp_a.json()["document_id"]
+
+    upload_resp_b = client.post(
+        "/api/documents/upload",
+        files={"file": ("doc_b.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp_b.status_code == 200
+    doc_id_b = upload_resp_b.json()["document_id"]
+
+    # 2. Test Merge Documents: Merge doc_a and doc_b
+    merge_resp = client.post(
+        "/api/documents/merge",
+        json={"document_ids": [doc_id_a, doc_id_b]},
+    )
+    assert merge_resp.status_code == 200
+    merge_data = merge_resp.json()
+    merged_id = merge_data["merged_document_id"]
+    assert merge_data["page_count"] == 2
+
+    # 3. Test Rotate Page: Rotate Page 1 of merged doc by 90 degrees
+    rotate_resp = client.post(
+        f"/api/documents/{merged_id}/pages/1/rotate",
+        json={"degrees": 90},
+    )
+    assert rotate_resp.status_code == 200
+    assert rotate_resp.json()["new_rotation"] == 90
+
+    # 4. Test Split Document: Extract Page 1 from merged document
+    split_resp = client.post(
+        f"/api/documents/{merged_id}/split",
+        json={"page_indices": [0]},
+    )
+    assert split_resp.status_code == 200
+    split_data = split_resp.json()
+    assert split_data["count"] == 1
+    extracted_id = split_data["extracted_document_ids"][0]
+
+    # Verify extracted document has 1 page
+    extracted_sg = client.get(f"/api/documents/{extracted_id}/pages/1/scenegraph")
+    assert extracted_sg.status_code == 200
+
+    # 5. Test Reorder Pages: Reorder merged doc [1, 0]
+    reorder_resp = client.post(
+        f"/api/documents/{merged_id}/pages/reorder",
+        json={"new_order": [1, 0]},
+    )
+    assert reorder_resp.status_code == 200
+    assert reorder_resp.json()["page_count"] == 2
+
+    # 6. Test Delete Page: Delete page index 1
+    delete_resp = client.post(
+        f"/api/documents/{merged_id}/pages/delete",
+        json={"page_indices": [1]},
+    )
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["page_count"] == 1
+
+
+

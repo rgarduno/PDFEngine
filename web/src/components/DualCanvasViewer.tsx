@@ -22,6 +22,7 @@ interface DualCanvasViewerProps {
   selectedFormFieldName?: string | null;
   onSelectFormField?: (name: string | null) => void;
   onUpdateFormFieldValue?: (name: string, value: string) => void;
+  rotation?: number;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -45,11 +46,16 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   selectedFormFieldName = null,
   onSelectFormField,
   onUpdateFormFieldValue,
+  rotation = 0,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState<string>('');
+
+  const isRotated90or270 = rotation === 90 || rotation === 270;
+  const containerWidth = (isRotated90or270 ? PAGE_HEIGHT_PTS : PAGE_WIDTH_PTS) * zoom;
+  const containerHeight = (isRotated90or270 ? PAGE_WIDTH_PTS : PAGE_HEIGHT_PTS) * zoom;
 
   // Handle double click or selection to enter edit mode
   const handleParagraphClick = (p: Paragraph, e: React.MouseEvent) => {
@@ -141,11 +147,20 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
       {/* Precision PDF Page Canvas */}
       <div
         style={{
-          width: `${PAGE_WIDTH_PTS * zoom}px`,
-          height: `${PAGE_HEIGHT_PTS * zoom}px`,
+          width: `${containerWidth}px`,
+          height: `${containerHeight}px`,
         }}
-        className="relative bg-white dark:bg-neutral-900 shadow-2xl rounded-sm transition-all duration-150 border border-neutral-300 dark:border-neutral-800 select-none overflow-hidden"
+        className="relative flex items-center justify-center transition-all duration-300"
       >
+        <div
+          style={{
+            width: `${PAGE_WIDTH_PTS * zoom}px`,
+            height: `${PAGE_HEIGHT_PTS * zoom}px`,
+            transform: `rotate(${rotation}deg)`,
+            transformOrigin: 'center center',
+          }}
+          className="relative bg-white dark:bg-neutral-900 shadow-2xl rounded-sm transition-all duration-300 border border-neutral-300 dark:border-neutral-800 select-none overflow-hidden"
+        >
         {/* Layer 1: High-fidelity Vector Background & Guidelines */}
         <div className="absolute inset-0 pointer-events-none opacity-40">
           {/* Subtle margin guide lines (0.75 in / 54 pt) */}
@@ -398,6 +413,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

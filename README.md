@@ -74,12 +74,19 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Pure W3C PNG & JPEG header parsers with /SMask soft mask extraction    │
 │    - Surgical in-place image swapping preserving page geometry & vectors    │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 6. Interactive AcroForms & Form Flattening Engine                           │
+│ 7. Interactive AcroForms & Form Flattening Engine                           │
 │    - ISO 32000-1 §12.7 AcroForms reader & field hierarchy traversal         │
 │    - Text, Checkbox, Radio, and Choice field filling with appearance (/AP)  │
 │    - Surgical form flattening burning values into page vector streams       │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 7. Security & Resource Hardening                                            │
+│ 8. Document Assembly & Structural Operations                                │
+│    - Transitive object graph cloning with cycle prevention                  │
+│    - Page rotation (0°, 90°, 180°, 270°) with canonical normalization      │
+│    - Document splitting by page ranges and fixed-size chunking              │
+│    - Multi-document concatenation and merging preserving resources & fonts  │
+│    - In-place page reordering and deletion with single-page safety guards   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 9. Security & Resource Hardening                                            │
 │    - Bounded Flate expansion: 100:1 max ratio, 250 MB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Active code neutralization (strips /JavaScript, /Launch, /SubmitForm) │
@@ -106,6 +113,7 @@ PDFEngine/
 │   │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
 │   │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
 │   │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
+│   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
@@ -277,6 +285,11 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/forms/fill` | Fill field value (text, checkbox, choice) with auto-synthesized `/AP /N` appearances. |
 | `POST` | `/api/documents/{id}/forms/flatten` | Surgically burn all form field values into page `/Contents` and purge `/AcroForm`. |
+| `POST` | `/api/documents/{id}/pages/{p}/rotate` | Rotate individual page by 90°, 180°, or 270° with ISO `/Rotate` attribute. |
+| `POST` | `/api/documents/{id}/split` | Split document into single-page extracts or multi-page chunks. |
+| `POST` | `/api/documents/merge` | Concatenate and merge multiple documents into a single unified PDF. |
+| `POST` | `/api/documents/{id}/pages/reorder` | Permute page ordering with cycle-safe page tree restructuring. |
+| `POST` | `/api/documents/{id}/pages/delete` | Purge pages while enforcing single-page survival safety guards. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
 
@@ -289,6 +302,7 @@ PDFEngine includes a modern, high-precision web studio inside `web/` with a dual
 * **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
 * **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
 * **Layer 1.8 Interactive AcroForms & Flattening**: In-situ filling for text inputs, checkboxes, and select dropdowns, coupled with single-click surgical document flattening.
+* **Document Assembly & Orientation Inspector**: Rotate pages (-90°, +90°, 180°), split documents into single-page chunks, merge external PDFs, and delete pages with live canvas viewport synchronization.
 * **Dynamic @font-face Registration**: Fetches embedded TrueType font binaries directly from the PDF via the engine and registers them in the browser runtime for pixel-identical typography.
 * **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
 * **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
@@ -318,6 +332,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 7: Embedded Font Extraction & Dynamic Glyph Fallback** (WinAnsi encoding, Spanish/Latin-1 accents, metric transliteration fallback, TrueType font streaming)
 - [x] **Phase 8: Graphics & XObject Image Management** (CTM spatial projection, pure JPEG/PNG codecs, in-place surgical replacement, web studio inspection & replacement)
 - [x] **Phase 9: Interactive AcroForms & Surgical Form Flattening** (AcroForm hierarchy reader, appearance synthesis, surgical flattening, PyO3 bindings, FastAPI endpoints & Web Studio)
+- [x] **Phase 10: Document Assembly, Splitting, Merging & Page Operations** (Object cloner, rotation, split, merge, reorder, delete, PyO3 bindings, FastAPI endpoints & Web Studio UI)
 
 ---
 
