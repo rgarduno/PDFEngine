@@ -1069,6 +1069,151 @@ impl PyPdfDocument {
             .collect())
     }
 
+    /// Creates and places a new interactive form field on a specific page.
+    #[pyo3(signature = (
+        page_number,
+        name,
+        field_type,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        value = None,
+        default_value = None,
+        alt_name = None,
+        options = None,
+        is_read_only = false,
+        is_required = false,
+        is_multiline = false,
+        max_length = None,
+        font_size = None
+    ))]
+    pub fn add_form_field(
+        &mut self,
+        page_number: usize,
+        name: String,
+        field_type: String,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        value: Option<String>,
+        default_value: Option<String>,
+        alt_name: Option<String>,
+        options: Option<Vec<String>>,
+        is_read_only: bool,
+        is_required: bool,
+        is_multiline: bool,
+        max_length: Option<usize>,
+        font_size: Option<f64>,
+    ) -> PyResult<PyFormField> {
+        let f_type = pdf_engine_core::forms::FormFieldType::from_str(&field_type);
+        let opts = pdf_engine_core::forms::FormFieldCreateOptions {
+            name,
+            field_type: f_type,
+            rect: pdf_engine_core::layout::geometry::Rect::new(min_x, min_y, max_x, max_y),
+            value,
+            default_value,
+            alt_name,
+            options,
+            is_read_only,
+            is_required,
+            is_multiline,
+            max_length,
+            font_size,
+        };
+
+        let created = pdf_engine_core::forms::create_form_field(&mut self.doc, page_number, &opts)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create form field: {}", e)))?;
+
+        Ok(PyFormField {
+            id: created.id.number,
+            name: created.name,
+            alt_name: created.alt_name,
+            field_type: created.field_type.as_str().to_string(),
+            value: created.value,
+            default_value: created.default_value,
+            min_x: created.rect.min_x,
+            min_y: created.rect.min_y,
+            max_x: created.rect.max_x,
+            max_y: created.rect.max_y,
+            page_number: created.page_number,
+            options: created.options,
+            is_read_only: created.is_read_only,
+            is_required: created.is_required,
+            is_multiline: created.is_multiline,
+            max_length: created.max_length,
+        })
+    }
+
+    /// Deletes an existing interactive form field from the document by name.
+    pub fn delete_form_field(&mut self, name: &str) -> PyResult<bool> {
+        pdf_engine_core::forms::delete_form_field(&mut self.doc, name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete form field: {}", e)))
+    }
+
+    /// Updates bounding box or properties of an existing form field.
+    #[pyo3(signature = (
+        name,
+        min_x = None,
+        min_y = None,
+        max_x = None,
+        max_y = None,
+        alt_name = None,
+        is_read_only = None,
+        is_required = None,
+        is_multiline = None
+    ))]
+    pub fn update_form_field(
+        &mut self,
+        name: &str,
+        min_x: Option<f64>,
+        min_y: Option<f64>,
+        max_x: Option<f64>,
+        max_y: Option<f64>,
+        alt_name: Option<String>,
+        is_read_only: Option<bool>,
+        is_required: Option<bool>,
+        is_multiline: Option<bool>,
+    ) -> PyResult<Option<PyFormField>> {
+        let rect = match (min_x, min_y, max_x, max_y) {
+            (Some(x1), Some(y1), Some(x2), Some(y2)) => {
+                Some(pdf_engine_core::layout::geometry::Rect::new(x1, y1, x2, y2))
+            }
+            _ => None,
+        };
+
+        let opts = pdf_engine_core::forms::FormFieldUpdateOptions {
+            rect,
+            alt_name,
+            is_read_only,
+            is_required,
+            is_multiline,
+        };
+
+        let updated = pdf_engine_core::forms::update_form_field(&mut self.doc, name, &opts)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to update form field: {}", e)))?;
+
+        Ok(updated.map(|f| PyFormField {
+            id: f.id.number,
+            name: f.name,
+            alt_name: f.alt_name,
+            field_type: f.field_type.as_str().to_string(),
+            value: f.value,
+            default_value: f.default_value,
+            min_x: f.rect.min_x,
+            min_y: f.rect.min_y,
+            max_x: f.rect.max_x,
+            max_y: f.rect.max_y,
+            page_number: f.page_number,
+            options: f.options,
+            is_read_only: f.is_read_only,
+            is_required: f.is_required,
+            is_multiline: f.is_multiline,
+            max_length: f.max_length,
+        }))
+    }
+
     /// Fills a single form field by name or ID.
     pub fn fill_form_field(&mut self, name_or_id: &str, value: &str) -> PyResult<bool> {
         pdf_engine_core::forms::fill_field_value(&mut self.doc, name_or_id, value)

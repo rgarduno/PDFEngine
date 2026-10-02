@@ -32,6 +32,19 @@ impl FormFieldType {
             FormFieldType::Signature => "Signature",
         }
     }
+
+    /// Parses a string into a FormFieldType.
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "text" | "tx" => FormFieldType::Text,
+            "checkbox" | "check" | "btn" => FormFieldType::Checkbox,
+            "radio" | "radiobutton" => FormFieldType::RadioButton,
+            "push" | "pushbutton" | "button" => FormFieldType::PushButton,
+            "choice" | "ch" | "select" | "dropdown" | "combo" => FormFieldType::Choice,
+            "signature" | "sig" => FormFieldType::Signature,
+            _ => FormFieldType::Text,
+        }
+    }
 }
 
 /// Represents an interactive form field in a PDF document.

@@ -25,6 +25,9 @@ from app.models import (
     AnnotationModel,
     BatchFillFormsRequest,
     BoundingBox,
+    CreateFormFieldRequest,
+    CreateFormFieldResponse,
+    DeleteFormFieldResponse,
     DeletePagesRequest,
     DocumentFormsResponse,
     DocumentOverviewResponse,
@@ -35,6 +38,8 @@ from app.models import (
     FlattenAnnotationsResponse,
     FlattenFormsResponse,
     FormFieldModel,
+    UpdateFormFieldRequest,
+    UpdateFormFieldResponse,
     ImageModel,
     MergeDocumentsRequest,
     MergeDocumentsResponse,
@@ -531,6 +536,147 @@ def flatten_document_forms_endpoint(doc_id: str):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to flatten form fields: {e}")
+
+
+@app.post("/api/documents/{doc_id}/pages/{page_idx}/forms", response_model=CreateFormFieldResponse)
+def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFieldRequest):
+    """Creates and places a new interactive AcroForm field on a specific page."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        f = doc.add_form_field(
+            page_number=page_idx,
+            name=request.name,
+            field_type=request.field_type,
+            min_x=request.min_x,
+            min_y=request.min_y,
+            max_x=request.max_x,
+            max_y=request.max_y,
+            value=request.value,
+            default_value=request.default_value,
+            alt_name=request.alt_name,
+            options=request.options,
+            is_read_only=request.is_read_only,
+            is_required=request.is_required,
+            is_multiline=request.is_multiline,
+            max_length=request.max_length,
+            font_size=request.font_size,
+        )
+        min_x, min_y, max_x, max_y = f.bbox()
+        field_model = FormFieldModel(
+            id=f.id,
+            name=f.name,
+            alt_name=f.alt_name,
+            field_type=f.field_type,
+            value=f.value,
+            default_value=f.default_value,
+            bbox=BoundingBox(
+                min_x=round(min_x, 2),
+                min_y=round(min_y, 2),
+                max_x=round(max_x, 2),
+                max_y=round(max_y, 2),
+                width=round(max_x - min_x, 2),
+                height=round(max_y - min_y, 2),
+            ),
+            page_number=f.page_number,
+            options=f.options,
+            is_read_only=f.is_read_only,
+            is_required=f.is_required,
+            is_multiline=f.is_multiline,
+            max_length=f.max_length,
+        )
+        return CreateFormFieldResponse(
+            status="ok",
+            document_id=doc_id,
+            field=field_model,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to create form field: {e}")
+
+
+@app.delete("/api/documents/{doc_id}/forms/{field_name}", response_model=DeleteFormFieldResponse)
+def delete_form_field_endpoint(doc_id: str, field_name: str):
+    """Deletes an interactive form field from the document by name."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        deleted = doc.delete_form_field(field_name)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Form field '{field_name}' not found.")
+        return DeleteFormFieldResponse(
+            status="ok",
+            document_id=doc_id,
+            deleted=True,
+            field_name=field_name,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to delete form field: {e}")
+
+
+@app.put("/api/documents/{doc_id}/forms/{field_name}", response_model=UpdateFormFieldResponse)
+def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateFormFieldRequest):
+    """Updates geometry or properties of an existing form field."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        updated = doc.update_form_field(
+            name=field_name,
+            min_x=request.min_x,
+            min_y=request.min_y,
+            max_x=request.max_x,
+            max_y=request.max_y,
+            alt_name=request.alt_name,
+            is_read_only=request.is_read_only,
+            is_required=request.is_required,
+            is_multiline=request.is_multiline,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Form field '{field_name}' not found.")
+
+        min_x, min_y, max_x, max_y = updated.bbox()
+        field_model = FormFieldModel(
+            id=updated.id,
+            name=updated.name,
+            alt_name=updated.alt_name,
+            field_type=updated.field_type,
+            value=updated.value,
+            default_value=updated.default_value,
+            bbox=BoundingBox(
+                min_x=round(min_x, 2),
+                min_y=round(min_y, 2),
+                max_x=round(max_x, 2),
+                max_y=round(max_y, 2),
+                width=round(max_x - min_x, 2),
+                height=round(max_y - min_y, 2),
+            ),
+            page_number=updated.page_number,
+            options=updated.options,
+            is_read_only=updated.is_read_only,
+            is_required=updated.is_required,
+            is_multiline=updated.is_multiline,
+            max_length=updated.max_length,
+        )
+        return UpdateFormFieldResponse(
+            status="ok",
+            document_id=doc_id,
+            field=field_model,
+            message=f"Form field '{field_name}' successfully updated.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to update form field: {e}")
 
 
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/rotate", response_model=RotatePageResponse)

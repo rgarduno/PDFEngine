@@ -1111,6 +1111,142 @@ def test_document_optimization_and_export_endpoints():
     assert "Contract Agreement Terms" in para_data["paragraphs"][0]["text"]
 
 
+def test_form_builder_crud_workflow():
+    """Validates creation, updating, retrieval, deletion, and flattening of form fields."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("form_builder_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Create a Text field
+    create_text_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={
+            "name": "CustomerEmail",
+            "field_type": "Text",
+            "min_x": 72.0,
+            "min_y": 700.0,
+            "max_x": 300.0,
+            "max_y": 724.0,
+            "value": "dev@company.com",
+            "alt_name": "Customer Email Address",
+            "is_required": True,
+            "font_size": 11.0,
+        },
+    )
+    assert create_text_resp.status_code == 200
+    text_data = create_text_resp.json()
+    assert text_data["status"] == "ok"
+    assert text_data["field"]["name"] == "CustomerEmail"
+    assert text_data["field"]["field_type"] == "Text"
+    assert text_data["field"]["value"] == "dev@company.com"
+    assert text_data["field"]["is_required"] is True
+
+    # 2. Create a Checkbox field
+    create_chk_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={
+            "name": "AcceptClause",
+            "field_type": "Checkbox",
+            "min_x": 72.0,
+            "min_y": 660.0,
+            "max_x": 92.0,
+            "max_y": 680.0,
+            "value": "Yes",
+            "alt_name": "Accept conditions",
+        },
+    )
+    assert create_chk_resp.status_code == 200
+    chk_data = create_chk_resp.json()
+    assert chk_data["field"]["name"] == "AcceptClause"
+    assert chk_data["field"]["field_type"] == "Checkbox"
+
+    # 3. Create a Choice dropdown field
+    create_choice_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={
+            "name": "ServiceTier",
+            "field_type": "Choice",
+            "min_x": 72.0,
+            "min_y": 620.0,
+            "max_x": 220.0,
+            "max_y": 644.0,
+            "value": "Gold",
+            "options": ["Silver", "Gold", "Platinum"],
+        },
+    )
+    assert create_choice_resp.status_code == 200
+    choice_data = create_choice_resp.json()
+    assert choice_data["field"]["name"] == "ServiceTier"
+    assert choice_data["field"]["field_type"] == "Choice"
+    assert len(choice_data["field"]["options"]) == 3
+
+    # 4. Create a Signature field
+    create_sig_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={
+            "name": "LegalSign",
+            "field_type": "Signature",
+            "min_x": 72.0,
+            "min_y": 550.0,
+            "max_x": 272.0,
+            "max_y": 600.0,
+            "alt_name": "Sign here",
+        },
+    )
+    assert create_sig_resp.status_code == 200
+    assert create_sig_resp.json()["field"]["field_type"] == "Signature"
+
+    # 5. List all forms
+    list_resp = client.get(f"/api/documents/{doc_id}/forms")
+    assert list_resp.status_code == 200
+    assert list_resp.json()["count"] == 4
+
+    # 6. Update text field properties
+    update_resp = client.put(
+        f"/api/documents/{doc_id}/forms/CustomerEmail",
+        json={
+            "min_x": 80.0,
+            "min_y": 705.0,
+            "max_x": 320.0,
+            "max_y": 730.0,
+            "alt_name": "Corporate Email Updated",
+            "is_read_only": True,
+        },
+    )
+    assert update_resp.status_code == 200
+    upd_data = update_resp.json()
+    assert upd_data["field"]["bbox"]["min_x"] == 80.0
+    assert upd_data["field"]["alt_name"] == "Corporate Email Updated"
+    assert upd_data["field"]["is_read_only"] is True
+
+    # 7. Delete one field
+    del_resp = client.delete(f"/api/documents/{doc_id}/forms/AcceptClause")
+    assert del_resp.status_code == 200
+    assert del_resp.json()["deleted"] is True
+
+    # 8. Verify list count is now 3
+    list_resp2 = client.get(f"/api/documents/{doc_id}/forms")
+    assert list_resp2.status_code == 200
+    assert list_resp2.json()["count"] == 3
+    names = [f["name"] for f in list_resp2.json()["fields"]]
+    assert "AcceptClause" not in names
+    assert "CustomerEmail" in names
+    assert "ServiceTier" in names
+    assert "LegalSign" in names
+
+    # 9. Duplicate field name returns 400
+    dup_resp = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={"name": "CustomerEmail", "field_type": "Text"},
+    )
+    assert dup_resp.status_code == 400
+
+
+
 
 
 

@@ -2,11 +2,16 @@
 //!
 //! Provides inspection, filling, and permanent flattening of PDF interactive form fields.
 
+pub mod builder;
 pub mod filler;
 pub mod flatten;
 pub mod reader;
 pub mod types;
 
+pub use builder::{
+    create_form_field, delete_form_field, get_or_create_acroform, update_form_field,
+    FormFieldCreateOptions, FormFieldUpdateOptions,
+};
 pub use filler::{fill_field_value, fill_fields_batch};
 pub use flatten::flatten_document_forms;
 pub use reader::extract_document_forms;
@@ -154,4 +159,121 @@ mod tests {
         assert!(content_str.contains("Acme Corporation"));
         assert!(content_str.contains("Flattened AcroForm Fields"));
     }
+
+    #[test]
+    fn test_create_and_delete_form_fields() {
+        use crate::layout::geometry::Rect;
+
+        // Create a blank PDF without any AcroForm
+        let mut pdf = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        let off1 = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        let off2 = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        let off3 = pdf.len();
+        pdf.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
+        let off4 = pdf.len();
+        pdf.extend_from_slice(b"4 0 obj\n<< /Length 12 >>\nstream\nq\n(Blank) Tj\nQ\nendstream\nendobj\n");
+
+        let xref_off = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", off1).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", off2).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", off3).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", off4).as_bytes());
+        pdf.extend_from_slice(b"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n");
+        pdf.extend_from_slice(format!("{}\n%%EOF\n", xref_off).as_bytes());
+
+        let mut doc = PdfDocument::load(&pdf).expect("Failed to load PDF");
+
+        // 1. Create a Text field
+        let text_opts = FormFieldCreateOptions {
+            name: "UserEmail".to_string(),
+            field_type: FormFieldType::Text,
+            rect: Rect::new(72.0, 700.0, 300.0, 724.0),
+            value: Some("dev@example.com".to_string()),
+            default_value: Some("placeholder@test.com".to_string()),
+            alt_name: Some("Corporate Email".to_string()),
+            options: None,
+            is_read_only: false,
+            is_required: true,
+            is_multiline: false,
+            max_length: Some(100),
+            font_size: Some(11.0),
+        };
+        let created_text = create_form_field(&mut doc, 1, &text_opts).expect("Failed to create text field");
+        assert_eq!(created_text.name, "UserEmail");
+        assert_eq!(created_text.value, "dev@example.com");
+        assert!(created_text.is_required);
+
+        // 2. Create a Checkbox field
+        let check_opts = FormFieldCreateOptions {
+            name: "OptInNewsletter".to_string(),
+            field_type: FormFieldType::Checkbox,
+            rect: Rect::new(72.0, 660.0, 92.0, 680.0),
+            value: Some("Yes".to_string()),
+            default_value: None,
+            alt_name: Some("Subscribe to newsletter".to_string()),
+            options: None,
+            is_read_only: false,
+            is_required: false,
+            is_multiline: false,
+            max_length: None,
+            font_size: None,
+        };
+        let created_check = create_form_field(&mut doc, 1, &check_opts).expect("Failed to create checkbox");
+        assert!(created_check.is_checked());
+
+        // 3. Create a Choice dropdown field
+        let choice_opts = FormFieldCreateOptions {
+            name: "Department".to_string(),
+            field_type: FormFieldType::Choice,
+            rect: Rect::new(72.0, 620.0, 250.0, 644.0),
+            value: Some("Engineering".to_string()),
+            default_value: None,
+            alt_name: Some("Work department".to_string()),
+            options: Some(vec!["Sales".to_string(), "Engineering".to_string(), "Legal".to_string()]),
+            is_read_only: false,
+            is_required: false,
+            is_multiline: false,
+            max_length: None,
+            font_size: Some(10.0),
+        };
+        let created_choice = create_form_field(&mut doc, 1, &choice_opts).expect("Failed to create choice field");
+        assert_eq!(created_choice.options.len(), 3);
+        assert_eq!(created_choice.value, "Engineering");
+
+        // 4. Verify all 3 fields exist in document
+        let all_fields = extract_document_forms(&mut doc).expect("Failed to extract forms");
+        assert_eq!(all_fields.len(), 3);
+
+        // 5. Update field properties
+        let update_opts = FormFieldUpdateOptions {
+            rect: Some(Rect::new(80.0, 705.0, 320.0, 730.0)),
+            alt_name: Some("Updated Corporate Email".to_string()),
+            is_read_only: Some(true),
+            is_required: Some(false),
+            is_multiline: None,
+        };
+        let updated = update_form_field(&mut doc, "UserEmail", &update_opts)
+            .expect("Failed to update field")
+            .expect("Field not returned");
+        assert_eq!(updated.rect.min_x, 80.0);
+        assert_eq!(updated.alt_name.as_deref(), Some("Updated Corporate Email"));
+        assert!(updated.is_read_only);
+        assert!(!updated.is_required);
+
+        // 6. Delete a field
+        let deleted = delete_form_field(&mut doc, "OptInNewsletter").expect("Failed to delete field");
+        assert!(deleted);
+
+        // Verify count dropped to 2
+        let fields_remaining = extract_document_forms(&mut doc).expect("Failed to extract forms");
+        assert_eq!(fields_remaining.len(), 2);
+        assert!(!fields_remaining.iter().any(|f| f.name == "OptInNewsletter"));
+        assert!(fields_remaining.iter().any(|f| f.name == "UserEmail"));
+        assert!(fields_remaining.iter().any(|f| f.name == "Department"));
+    }
 }
+

@@ -320,6 +320,9 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `POST` | `/api/documents/{id}/images/{img_id}/replace` | Surgical in-place image replacement (JPEG/PNG with `/SMask` transparency). |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
+| `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
+| `DELETE` | `/api/documents/{id}/forms/{name}` | Delete an interactive form field and its associated widget annotations. |
+| `PUT` | `/api/documents/{id}/forms/{name}` | Update form field geometry (bounding box) or flags (read-only, required, multiline). |
 | `POST` | `/api/documents/{id}/forms/fill` | Fill field value (text, checkbox, choice) with auto-synthesized `/AP /N` appearances. |
 | `POST` | `/api/documents/{id}/forms/flatten` | Surgically burn all form field values into page `/Contents` and purge `/AcroForm`. |
 | `POST` | `/api/documents/{id}/pages/{p}/rotate` | Rotate individual page by 90°, 180°, or 270° with ISO `/Rotate` attribute. |
@@ -390,6 +393,11 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
 - [x] **Phase 13: Surgical Legal Redaction, PII Sanitizer & Metadata Scrubbing (ISO 32000-1 §14.11)** (Physical glyph & stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` & XMP metadata scrubbing, PyO3 bindings, FastAPI endpoints & Web Studio)
+- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, granular permissions bitmask, PKCS#7 /ByteRange digital signatures)
+- [x] **Phase 15: Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4)** (Vector lattice grid solver, borderless fallback, multi-format CSV/JSON/MD/HTML exporters)
+- [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
+- [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)
+- [x] **Phase 18: Interactive AcroForm Builder & Form Field Designer (ISO 32000-1 §12.7)** (AcroForm catalog auto-initialization, merged Widget annotations, visual field designer for Text, Checkbox, Choice, and Digital Signature `/Sig`, field deletion and geometry updating, PyO3 bindings, FastAPI CRUD endpoints & Web Studio)
 
 ---
 

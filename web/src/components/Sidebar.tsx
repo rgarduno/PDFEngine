@@ -40,6 +40,7 @@ import {
   Zap,
   FileArchive,
   Info,
+  PenTool,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -53,6 +54,7 @@ import {
   DetectedTableItem,
   OptimizeRequest,
   OptimizeResponse,
+  CreateFormFieldPayload,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -103,6 +105,8 @@ interface SidebarProps {
   onExportTable?: (tableIdx: number, format: 'csv' | 'json' | 'markdown' | 'html') => Promise<string>;
   onDownloadTable?: (tableIdx: number, format: string) => void;
   onOptimizationComplete?: (stats: OptimizeResponse) => void;
+  onCreateFormField?: (payload: CreateFormFieldPayload) => Promise<void>;
+  onDeleteFormField?: (fieldName: string) => Promise<void>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -153,6 +157,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onExportTable,
   onDownloadTable,
   onOptimizationComplete,
+  onCreateFormField,
+  onDeleteFormField,
 }) => {
   const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
@@ -213,6 +219,103 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [sigReason, setSigReason] = useState<string>('Aprobación y Certificación Legal');
   const [sigLocation, setSigLocation] = useState<string>('Ciudad de México, MX');
   const [sigPage, setSigPage] = useState<number>(pageNumber || 1);
+
+  // AcroForm Builder & Designer State
+  const [showFormBuilder, setShowFormBuilder] = useState<boolean>(false);
+  const [newFieldName, setNewFieldName] = useState<string>('');
+  const [newFieldAltName, setNewFieldAltName] = useState<string>('');
+  const [newFieldType, setNewFieldType] = useState<'Text' | 'Checkbox' | 'Choice' | 'Signature'>('Text');
+  const [newFieldMinX, setNewFieldMinX] = useState<number>(72);
+  const [newFieldMinY, setNewFieldMinY] = useState<number>(650);
+  const [newFieldWidth, setNewFieldWidth] = useState<number>(180);
+  const [newFieldHeight, setNewFieldHeight] = useState<number>(24);
+  const [newFieldValue, setNewFieldValue] = useState<string>('');
+  const [newFieldOptions, setNewFieldOptions] = useState<string>('Opción 1, Opción 2, Opción 3');
+  const [newFieldRequired, setNewFieldRequired] = useState<boolean>(false);
+  const [newFieldReadOnly, setNewFieldReadOnly] = useState<boolean>(false);
+  const [newFieldMultiline, setNewFieldMultiline] = useState<boolean>(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState<boolean>(false);
+
+  const applyFieldPreset = (preset: 'text' | 'textarea' | 'checkbox' | 'choice' | 'signature') => {
+    switch (preset) {
+      case 'text':
+        setNewFieldType('Text');
+        setNewFieldWidth(180);
+        setNewFieldHeight(24);
+        setNewFieldMultiline(false);
+        if (!newFieldName) setNewFieldName('campo_texto');
+        break;
+      case 'textarea':
+        setNewFieldType('Text');
+        setNewFieldWidth(220);
+        setNewFieldHeight(60);
+        setNewFieldMultiline(true);
+        if (!newFieldName) setNewFieldName('comentarios');
+        break;
+      case 'checkbox':
+        setNewFieldType('Checkbox');
+        setNewFieldWidth(18);
+        setNewFieldHeight(18);
+        setNewFieldMultiline(false);
+        if (!newFieldName) setNewFieldName('acepto_terminos');
+        break;
+      case 'choice':
+        setNewFieldType('Choice');
+        setNewFieldWidth(180);
+        setNewFieldHeight(24);
+        setNewFieldMultiline(false);
+        if (!newFieldName) setNewFieldName('seleccion');
+        break;
+      case 'signature':
+        setNewFieldType('Signature');
+        setNewFieldWidth(200);
+        setNewFieldHeight(50);
+        setNewFieldMultiline(false);
+        if (!newFieldName) setNewFieldName('firma_digital');
+        break;
+    }
+  };
+
+  const handleCreateNewField = async () => {
+    if (!newFieldName.trim()) {
+      alert('Por favor especifica un nombre único para el campo.');
+      return;
+    }
+    if (!onCreateFormField) return;
+
+    setIsSubmittingForm(true);
+    try {
+      const optionsArray = newFieldType === 'Choice'
+        ? newFieldOptions.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+
+      const payload: CreateFormFieldPayload = {
+        name: newFieldName.trim(),
+        alt_name: newFieldAltName.trim() || undefined,
+        field_type: newFieldType,
+        value: newFieldValue || undefined,
+        min_x: newFieldMinX,
+        min_y: newFieldMinY,
+        max_x: newFieldMinX + newFieldWidth,
+        max_y: newFieldMinY + newFieldHeight,
+        is_required: newFieldRequired,
+        is_read_only: newFieldReadOnly,
+        is_multiline: newFieldType === 'Text' ? newFieldMultiline : undefined,
+        options: optionsArray,
+      };
+
+      await onCreateFormField(payload);
+      setShowFormBuilder(false);
+      setNewFieldName('');
+      setNewFieldAltName('');
+      setNewFieldValue('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al crear campo';
+      alert(`Error al crear campo: ${msg}`);
+    } finally {
+      setIsSubmittingForm(false);
+    }
+  };
 
   const handleRunOptimization = async () => {
     setIsOptimizing(true);
@@ -532,13 +635,257 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </>
         ) : activeTab === 'forms' ? (
           <>
-            <div className="text-[11px] font-semibold text-neutral-400 uppercase px-2 mb-1">
-              Interactive Form Fields ({forms.length})
+            <div className="text-[11px] font-semibold text-neutral-400 uppercase px-2 mb-2 flex items-center justify-between">
+              <span>Campos de Formulario ({forms.length})</span>
+              {onCreateFormField && (
+                <button
+                  type="button"
+                  onClick={() => setShowFormBuilder((prev) => !prev)}
+                  className="flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 transition-colors cursor-pointer"
+                >
+                  <Plus size={12} />
+                  <span>{showFormBuilder ? 'Cerrar' : '+ Nuevo Campo'}</span>
+                </button>
+              )}
             </div>
+
+            {/* Form Builder Drawer / Card */}
+            {showFormBuilder && (
+              <div className="p-3 mb-3 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50/60 dark:bg-purple-950/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-900 dark:text-purple-200">
+                    <Box size={14} className="text-purple-600 dark:text-purple-400" />
+                    <span>Diseñador de Campos</span>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-200 dark:bg-purple-800 text-purple-800 dark:text-purple-200 font-mono">
+                    Pág. {pageNumber}
+                  </span>
+                </div>
+
+                {/* Presets */}
+                <div className="space-y-1">
+                  <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-semibold">Presets Rápidos:</span>
+                  <div className="grid grid-cols-3 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => applyFieldPreset('text')}
+                      className={`text-[10px] py-1 px-1.5 rounded border transition-colors ${
+                        newFieldType === 'Text' && !newFieldMultiline
+                          ? 'bg-purple-600 text-white border-purple-600 font-medium'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-purple-400'
+                      }`}
+                    >
+                      Texto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyFieldPreset('textarea')}
+                      className={`text-[10px] py-1 px-1.5 rounded border transition-colors ${
+                        newFieldType === 'Text' && newFieldMultiline
+                          ? 'bg-purple-600 text-white border-purple-600 font-medium'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-purple-400'
+                      }`}
+                    >
+                      Área Texto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyFieldPreset('checkbox')}
+                      className={`text-[10px] py-1 px-1.5 rounded border transition-colors ${
+                        newFieldType === 'Checkbox'
+                          ? 'bg-purple-600 text-white border-purple-600 font-medium'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-purple-400'
+                      }`}
+                    >
+                      Checkbox
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyFieldPreset('choice')}
+                      className={`text-[10px] py-1 px-1.5 rounded border transition-colors ${
+                        newFieldType === 'Choice'
+                          ? 'bg-purple-600 text-white border-purple-600 font-medium'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-purple-400'
+                      }`}
+                    >
+                      Lista / Combo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyFieldPreset('signature')}
+                      className={`text-[10px] py-1 px-1.5 rounded border transition-colors col-span-2 ${
+                        newFieldType === 'Signature'
+                          ? 'bg-purple-600 text-white border-purple-600 font-medium'
+                          : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-purple-400'
+                      }`}
+                    >
+                      Firma Digital (/Sig)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Field Name & Alt Name */}
+                <div className="space-y-1.5">
+                  <div>
+                    <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block font-medium">
+                      Nombre del Campo (/T) *
+                    </label>
+                    <input
+                      type="text"
+                      value={newFieldName}
+                      onChange={(e) => setNewFieldName(e.target.value)}
+                      placeholder="ej. nombre_cliente"
+                      className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 outline-none focus:border-purple-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block font-medium">
+                      Etiqueta / Tooltip (/TU)
+                    </label>
+                    <input
+                      type="text"
+                      value={newFieldAltName}
+                      onChange={(e) => setNewFieldAltName(e.target.value)}
+                      placeholder="ej. Ingrese su nombre completo"
+                      className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 outline-none focus:border-purple-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Coordinates & Dimensions */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block font-medium">
+                    Posición y Tamaño (pt)
+                  </label>
+                  <div className="grid grid-cols-4 gap-1">
+                    <div>
+                      <span className="text-[9px] text-neutral-400 block">X</span>
+                      <input
+                        type="number"
+                        value={newFieldMinX}
+                        onChange={(e) => setNewFieldMinX(Number(e.target.value))}
+                        className="w-full text-xs p-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-neutral-400 block">Y</span>
+                      <input
+                        type="number"
+                        value={newFieldMinY}
+                        onChange={(e) => setNewFieldMinY(Number(e.target.value))}
+                        className="w-full text-xs p-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-neutral-400 block">Ancho</span>
+                      <input
+                        type="number"
+                        value={newFieldWidth}
+                        onChange={(e) => setNewFieldWidth(Number(e.target.value))}
+                        className="w-full text-xs p-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-neutral-400 block">Alto</span>
+                      <input
+                        type="number"
+                        value={newFieldHeight}
+                        onChange={(e) => setNewFieldHeight(Number(e.target.value))}
+                        className="w-full text-xs p-1 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Specifics depending on field type */}
+                {newFieldType === 'Choice' && (
+                  <div>
+                    <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block font-medium">
+                      Opciones (separadas por coma)
+                    </label>
+                    <input
+                      type="text"
+                      value={newFieldOptions}
+                      onChange={(e) => setNewFieldOptions(e.target.value)}
+                      placeholder="Opción 1, Opción 2, Opción 3"
+                      className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 outline-none focus:border-purple-500"
+                    />
+                  </div>
+                )}
+
+                {newFieldType !== 'Signature' && (
+                  <div>
+                    <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block font-medium">
+                      Valor Inicial
+                    </label>
+                    <input
+                      type="text"
+                      value={newFieldValue}
+                      onChange={(e) => setNewFieldValue(e.target.value)}
+                      placeholder={newFieldType === 'Checkbox' ? 'Yes / Off' : 'Texto por defecto'}
+                      className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 outline-none focus:border-purple-500"
+                    />
+                  </div>
+                )}
+
+                {/* Flags: Required, ReadOnly, Multiline */}
+                <div className="flex flex-wrap gap-3 pt-1">
+                  <label className="flex items-center gap-1.5 text-[11px] text-neutral-700 dark:text-neutral-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newFieldRequired}
+                      onChange={(e) => setNewFieldRequired(e.target.checked)}
+                      className="w-3.5 h-3.5 text-purple-600 rounded focus:ring-0 cursor-pointer"
+                    />
+                    <span>Requerido</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-neutral-700 dark:text-neutral-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newFieldReadOnly}
+                      onChange={(e) => setNewFieldReadOnly(e.target.checked)}
+                      className="w-3.5 h-3.5 text-purple-600 rounded focus:ring-0 cursor-pointer"
+                    />
+                    <span>Solo Lectura</span>
+                  </label>
+                  {newFieldType === 'Text' && (
+                    <label className="flex items-center gap-1.5 text-[11px] text-neutral-700 dark:text-neutral-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newFieldMultiline}
+                        onChange={(e) => setNewFieldMultiline(e.target.checked)}
+                        className="w-3.5 h-3.5 text-purple-600 rounded focus:ring-0 cursor-pointer"
+                      />
+                      <span>Multilínea</span>
+                    </label>
+                  )}
+                </div>
+
+                {/* Create & Cancel Buttons */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isSubmittingForm || !newFieldName.trim()}
+                    onClick={handleCreateNewField}
+                    className="flex-1 py-1.5 px-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Plus size={13} />
+                    <span>{isSubmittingForm ? 'Insertando...' : 'Insertar en PDF'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowFormBuilder(false)}
+                    className="py-1.5 px-2.5 bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded text-xs font-medium transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
 
             {forms.length === 0 ? (
               <div className="py-8 text-center text-xs text-neutral-400">
-                No interactive AcroForm fields in document.
+                No hay campos de formulario interactivos en el documento.
               </div>
             ) : (
               <div className="space-y-2">
@@ -555,13 +902,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-xs font-semibold text-purple-600 dark:text-purple-400 flex items-center gap-1 truncate max-w-[150px]">
+                        <span className="font-mono text-xs font-semibold text-purple-600 dark:text-purple-400 flex items-center gap-1 truncate max-w-[130px]">
                           <FileText size={12} />
                           {f.name}
                         </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-mono">
-                          {f.field_type}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-mono">
+                            {f.field_type}
+                          </span>
+                          {onDeleteFormField && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteFormField(f.name);
+                              }}
+                              title="Eliminar campo"
+                              className="p-1 text-neutral-400 hover:text-red-500 rounded transition-colors"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {f.alt_name && (
@@ -572,7 +934,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                       {/* Field Value Input directly in Sidebar */}
                       <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                        {f.field_type === 'Checkbox' ? (
+                        {f.field_type === 'Signature' ? (
+                          <div className="p-2 bg-purple-100/50 dark:bg-purple-950/50 border border-purple-300 dark:border-purple-800 rounded text-xs text-purple-800 dark:text-purple-200 flex items-center gap-2">
+                            <PenTool size={13} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                            <span className="truncate">Campo de Firma Digital {f.value ? `(${f.value})` : '(Pendiente)'}</span>
+                          </div>
+                        ) : f.field_type === 'Checkbox' ? (
                           <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer">
                             <input
                               type="checkbox"
@@ -612,7 +979,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </div>
 
                       <div className="mt-2 pt-2 border-t border-neutral-200/60 dark:border-neutral-700/60 flex items-center justify-between text-[10px] text-neutral-400 font-mono">
-                        <span>Page {f.page_number}</span>
+                        <span>Pág. {f.page_number}</span>
                         <span>
                           {Math.round(f.bbox.width)}x{Math.round(f.bbox.height)} pt
                         </span>

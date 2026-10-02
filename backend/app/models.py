@@ -146,6 +146,60 @@ class FlattenFormsResponse(BaseModel):
     message: str
 
 
+class CreateFormFieldRequest(BaseModel):
+    """Payload to create and place a new interactive form field on a page."""
+    name: str
+    field_type: str = Field(default="Text", description="Field type: Text, Checkbox, RadioButton, PushButton, Choice, Signature")
+    min_x: float = Field(default=72.0)
+    min_y: float = Field(default=700.0)
+    max_x: float = Field(default=250.0)
+    max_y: float = Field(default=724.0)
+    value: Optional[str] = ""
+    default_value: Optional[str] = None
+    alt_name: Optional[str] = None
+    options: Optional[List[str]] = None
+    is_read_only: bool = False
+    is_required: bool = False
+    is_multiline: bool = False
+    max_length: Optional[int] = None
+    font_size: Optional[float] = 12.0
+
+
+class CreateFormFieldResponse(BaseModel):
+    """Response returned upon successfully creating an AcroForm field."""
+    status: str = "ok"
+    document_id: str
+    field: FormFieldModel
+
+
+class DeleteFormFieldResponse(BaseModel):
+    """Response returned upon deleting an AcroForm field."""
+    status: str = "ok"
+    document_id: str
+    deleted: bool
+    field_name: str
+
+
+class UpdateFormFieldRequest(BaseModel):
+    """Payload to update an existing form field's geometry or properties."""
+    min_x: Optional[float] = None
+    min_y: Optional[float] = None
+    max_x: Optional[float] = None
+    max_y: Optional[float] = None
+    alt_name: Optional[str] = None
+    is_read_only: Optional[bool] = None
+    is_required: Optional[bool] = None
+    is_multiline: Optional[bool] = None
+
+
+class UpdateFormFieldResponse(BaseModel):
+    """Response returned upon updating an AcroForm field."""
+    status: str = "ok"
+    document_id: str
+    field: FormFieldModel
+    message: str
+
+
 class RotatePageRequest(BaseModel):
     """Request payload to rotate a page."""
     degrees: int = Field(default=90, description="Degrees to rotate: 90, 180, 270, or relative offset")

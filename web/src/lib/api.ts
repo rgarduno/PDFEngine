@@ -36,6 +36,10 @@ import {
   DocumentOverviewResponse,
   OptimizeRequest,
   OptimizeResponse,
+  CreateFormFieldPayload,
+  CreateFormFieldResponse,
+  DeleteFormFieldResponse,
+  UpdateFormFieldPayload,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1165,6 +1169,54 @@ export async function optimizeDocument(
 
 export function getOptimizedExportUrl(docId: string): string {
   return `${API_BASE_URL}/api/documents/${docId}/export?optimized=true`;
+}
+
+export async function createFormField(
+  docId: string,
+  pageNumber: number,
+  payload: CreateFormFieldPayload
+): Promise<CreateFormFieldResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/forms`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to create form field' }));
+    throw new Error(err.detail || 'Failed to create form field');
+  }
+  return await res.json();
+}
+
+export async function deleteFormField(
+  docId: string,
+  fieldName: string
+): Promise<DeleteFormFieldResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to delete form field' }));
+    throw new Error(err.detail || 'Failed to delete form field');
+  }
+  return await res.json();
+}
+
+export async function updateFormField(
+  docId: string,
+  fieldName: string,
+  payload: UpdateFormFieldPayload
+): Promise<{ status: string; document_id: string; field: FormFieldElement; message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/${encodeURIComponent(fieldName)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update form field' }));
+    throw new Error(err.detail || 'Failed to update form field');
+  }
+  return await res.json();
 }
 
 

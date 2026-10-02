@@ -435,6 +435,44 @@ export interface OptimizeResponse {
   message: string;
 }
 
+export interface CreateFormFieldPayload {
+  name: string;
+  field_type: FormFieldType;
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  value?: string;
+  default_value?: string;
+  alt_name?: string;
+  options?: string[];
+  is_read_only?: boolean;
+  is_required?: boolean;
+  is_multiline?: boolean;
+  max_length?: number;
+  font_size?: number;
+}
 
+export interface CreateFormFieldResponse {
+  status: string;
+  document_id: string;
+  field: FormFieldElement;
+}
 
+export interface DeleteFormFieldResponse {
+  status: string;
+  document_id: string;
+  deleted: boolean;
+  field_name: string;
+}
 
+export interface UpdateFormFieldPayload {
+  min_x?: number;
+  min_y?: number;
+  max_x?: number;
+  max_y?: number;
+  alt_name?: string;
+  is_read_only?: boolean;
+  is_required?: boolean;
+  is_multiline?: boolean;
+}

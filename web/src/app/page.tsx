@@ -22,6 +22,8 @@ import {
   getDocumentForms,
   fillFormField,
   flattenDocumentForms,
+  createFormField,
+  deleteFormField,
   rotatePage,
   splitDocument,
   mergeDocuments,
@@ -69,6 +71,7 @@ import {
   DetectedTableItem,
   PageOverviewItem,
   OptimizeResponse,
+  CreateFormFieldPayload,
 } from '@/lib/types';
 
 export default function Home() {
@@ -425,6 +428,61 @@ export default function Home() {
       setForms([]);
       setSelectedFormFieldName(null);
       alert('Forms flattened (client-side simulation).');
+    }
+  };
+
+  // Opción 3: Form Field Builder & CRUD Handlers
+  const handleCreateFormField = async (payload: CreateFormFieldPayload) => {
+    try {
+      await createFormField(session.document_id, currentPage, payload);
+      const docForms = await getDocumentForms(session.document_id);
+      setForms(docForms.fields);
+      setSelectedFormFieldName(payload.name);
+    } catch (err) {
+      console.error('Failed to create form field:', err);
+      // Client-side simulation fallback
+      const newField: FormFieldElement = {
+        id: forms.length + 1,
+        name: payload.name,
+        alt_name: payload.alt_name || payload.name,
+        field_type: payload.field_type,
+        value: payload.value || '',
+        page_number: currentPage,
+        is_read_only: payload.is_read_only || false,
+        is_required: payload.is_required || false,
+        is_multiline: payload.is_multiline || false,
+        options: payload.options || [],
+        bbox: {
+          min_x: payload.min_x,
+          min_y: payload.min_y,
+          max_x: payload.max_x,
+          max_y: payload.max_y,
+          width: payload.max_x - payload.min_x,
+          height: payload.max_y - payload.min_y,
+        },
+      };
+      setForms((prev) => [...prev, newField]);
+      setSelectedFormFieldName(payload.name);
+    }
+  };
+
+  const handleDeleteFormField = async (fieldName: string) => {
+    if (!confirm(`¿Eliminar el campo "${fieldName}" del formulario?`)) {
+      return;
+    }
+    try {
+      await deleteFormField(session.document_id, fieldName);
+      const docForms = await getDocumentForms(session.document_id);
+      setForms(docForms.fields);
+      if (selectedFormFieldName === fieldName) {
+        setSelectedFormFieldName(null);
+      }
+    } catch (err) {
+      console.error('Failed to delete form field:', err);
+      setForms((prev) => prev.filter((f) => f.name !== fieldName));
+      if (selectedFormFieldName === fieldName) {
+        setSelectedFormFieldName(null);
+      }
     }
   };
 
@@ -1212,6 +1270,8 @@ export default function Home() {
           onExportTable={handleExportTable}
           onDownloadTable={handleDownloadTable}
           onOptimizationComplete={handleOptimizationComplete}
+          onCreateFormField={handleCreateFormField}
+          onDeleteFormField={handleDeleteFormField}
         />
       </div>
 

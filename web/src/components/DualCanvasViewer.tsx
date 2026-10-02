@@ -3,7 +3,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { AnnotationElement, DetectedTableItem, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
-import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, RefreshCw, Table, Trash2 } from 'lucide-react';
+import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, PenTool, RefreshCw, Table, Trash2 } from 'lucide-react';
 
 interface DualCanvasViewerProps {
   paragraphs: Paragraph[];
@@ -317,6 +317,14 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                       </option>
                     ))}
                   </select>
+                ) : field.field_type === 'Signature' ? (
+                  <div
+                    style={{ fontSize: `${10 * zoom}px` }}
+                    className="w-full h-full flex items-center justify-center gap-1.5 bg-purple-50/80 dark:bg-purple-950/50 border-2 border-dashed border-purple-500/80 rounded text-purple-700 dark:text-purple-300 font-medium px-2 select-none"
+                  >
+                    <PenTool size={Math.max(12 * zoom, 10)} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                    <span className="truncate">{field.value || field.alt_name || 'Firma Digital'}</span>
+                  </div>
                 ) : (
                   <input
                     type="text"
