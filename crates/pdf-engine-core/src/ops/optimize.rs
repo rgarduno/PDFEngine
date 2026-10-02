@@ -33,6 +33,78 @@ fn clamped_objects_per_stream(requested: usize) -> usize {
     requested.clamp(MIN_OBJECTS_PER_STREAM, MAX_OBJECTS_PER_STREAM_CAP)
 }
 
+fn optimization_refusal() -> PdfError {
+    PdfError::OperationError(
+        "Optimization refused: the document is encrypted or contains a signature.".to_string(),
+    )
+}
+
+/// Rejects a rewrite when the trailer still has `/Encrypt`, or when any object is
+/// a `/Type /Sig` dictionary or uses `/SubFilter /PDFEngine.sha256`.
+///
+/// Content-stream bytes are not searched. A page that draws those words is not a signature.
+fn refuse_encrypted_or_signed(doc: &mut PdfDocument) -> PdfResult<()> {
+    if doc.xref.trailer.contains_key("Encrypt") {
+        return Err(optimization_refusal());
+    }
+
+    let mut ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    for (&id, entry) in &doc.xref.entries {
+        match entry {
+            XRefEntry::InUse { .. } | XRefEntry::Compressed { .. } => {
+                if !doc.objects.contains_key(&id) {
+                    ids.push(id);
+                }
+            }
+            XRefEntry::Free { .. } => {}
+        }
+    }
+
+    let max_depth = doc.limits.max_recursion_depth;
+    for id in ids {
+        let blocks = if let Some(obj) = doc.objects.get(&id) {
+            object_blocks_optimization(obj, 0, max_depth)
+        } else {
+            match doc.get_object(id) {
+                Ok(obj) => object_blocks_optimization(&obj, 0, max_depth),
+                Err(_) => false,
+            }
+        };
+        if blocks {
+            return Err(optimization_refusal());
+        }
+    }
+    Ok(())
+}
+
+fn object_blocks_optimization(obj: &PdfObject, depth: usize, max_depth: usize) -> bool {
+    if depth > max_depth {
+        return true;
+    }
+    match obj {
+        PdfObject::Dictionary(dict) => dictionary_blocks(dict, depth, max_depth),
+        PdfObject::Stream(stream) => dictionary_blocks(&stream.dict, depth, max_depth),
+        PdfObject::Array(items) => items
+            .iter()
+            .any(|item| object_blocks_optimization(item, depth + 1, max_depth)),
+        _ => false,
+    }
+}
+
+fn dictionary_blocks(dict: &PdfDictionary, depth: usize, max_depth: usize) -> bool {
+    if depth > max_depth {
+        return true;
+    }
+    let type_sig = dict.get("Type").and_then(|value| value.as_name()) == Some("Sig");
+    let engine_subfilter =
+        dict.get("SubFilter").and_then(|value| value.as_name()) == Some("PDFEngine.sha256");
+    if type_sig || engine_subfilter {
+        return true;
+    }
+    dict.iter()
+        .any(|(_, value)| object_blocks_optimization(value, depth + 1, max_depth))
+}
+
 /// Configuration parameters for PDF document optimization and stream compression.
 #[derive(Debug, Clone)]
 pub struct OptimizationOptions {
@@ -307,10 +379,16 @@ pub fn recompress_streams(doc: &mut PdfDocument) -> PdfResult<(usize, usize)> {
 }
 
 /// Optimizes a `PdfDocument` and serializes the result into a compressed PDF byte vector.
+///
+/// Encrypted documents and documents that already carry a signature are refused.
+/// This rewrite always builds a new cross-reference and does not re-encrypt or
+/// re-seal, so running it would drop `/Encrypt` and invalidate `/ByteRange`.
 pub fn save_optimized_to_vec(
     doc: &mut PdfDocument,
     options: &OptimizationOptions,
 ) -> PdfResult<(Vec<u8>, OptimizationStats)> {
+    refuse_encrypted_or_signed(doc)?;
+
     let original_size = if !doc.raw_data().is_empty() {
         doc.raw_data().len()
     } else {
@@ -780,5 +858,112 @@ mod tests {
             }
             _ => panic!("expected the oversized stream to stay a stream"),
         }
+    }
+
+    fn rewrite_options() -> OptimizationOptions {
+        OptimizationOptions {
+            remove_unused_objects: true,
+            pack_into_object_streams: false,
+            max_objects_per_stream: 10,
+            recompress_flate: false,
+            deduplicate_streams: false,
+            use_xref_stream: true,
+        }
+    }
+
+    fn one_page_document() -> PdfDocument {
+        let mut doc = PdfDocument::empty();
+        let pages_id = doc.pages_id().unwrap();
+        let page_id = doc.alloc_object_id();
+        let mut page = PdfDictionary::new();
+        page.insert("Type", PdfName::new("Page"));
+        page.insert("Parent", pages_id);
+        let mut media_box = PdfArray::new();
+        media_box.extend([
+            PdfObject::Integer(0),
+            PdfObject::Integer(0),
+            PdfObject::Integer(612),
+            PdfObject::Integer(792),
+        ]);
+        page.insert("MediaBox", PdfObject::Array(media_box));
+        doc.set_object(page_id, PdfObject::Dictionary(page));
+
+        let mut pages = match doc.get_object(pages_id).unwrap() {
+            PdfObject::Dictionary(dict) => dict,
+            _ => panic!("pages root"),
+        };
+        let mut kids = PdfArray::new();
+        kids.push(PdfObject::Reference(page_id));
+        pages.insert("Kids", PdfObject::Array(kids));
+        pages.insert("Count", 1i64);
+        doc.set_object(pages_id, PdfObject::Dictionary(pages));
+        doc
+    }
+
+    #[test]
+    fn encrypted_document_is_not_rewritten() {
+        let mut doc = PdfDocument::empty();
+        doc.xref.trailer.insert("Encrypt", 4i64);
+        let error = save_optimized_to_vec(&mut doc, &rewrite_options()).unwrap_err();
+        assert!(error.to_string().contains("Optimization refused"));
+        assert!(doc.xref.trailer.contains_key("Encrypt"));
+    }
+
+    #[test]
+    fn signature_dictionary_is_not_rewritten() {
+        let mut doc = one_page_document();
+        let config = crate::security::signatures::DigitalSignatureConfig::default();
+        let signed = crate::security::signatures::sign_document(&mut doc, &config).unwrap();
+        assert!(signed.byte_range_valid);
+        let before = doc.raw_data().to_vec();
+
+        let error = save_optimized_to_vec(&mut doc, &rewrite_options()).unwrap_err();
+        assert!(error.to_string().contains("Optimization refused"));
+        assert_eq!(doc.raw_data(), before.as_slice());
+        let still = crate::security::signatures::verify_document_signatures(&doc);
+        assert_eq!(still.len(), 1);
+        assert!(still[0].byte_range_valid);
+    }
+
+    #[test]
+    fn drawn_signature_words_do_not_block_optimization() {
+        let mut doc = one_page_document();
+        let pages_id = doc.pages_id().unwrap();
+        let page_id = match doc.get_object(pages_id).unwrap() {
+            PdfObject::Dictionary(dict) => dict
+                .get("Kids")
+                .and_then(|kids| kids.as_array())
+                .and_then(|kids| kids.first())
+                .and_then(|kid| kid.as_reference())
+                .unwrap(),
+            _ => panic!("pages root"),
+        };
+        let content = b"BT (see /Type /Sig and /PDFEngine.sha256) Tj ET\n".to_vec();
+        let content_id = doc.alloc_object_id();
+        let mut stream_dict = PdfDictionary::new();
+        stream_dict.insert("Length", content.len() as i64);
+        doc.set_object(
+            content_id,
+            PdfObject::Stream(PdfStream {
+                dict: stream_dict,
+                content,
+            }),
+        );
+        let mut page = match doc.get_object(page_id).unwrap() {
+            PdfObject::Dictionary(dict) => dict,
+            _ => panic!("page"),
+        };
+        page.insert("Contents", content_id);
+        doc.set_object(page_id, PdfObject::Dictionary(page));
+
+        let mut widget = PdfDictionary::new();
+        widget.insert("Type", PdfName::new("Annot"));
+        widget.insert("Subtype", PdfName::new("Widget"));
+        widget.insert("FT", PdfName::new("Sig"));
+        let widget_id = doc.alloc_object_id();
+        doc.set_object(widget_id, PdfObject::Dictionary(widget));
+
+        let (bytes, _) = save_optimized_to_vec(&mut doc, &rewrite_options()).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
     }
 }

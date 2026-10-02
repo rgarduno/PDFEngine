@@ -1369,6 +1369,75 @@ def test_document_optimization_and_export_endpoints():
     assert "Contract Agreement Terms" in para_data["paragraphs"][0]["text"]
 
 
+def test_optimize_refuses_signed_and_encrypted_documents():
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("protected.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    signed = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json={
+            "signer_name": "Ana Ruiz",
+            "reason": "Archivo",
+            "location": "CDMX",
+            "page_number": 1,
+            "rect": [72.0, 72.0, 272.0, 142.0],
+        },
+    )
+    assert signed.status_code == 200
+
+    refused = client.post(f"/api/documents/{doc_id}/optimize", json={})
+    assert refused.status_code == 409
+    assert (
+        refused.json()["detail"]
+        == "Optimization is refused for encrypted or signed documents."
+    )
+
+    export_opt = client.get(f"/api/documents/{doc_id}/export?optimized=true")
+    assert export_opt.status_code == 409
+    assert (
+        export_opt.json()["detail"]
+        == "Optimization is refused for encrypted or signed documents."
+    )
+
+    still = client.get(f"/api/documents/{doc_id}/security/signatures")
+    assert still.status_code == 200
+    assert still.json()[0]["byte_range_valid"] is True
+
+    plain = client.get(f"/api/documents/{doc_id}/export")
+    assert plain.status_code == 200
+    assert b"/PDFEngine.sha256" in plain.content
+
+    encrypted_upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("secret.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert encrypted_upload.status_code == 200
+    enc_id = encrypted_upload.json()["document_id"]
+    encrypted = client.post(
+        f"/api/documents/{enc_id}/security/encrypt",
+        json={"user_password": "secret_user", "owner_password": "secret_admin"},
+    )
+    assert encrypted.status_code == 200
+
+    refused_enc = client.post(f"/api/documents/{enc_id}/optimize", json={})
+    assert refused_enc.status_code == 409
+    assert (
+        refused_enc.json()["detail"]
+        == "Optimization is refused for encrypted or signed documents."
+    )
+    status = client.get(f"/api/documents/{enc_id}/security")
+    assert status.status_code == 200
+    assert status.json()["is_encrypted"] is True
+    exported = client.get(f"/api/documents/{enc_id}/export")
+    assert exported.status_code == 200
+    assert b"/Encrypt" in exported.content
+
+
 def test_form_builder_crud_workflow():
     """Validates creation, updating, retrieval, deletion, and flattening of form fields."""
     pdf_bytes = create_minimal_pdf_bytes()

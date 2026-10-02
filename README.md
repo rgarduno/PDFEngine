@@ -185,6 +185,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Malicious Active Scripts** | Exploits via embedded `/JavaScript` or `/Launch` actions. | Save removes `/JavaScript`, `/JS`, `/Launch`, `/SubmitForm`, `/OpenAction`, and `/AA`. `http` and `https` `/URI` links stay; `javascript`, `vbscript`, `file`, and `data` schemes are removed. |
 | **Unbounded uploads and sessions** | A client pins process memory by uploading without a limit or by leaving documents open. | Uploads above 32 MiB are rejected (413). The process keeps at most 32 sessions and 256 MiB of accounted file bytes, and each session expires 30 minutes after its last successful load (429). |
 | **Object count and optimizer work** | A cross-reference reserves a slot per object number, an object stream declares a huge `/N`, or compressed objects point at each other. | At most 500,000 objects. Cross-reference streams list only occupied numbers. Object-stream `/N` and `/First` outside the decoded stream are rejected. A compressed-object cycle fails closed. Each object stream holds at most 100 objects, and zlib-best recompression skips streams larger than 1 MiB. |
+| **Optimizer on protected files** | A size rewrite moves every byte offset. A byte-range signature would no longer match, and encryption is not re-applied. | Optimization is refused (409) when the trailer has `/Encrypt`, or when an object is `/Type /Sig` or `/SubFilter /PDFEngine.sha256`. The file is left unchanged. Words drawn in a content stream are not treated as a signature. |
 
 ---
 

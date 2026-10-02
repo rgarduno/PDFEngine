@@ -306,6 +306,19 @@ def edit_paragraph(
     )
 
 
+def _optimization_refusal(exc: Exception) -> Optional[HTTPException]:
+    """Maps the engine's protected-file refusal to a stable client error.
+
+    The rewrite is not attempted. The detail does not include the engine traceback.
+    """
+    if "Optimization refused" in str(exc):
+        return HTTPException(
+            status_code=409,
+            detail="Optimization is refused for encrypted or signed documents.",
+        )
+    return None
+
+
 @app.get("/api/documents/{doc_id}/export")
 def export_document(doc_id: str, optimized: bool = False):
     """Serializes the edited document into a downloadable PDF binary."""
@@ -319,7 +332,12 @@ def export_document(doc_id: str, optimized: bool = False):
             pdf_bytes, _ = doc.save_optimized_to_bytes()
         else:
             pdf_bytes = doc.save_to_bytes()
+    except HTTPException:
+        raise
     except Exception as e:
+        refusal = _optimization_refusal(e)
+        if refusal is not None:
+            raise refusal
         raise HTTPException(status_code=500, detail=f"Failed to serialize PDF: {e}")
 
     filename = session.get("filename", "document.pdf")
@@ -1732,6 +1750,9 @@ async def optimize_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
+        refusal = _optimization_refusal(e)
+        if refusal is not None:
+            raise refusal
         raise HTTPException(status_code=400, detail=f"Failed to optimize document: {e}")
 
 
