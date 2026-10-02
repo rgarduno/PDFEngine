@@ -1,0 +1,192 @@
+'use client';
+
+import React, { useRef, useState, useEffect } from 'react';
+import { Paragraph, TextAlignment } from '@/lib/types';
+import { Check, Edit3, Layers, Move } from 'lucide-react';
+
+interface DualCanvasViewerProps {
+  paragraphs: Paragraph[];
+  selectedParagraphId: number | null;
+  onSelectParagraph: (id: number | null) => void;
+  onUpdateParagraphText: (id: number, text: string) => void;
+  zoom: number;
+  activeReflowId: number | null;
+}
+
+// Standard US Letter dimensions in PDF Points (72 points/inch)
+const PAGE_WIDTH_PTS = 612;
+const PAGE_HEIGHT_PTS = 792;
+
+export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
+  paragraphs,
+  selectedParagraphId,
+  onSelectParagraph,
+  onUpdateParagraphText,
+  zoom,
+  activeReflowId,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editText, setEditText] = useState<string>('');
+
+  // Handle double click or selection to enter edit mode
+  const handleParagraphClick = (p: Paragraph, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelectParagraph(p.id);
+  };
+
+  const handleParagraphDoubleClick = (p: Paragraph, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelectParagraph(p.id);
+    setEditingId(p.id);
+    setEditText(p.text);
+  };
+
+  useEffect(() => {
+    if (editingId !== null && activeTextareaRef.current) {
+      activeTextareaRef.current.focus();
+      // Move cursor to end of text
+      activeTextareaRef.current.selectionStart = activeTextareaRef.current.value.length;
+      activeTextareaRef.current.selectionEnd = activeTextareaRef.current.value.length;
+    }
+  }, [editingId]);
+
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setEditText(val);
+    if (editingId !== null) {
+      onUpdateParagraphText(editingId, val);
+    }
+  };
+
+  const handleFinishEditing = () => {
+    setEditingId(null);
+  };
+
+  // Convert PDF coordinate system (origin bottom-left, Y goes UP)
+  // to Canvas/Screen coordinate system (origin top-left, Y goes DOWN)
+  const pdfToScreenCoordinates = (bbox: Paragraph['bbox']) => {
+    const left = bbox.min_x * zoom;
+    const top = (PAGE_HEIGHT_PTS - bbox.max_y) * zoom;
+    const width = bbox.width * zoom;
+    const height = bbox.height * zoom;
+    return { left, top, width, height };
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      onClick={() => {
+        onSelectParagraph(null);
+        setEditingId(null);
+      }}
+      className="flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-950 p-8 flex items-center justify-center min-h-[calc(100vh-4rem)] relative"
+    >
+      {/* Precision PDF Page Canvas */}
+      <div
+        style={{
+          width: `${PAGE_WIDTH_PTS * zoom}px`,
+          height: `${PAGE_HEIGHT_PTS * zoom}px`,
+        }}
+        className="relative bg-white dark:bg-neutral-900 shadow-2xl rounded-sm transition-all duration-150 border border-neutral-300 dark:border-neutral-800 select-none overflow-hidden"
+      >
+        {/* Layer 1: High-fidelity Vector Background & Guidelines */}
+        <div className="absolute inset-0 pointer-events-none opacity-40">
+          {/* Subtle margin guide lines (0.75 in / 54 pt) */}
+          <div
+            style={{
+              top: `${54 * zoom}px`,
+              bottom: `${54 * zoom}px`,
+              left: `${54 * zoom}px`,
+              right: `${54 * zoom}px`,
+            }}
+            className="absolute border border-dashed border-blue-400/30"
+          />
+        </div>
+
+        {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
+        {paragraphs.map((p) => {
+          const { left, top, width, height } = pdfToScreenCoordinates(p.bbox);
+          const isSelected = selectedParagraphId === p.id;
+          const isEditing = editingId === p.id;
+          const isReflowing = activeReflowId === p.id;
+
+          const alignClass =
+            p.alignment === 'center'
+              ? 'text-center'
+              : p.alignment === 'right'
+              ? 'text-right'
+              : p.alignment === 'justified'
+              ? 'text-justify'
+              : 'text-left';
+
+          return (
+            <div
+              key={p.id}
+              onClick={(e) => handleParagraphClick(p, e)}
+              onDoubleClick={(e) => handleParagraphDoubleClick(p, e)}
+              style={{
+                left: `${left}px`,
+                top: `${top}px`,
+                width: `${Math.max(width, 120 * zoom)}px`,
+                minHeight: `${Math.max(height, 20 * zoom)}px`,
+              }}
+              className={`absolute transition-all group cursor-text ${
+                isSelected
+                  ? 'ring-2 ring-blue-500 bg-blue-50/20 dark:bg-blue-900/10 z-20'
+                  : 'hover:ring-1 hover:ring-blue-300/80 hover:bg-neutral-50/40 dark:hover:bg-neutral-800/30 z-10'
+              }`}
+            >
+              {/* Badge indicating node ID and live status */}
+              {isSelected && (
+                <div className="absolute -top-6 left-0 flex items-center gap-1 bg-blue-600 text-white text-[10px] font-mono px-1.5 py-0.5 rounded shadow-sm z-30 select-none">
+                  <Edit3 size={10} />
+                  <span>Block #{p.id}</span>
+                  {isReflowing && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-ping" />
+                  )}
+                  {isEditing && (
+                    <button
+                      onClick={handleFinishEditing}
+                      title="Apply change"
+                      className="ml-1 hover:text-emerald-300"
+                    >
+                      <Check size={10} />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {isEditing ? (
+                /* Editable Textarea in place */
+                <textarea
+                  ref={activeTextareaRef}
+                  value={editText}
+                  onChange={handleTextChange}
+                  onBlur={handleFinishEditing}
+                  style={{
+                    fontSize: `${(p.fontSize || 12) * zoom}px`,
+                    lineHeight: `${(p.leading || 16) * zoom}px`,
+                  }}
+                  className={`w-full h-full resize-none p-1 bg-white/95 dark:bg-neutral-900/95 text-neutral-900 dark:text-neutral-100 outline-none border-none font-sans ${alignClass} focus:ring-0`}
+                />
+              ) : (
+                /* Rendered Text with precise typography */
+                <div
+                  style={{
+                    fontSize: `${(p.fontSize || 12) * zoom}px`,
+                    lineHeight: `${(p.leading || 16) * zoom}px`,
+                  }}
+                  className={`w-full h-full p-1 whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 font-sans ${alignClass}`}
+                >
+                  {p.text}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};

@@ -99,13 +99,19 @@ PDFEngine/
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
 │       ├── Cargo.toml
 │       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph exports
-└── backend/                    # Commercial FastAPI REST & WebSocket service
-    ├── app/
-    │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
-    │   └── models.py           # Pydantic v2 schemas (SceneGraph, BoundingBox, Edits)
-    ├── requirements.txt
-    └── tests/
-        └── test_api.py         # Full HTTP & WebSocket integration test suite
+├── backend/                    # Commercial FastAPI REST & WebSocket service
+│   ├── app/
+│   │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
+│   │   └── models.py           # Pydantic v2 schemas (SceneGraph, BoundingBox, Edits)
+│   ├── requirements.txt
+│   └── tests/
+│       └── test_api.py         # Full HTTP & WebSocket integration test suite
+└── web/                        # Next.js 16 + React 19 Interactive Studio
+    ├── src/
+    │   ├── app/                # App router studio entrypoint
+    │   ├── components/         # DualCanvasViewer, Toolbar, Sidebar
+    │   └── lib/                # API client, WebSocket stream & TypeScript types
+    └── package.json
 ```
 
 ---
@@ -256,6 +262,27 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 
 ---
 
+## Interactive Web Studio (Next.js 16 + React 19)
+
+PDFEngine includes a modern, high-precision web studio inside `web/` with a dual-layer canvas architecture:
+
+* **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
+* **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
+* **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
+* **Non-Destructive History**: Full undo/redo stack (`Cmd+Z` / `Cmd+Shift+Z`) and instant lossless PDF download.
+
+### Running the Web Studio
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) to start editing.
+
+---
+
 ## Project Roadmap
 
 - [x] **Phase 0: Workspace Setup & Architecture** (Cargo workspace, coding standards, CI baseline)
@@ -263,7 +290,7 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 - [x] **Phase 2: Content Streams & Typographic Engine** (AST operator parser, Graphics State, TrueType tables, ToUnicode CMaps, ligatures)
 - [x] **Phase 3: Semantic Layout & Surgical Reflow** (Glyph clustering, paragraph reflow, in-place AST mutator)
 - [x] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, scene graph inspection, surgical edit endpoints, WebSocket reflow)
-- [ ] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, FontFace loader)
+- [x] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, live WebSocket reflow)
 - [ ] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing)
 
 ---
