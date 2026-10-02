@@ -18,6 +18,11 @@ use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment
 use pdf_engine_core::stream::{
     build_ast_from_operations, serialize_ast, ContentAst, ContentStreamTokenizer,
 };
+use pdf_engine_core::watermark::{
+    ImageWatermarkConfig, PaginationConfig, PaginationPosition, TextWatermarkConfig,
+    WatermarkPlacement,
+};
+
 
 /// High-level representation of an extracted paragraph block in Python.
 #[pyclass(name = "Paragraph")]
@@ -936,6 +941,132 @@ impl PyPdfDocument {
         self.page_ids = updated.page_ids;
         self.active_pages = updated.active_pages;
         Ok(())
+    }
+
+    /// Injects dynamic headers, footers, or page numbers (e.g. "Página {page} de {total}").
+    #[pyo3(signature = (format=None, position=None, font_size=None, color=None, margin=None, start_page_num=None, skip_first_page=None, page_indices=None))]
+    pub fn add_pagination(
+        &mut self,
+        format: Option<String>,
+        position: Option<String>,
+        font_size: Option<f64>,
+        color: Option<(f64, f64, f64)>,
+        margin: Option<f64>,
+        start_page_num: Option<usize>,
+        skip_first_page: Option<bool>,
+        page_indices: Option<Vec<usize>>,
+    ) -> PyResult<usize> {
+        let pos = match position.as_deref() {
+            Some(s) => PaginationPosition::parse(s).ok_or_else(|| {
+                PyValueError::new_err(format!("Invalid pagination position: '{}'", s))
+            })?,
+            None => PaginationPosition::BottomCenter,
+        };
+
+        let config = PaginationConfig {
+            format: format.unwrap_or_else(|| "Página {page} de {total}".to_string()),
+            position: pos,
+            font_size: font_size.unwrap_or(9.0),
+            color: color
+                .map(|(r, g, b)| [r, g, b])
+                .unwrap_or([0.35, 0.35, 0.35]),
+            margin: margin.unwrap_or(36.0),
+            start_page_num: start_page_num.unwrap_or(1),
+            skip_first_page: skip_first_page.unwrap_or(false),
+            page_indices,
+        };
+
+        let count = pdf_engine_core::watermark::apply_pagination(&mut self.doc, &config)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to apply pagination: {}", e)))?;
+
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+
+        Ok(count)
+    }
+
+    /// Adds a semi-transparent text watermark to target pages.
+    #[pyo3(signature = (text, font_size=None, color=None, opacity=None, rotation_degrees=None, placement=None, page_indices=None))]
+    pub fn add_text_watermark(
+        &mut self,
+        text: String,
+        font_size: Option<f64>,
+        color: Option<(f64, f64, f64)>,
+        opacity: Option<f64>,
+        rotation_degrees: Option<f64>,
+        placement: Option<String>,
+        page_indices: Option<Vec<usize>>,
+    ) -> PyResult<usize> {
+        let place = match placement.as_deref() {
+            Some(s) => WatermarkPlacement::parse(s).ok_or_else(|| {
+                PyValueError::new_err(format!("Invalid watermark placement: '{}'", s))
+            })?,
+            None => WatermarkPlacement::Background,
+        };
+
+        let config = TextWatermarkConfig {
+            text,
+            font_size: font_size.unwrap_or(52.0),
+            color: color
+                .map(|(r, g, b)| [r, g, b])
+                .unwrap_or([0.80, 0.20, 0.20]),
+            opacity: opacity.unwrap_or(0.22),
+            rotation_degrees: rotation_degrees.unwrap_or(45.0),
+            placement: place,
+            page_indices,
+        };
+
+        let count = pdf_engine_core::watermark::apply_text_watermark(&mut self.doc, &config)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to apply text watermark: {}", e)))?;
+
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+
+        Ok(count)
+    }
+
+    /// Adds a semi-transparent image watermark to target pages from raw JPEG or PNG bytes.
+    #[pyo3(signature = (image_bytes, width=None, height=None, opacity=None, rotation_degrees=None, placement=None, page_indices=None))]
+    pub fn add_image_watermark(
+        &mut self,
+        image_bytes: Vec<u8>,
+        width: Option<f64>,
+        height: Option<f64>,
+        opacity: Option<f64>,
+        rotation_degrees: Option<f64>,
+        placement: Option<String>,
+        page_indices: Option<Vec<usize>>,
+    ) -> PyResult<usize> {
+        let place = match placement.as_deref() {
+            Some(s) => WatermarkPlacement::parse(s).ok_or_else(|| {
+                PyValueError::new_err(format!("Invalid watermark placement: '{}'", s))
+            })?,
+            None => WatermarkPlacement::Background,
+        };
+
+        let config = ImageWatermarkConfig {
+            image_bytes,
+            width,
+            height,
+            opacity: opacity.unwrap_or(0.25),
+            rotation_degrees: rotation_degrees.unwrap_or(0.0),
+            placement: place,
+            page_indices,
+        };
+
+        let count = pdf_engine_core::watermark::apply_image_watermark(&mut self.doc, &config)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to apply image watermark: {}", e)))?;
+
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+
+        Ok(count)
     }
 
     /// Saves the modified PDF document to a filesystem path.

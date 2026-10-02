@@ -30,8 +30,20 @@ import {
   addStamp,
   deleteAnnotation,
   flattenAnnotations,
+  addPagination,
+  addTextWatermark,
+  addImageWatermark,
 } from '@/lib/api';
-import { AnnotationElement, DocumentSession, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import {
+  AddPaginationPayload,
+  AddTextWatermarkPayload,
+  AnnotationElement,
+  DocumentSession,
+  FormFieldElement,
+  ImageElement,
+  Paragraph,
+  TextAlignment,
+} from '@/lib/types';
 
 export default function Home() {
   const [session, setSession] = useState<DocumentSession>(MOCK_SESSION);
@@ -58,6 +70,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
   const mergeFileInputRef = useRef<HTMLInputElement>(null);
+  const watermarkImageFileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Initialize WebSocket for live reflow calculation
@@ -560,6 +573,64 @@ export default function Home() {
     }
   };
 
+  // Dynamic Pagination & Bates Numbering Handler
+  const handleApplyPagination = async (payload: AddPaginationPayload) => {
+    try {
+      const res = await addPagination(session.document_id, payload);
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      alert(`Applied dynamic pagination across ${res.affected_pages} page(s).`);
+    } catch (err) {
+      console.error('Failed to apply pagination:', err);
+      alert('Failed to apply pagination.');
+    }
+  };
+
+  // Semi-transparent Text Watermark Handler
+  const handleApplyTextWatermark = async (payload: AddTextWatermarkPayload) => {
+    try {
+      const res = await addTextWatermark(session.document_id, payload);
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      alert(`Applied text watermark across ${res.affected_pages} page(s).`);
+    } catch (err) {
+      console.error('Failed to apply text watermark:', err);
+      alert('Failed to apply text watermark.');
+    }
+  };
+
+  // Semi-transparent Image Watermark Handlers
+  const handleTriggerImageWatermark = () => {
+    watermarkImageFileInputRef.current?.click();
+  };
+
+  const handleWatermarkImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const res = await addImageWatermark(session.document_id, file, {
+        opacity: 0.25,
+        rotationDegrees: 0,
+        placement: 'background',
+      });
+      const scenegraph = await getPageScenegraph(session.document_id, currentPage);
+      setParagraphs(scenegraph.paragraphs);
+      try {
+        const pageImages = await getPageImages(session.document_id, currentPage);
+        setImages(pageImages.images);
+      } catch {}
+      alert(`Applied image watermark across ${res.affected_pages} page(s).`);
+    } catch (err) {
+      console.error('Failed to apply image watermark:', err);
+      alert('Failed to apply image watermark.');
+    } finally {
+      if (watermarkImageFileInputRef.current) {
+        watermarkImageFileInputRef.current.value = '';
+      }
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -620,6 +691,15 @@ export default function Home() {
         ref={mergeFileInputRef}
         onChange={handleMergeFileChange}
         accept="application/pdf"
+        className="hidden"
+      />
+
+      {/* Hidden file input for image watermark */}
+      <input
+        type="file"
+        ref={watermarkImageFileInputRef}
+        onChange={handleWatermarkImageFileChange}
+        accept="image/png,image/jpeg,image/jpg"
         className="hidden"
       />
 
@@ -753,6 +833,9 @@ export default function Home() {
           onAddStamp={handleAddStamp}
           onDeleteAnnotation={handleDeleteAnnotation}
           onFlattenAnnotations={handleFlattenAnnotations}
+          onApplyPagination={handleApplyPagination}
+          onApplyTextWatermark={handleApplyTextWatermark}
+          onTriggerImageWatermark={handleTriggerImageWatermark}
         />
       </div>
     </div>

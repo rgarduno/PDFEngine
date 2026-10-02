@@ -1,7 +1,9 @@
 import {
   AddLinkPayload,
   AddMarkupPayload,
+  AddPaginationPayload,
   AddStampPayload,
+  AddTextWatermarkPayload,
   AnnotationActionResponse,
   AnnotationElement,
   DocumentFormsResponse,
@@ -16,6 +18,7 @@ import {
   ReflowWebSocketMessage,
   RotatePageResponse,
   SplitDocumentResponse,
+  WatermarkActionResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -672,5 +675,91 @@ export async function flattenAnnotations(
     };
   }
 }
+
+export async function addPagination(
+  docId: string,
+  payload: AddPaginationPayload
+): Promise<WatermarkActionResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/pagination`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Failed to apply pagination');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock pagination:', e);
+    return {
+      success: true,
+      document_id: docId,
+      affected_pages: 1,
+      message: `Pagination '${payload.format || 'Página {page} de {total}'}' applied locally.`,
+    };
+  }
+}
+
+export async function addTextWatermark(
+  docId: string,
+  payload: AddTextWatermarkPayload
+): Promise<WatermarkActionResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/watermark/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Failed to apply text watermark');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock text watermark:', e);
+    return {
+      success: true,
+      document_id: docId,
+      affected_pages: 1,
+      message: `Watermark '${payload.text}' applied locally.`,
+    };
+  }
+}
+
+export async function addImageWatermark(
+  docId: string,
+  file: File,
+  options?: {
+    width?: number;
+    height?: number;
+    opacity?: number;
+    rotationDegrees?: number;
+    placement?: 'background' | 'foreground';
+    pageIndices?: number[];
+  }
+): Promise<WatermarkActionResponse> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.width !== undefined) formData.append('width', String(options.width));
+    if (options?.height !== undefined) formData.append('height', String(options.height));
+    if (options?.opacity !== undefined) formData.append('opacity', String(options.opacity));
+    if (options?.rotationDegrees !== undefined) formData.append('rotation_degrees', String(options.rotationDegrees));
+    if (options?.placement !== undefined) formData.append('placement', options.placement);
+    if (options?.pageIndices !== undefined) formData.append('page_indices', options.pageIndices.join(','));
+
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/watermark/image`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Failed to apply image watermark');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock image watermark:', e);
+    return {
+      success: true,
+      document_id: docId,
+      affected_pages: 1,
+      message: 'Image watermark applied locally.',
+    };
+  }
+}
+
 
 

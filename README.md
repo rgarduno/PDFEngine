@@ -93,7 +93,12 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Multi-document concatenation and merging preserving resources & fonts  │
 │    - In-place page reordering and deletion with single-page safety guards   │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 9. Security & Resource Hardening                                            │
+│ 9. Dynamic Pagination & Semitransparent Watermarks                          │
+│    - Bates numbering & headers/footers with {page} and {total} templating   │
+│    - Semitransparent text watermarks with matrix rotation and /ExtGState /ca│
+│    - Embedded image watermarks (PNG/JPEG) with background/foreground depth  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 10. Security & Resource Hardening                                           │
 │    - Bounded Flate expansion: 100:1 max ratio, 250 MB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Active code neutralization (strips /JavaScript, /Launch, /SubmitForm) │
@@ -298,6 +303,15 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | `POST` | `/api/documents/merge` | Concatenate and merge multiple documents into a single unified PDF. |
 | `POST` | `/api/documents/{id}/pages/reorder` | Permute page ordering with cycle-safe page tree restructuring. |
 | `POST` | `/api/documents/{id}/pages/delete` | Purge pages while enforcing single-page survival safety guards. |
+| `GET` | `/api/documents/{id}/pages/{p}/annotations` | List text markups, clickable links, and rubber stamps on a page. |
+| `POST` | `/api/documents/{id}/pages/{p}/annotations/markup` | Add Highlight, Underline, or StrikeOut annotation with custom color & opacity. |
+| `POST` | `/api/documents/{id}/pages/{p}/annotations/link` | Add interactive clickable Web URI or GoTo page destination. |
+| `POST` | `/api/documents/{id}/pages/{p}/annotations/stamp` | Add vector rubber stamp with dual borders and custom rubrics. |
+| `DELETE` | `/api/documents/{id}/pages/{p}/annotations/{aid}` | Remove annotation from document tree. |
+| `POST` | `/api/documents/{id}/annotations/flatten` | Burn visual annotations into permanent page vector graphics. |
+| `POST` | `/api/documents/{id}/pagination` | Apply dynamic Bates numbering & headers/footers with `{page}` and `{total}`. |
+| `POST` | `/api/documents/{id}/watermark/text` | Apply semi-transparent rotated text watermark (`/ExtGState /ca`). |
+| `POST` | `/api/documents/{id}/watermark/image` | Embed semi-transparent image watermark (PNG/JPEG) with depth placement. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow` | Real-time WebSocket channel streaming live layout reflow as user types. |
 
@@ -310,7 +324,10 @@ PDFEngine includes a modern, high-precision web studio inside `web/` with a dual
 * **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
 * **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
 * **Layer 1.8 Interactive AcroForms & Flattening**: In-situ filling for text inputs, checkboxes, and select dropdowns, coupled with single-click surgical document flattening.
+* **Layer 1.9 Visual Annotations & Interactive Links**: Real-time rendering of highlights, underlines, strikeouts, clickable links, and rotated rubber stamps.
 * **Document Assembly & Orientation Inspector**: Rotate pages (-90°, +90°, 180°), split documents into single-page chunks, merge external PDFs, and delete pages with live canvas viewport synchronization.
+* **Dynamic Foliado & Bates Numbering**: Configurable headers and footers with `{page}` and `{total}` template evaluation, 6-way spatial placement, and cover page bypass.
+* **Semi-transparent Text & Image Watermarks**: Rotated diagonal text watermarks and company logos with opacity controls and foreground/background depth placement.
 * **Dynamic @font-face Registration**: Fetches embedded TrueType font binaries directly from the PDF via the engine and registers them in the browser runtime for pixel-identical typography.
 * **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
 * **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
@@ -341,6 +358,8 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 8: Graphics & XObject Image Management** (CTM spatial projection, pure JPEG/PNG codecs, in-place surgical replacement, web studio inspection & replacement)
 - [x] **Phase 9: Interactive AcroForms & Surgical Form Flattening** (AcroForm hierarchy reader, appearance synthesis, surgical flattening, PyO3 bindings, FastAPI endpoints & Web Studio)
 - [x] **Phase 10: Document Assembly, Splitting, Merging & Page Operations** (Object cloner, rotation, split, merge, reorder, delete, PyO3 bindings, FastAPI endpoints & Web Studio UI)
+- [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
+- [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
 
 ---
 

@@ -630,4 +630,88 @@ def test_annotations_workflow():
     assert export_resp.content.startswith(b"%PDF-")
 
 
+def test_pagination_and_watermarks_workflow():
+    """Validates dynamic pagination and semitransparent text/image watermark REST endpoints."""
+    # 1. Upload Document
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("watermark_doc.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 2. Add Dynamic Pagination
+    pag_resp = client.post(
+        f"/api/documents/{doc_id}/pagination",
+        json={
+            "format": "Página {page} de {total}",
+            "position": "bottom_center",
+            "font_size": 9.0,
+            "color": [0.3, 0.3, 0.3],
+            "margin": 36.0,
+            "start_page_num": 1,
+            "skip_first_page": False,
+        },
+    )
+    assert pag_resp.status_code == 200
+    pag_data = pag_resp.json()
+    assert pag_data["success"] is True
+    assert pag_data["affected_pages"] == 1
+
+    # 3. Add Semi-transparent Text Watermark
+    wm_text_resp = client.post(
+        f"/api/documents/{doc_id}/watermark/text",
+        json={
+            "text": "CONFIDENCIAL",
+            "font_size": 50.0,
+            "color": [0.85, 0.15, 0.15],
+            "opacity": 0.22,
+            "rotation_degrees": 45.0,
+            "placement": "background",
+        },
+    )
+    assert wm_text_resp.status_code == 200
+    wm_text_data = wm_text_resp.json()
+    assert wm_text_data["success"] is True
+    assert wm_text_data["affected_pages"] == 1
+
+    # 4. Add Semi-transparent Image Watermark
+    # Minimal 1x1 PNG bytes
+    png_bytes = bytes([
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+        0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+    ])
+    wm_img_resp = client.post(
+        f"/api/documents/{doc_id}/watermark/image",
+        files={"file": ("stamp.png", png_bytes, "image/png")},
+        data={
+            "width": "120.0",
+            "height": "120.0",
+            "opacity": "0.30",
+            "rotation_degrees": "0.0",
+            "placement": "background",
+        },
+    )
+    assert wm_img_resp.status_code == 200
+    wm_img_data = wm_img_resp.json()
+    assert wm_img_data["success"] is True
+    assert wm_img_data["affected_pages"] == 1
+
+    # 5. Export and verify content
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert export_resp.content.startswith(b"%PDF-")
+    assert b"CONFIDENCIAL" in export_resp.content
+    assert b"P\xc3\xa1gina 1 de 1" in export_resp.content or b"de 1" in export_resp.content
+
+
+
 

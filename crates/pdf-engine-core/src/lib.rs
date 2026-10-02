@@ -27,6 +27,7 @@ pub mod layout;
 pub mod ops;
 pub mod security;
 pub mod stream;
+pub mod watermark;
 
 // Re-export primary types for ergonomic usage
 pub use cos::{ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString};
@@ -41,8 +42,8 @@ pub use forms::{
     FormFieldType,
 };
 pub use images::{
-    encode_png, extract_page_images, get_image_binary, parse_jpeg, parse_png_header,
-    parse_png_pixels, replace_image_content, ImageInfo, JpegHeader, PngHeader,
+    create_image_xobject, encode_png, extract_page_images, get_image_binary, parse_jpeg,
+    parse_png_header, parse_png_pixels, replace_image_content, ImageInfo, JpegHeader, PngHeader,
 };
 pub use ops::{
     delete_pages, extract_pages, get_page_rotation, merge_documents, merge_pdf_bytes,
@@ -60,3 +61,8 @@ pub use annots::{
     extract_all_annotations, extract_page_annotations, flatten_annotations, Annotation,
     AnnotationSubtype, LinkAction, StampType,
 };
+pub use watermark::{
+    apply_image_watermark, apply_pagination, apply_text_watermark, ImageWatermarkConfig,
+    PaginationConfig, PaginationPosition, TextWatermarkConfig, WatermarkPlacement,
+};
+

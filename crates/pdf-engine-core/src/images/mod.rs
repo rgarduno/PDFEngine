@@ -374,6 +374,109 @@ pub fn replace_image_content(
     }
 }
 
+/// Creates and registers a new Image XObject in the document from raw JPEG or PNG bytes.
+/// Returns `(image_object_id, width_px, height_px)`.
+pub fn create_image_xobject(
+    doc: &mut PdfDocument,
+    image_bytes: &[u8],
+) -> PdfResult<(ObjectId, u32, u32)> {
+    if image_bytes.len() >= 2 && image_bytes[0] == 0xFF && image_bytes[1] == 0xD8 {
+        // JPEG Encoding
+        let header = parse_jpeg(image_bytes)?;
+        let color_space = match header.components {
+            1 => "DeviceGray",
+            3 => "DeviceRGB",
+            4 => "DeviceCMYK",
+            _ => "DeviceRGB",
+        };
+
+        let mut stream_dict = PdfDictionary::new();
+        stream_dict.insert("Type", PdfObject::Name(PdfName::new("XObject")));
+        stream_dict.insert("Subtype", PdfObject::Name(PdfName::new("Image")));
+        stream_dict.insert("Width", PdfObject::Integer(header.width as i64));
+        stream_dict.insert("Height", PdfObject::Integer(header.height as i64));
+        stream_dict.insert("ColorSpace", PdfObject::Name(PdfName::new(color_space)));
+        stream_dict.insert("BitsPerComponent", PdfObject::Integer(header.precision as i64));
+        stream_dict.insert("Filter", PdfObject::Name(PdfName::new("DCTDecode")));
+        stream_dict.insert("Length", PdfObject::Integer(image_bytes.len() as i64));
+
+        let image_id = doc.alloc_object_id();
+        let stream = PdfStream::new(stream_dict, image_bytes.to_vec());
+        doc.set_object(image_id, PdfObject::Stream(stream));
+
+        Ok((image_id, header.width, header.height))
+    } else if image_bytes.len() >= 8 && &image_bytes[0..8] == png::PNG_SIGNATURE {
+        // PNG Encoding
+        let (width, height, color_samples, alpha_opt) = parse_png_pixels(image_bytes)?;
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(&color_samples)
+            .map_err(|e| PdfError::DecompressionError {
+                filter: "FlateDecode".to_string(),
+                message: format!("PNG color zlib compression failed: {}", e),
+            })?;
+        let compressed_rgb = encoder.finish().map_err(|e| PdfError::DecompressionError {
+            filter: "FlateDecode".to_string(),
+            message: format!("PNG color zlib finish failed: {}", e),
+        })?;
+
+        let compressed_alpha = if let Some(alpha_samples) = alpha_opt {
+            let mut a_encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            a_encoder
+                .write_all(&alpha_samples)
+                .map_err(|e| PdfError::DecompressionError {
+                    filter: "FlateDecode".to_string(),
+                    message: format!("Alpha zlib compression failed: {}", e),
+                })?;
+            Some(a_encoder.finish().map_err(|e| PdfError::DecompressionError {
+                filter: "FlateDecode".to_string(),
+                message: format!("Alpha zlib finish failed: {}", e),
+            })?)
+        } else {
+            None
+        };
+
+        let mut stream_dict = PdfDictionary::new();
+        stream_dict.insert("Type", PdfObject::Name(PdfName::new("XObject")));
+        stream_dict.insert("Subtype", PdfObject::Name(PdfName::new("Image")));
+        stream_dict.insert("Width", PdfObject::Integer(width as i64));
+        stream_dict.insert("Height", PdfObject::Integer(height as i64));
+        stream_dict.insert("ColorSpace", PdfObject::Name(PdfName::new("DeviceRGB")));
+        stream_dict.insert("BitsPerComponent", PdfObject::Integer(8));
+        stream_dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
+        stream_dict.insert("Length", PdfObject::Integer(compressed_rgb.len() as i64));
+
+        let image_id = doc.alloc_object_id();
+
+        if let Some(alpha_bytes) = compressed_alpha {
+            let smask_id = doc.alloc_object_id();
+            let mut smask_dict = PdfDictionary::new();
+            smask_dict.insert("Type", PdfObject::Name(PdfName::new("XObject")));
+            smask_dict.insert("Subtype", PdfObject::Name(PdfName::new("Image")));
+            smask_dict.insert("Width", PdfObject::Integer(width as i64));
+            smask_dict.insert("Height", PdfObject::Integer(height as i64));
+            smask_dict.insert("ColorSpace", PdfObject::Name(PdfName::new("DeviceGray")));
+            smask_dict.insert("BitsPerComponent", PdfObject::Integer(8));
+            smask_dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
+            smask_dict.insert("Length", PdfObject::Integer(alpha_bytes.len() as i64));
+
+            doc.set_object(smask_id, PdfObject::Stream(PdfStream::new(smask_dict, alpha_bytes)));
+            stream_dict.insert("SMask", PdfObject::Reference(smask_id));
+        }
+
+        let stream = PdfStream::new(stream_dict, compressed_rgb);
+        doc.set_object(image_id, PdfObject::Stream(stream));
+
+        Ok((image_id, width, height))
+    } else {
+        Err(PdfError::ParseError {
+            offset: 0,
+            message: "Unsupported image format: input must be a valid JPEG or PNG file".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

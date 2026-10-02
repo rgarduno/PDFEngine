@@ -6,7 +6,7 @@ interactive scene graph layout inspection, and surgical in-place PDF editing.
 
 import uuid
 from typing import Dict, Optional
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -18,7 +18,9 @@ except ImportError:
 from app.models import (
     AddLinkRequest,
     AddMarkupRequest,
+    AddPaginationRequest,
     AddStampRequest,
+    AddTextWatermarkRequest,
     AnnotationActionResponse,
     AnnotationModel,
     BatchFillFormsRequest,
@@ -45,6 +47,7 @@ from app.models import (
     RotatePageResponse,
     SplitDocumentRequest,
     SplitDocumentResponse,
+    WatermarkActionResponse,
 )
 
 app = FastAPI(
@@ -791,6 +794,117 @@ def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None)
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to flatten annotations: {e}")
+
+
+@app.post("/api/documents/{doc_id}/pagination", response_model=WatermarkActionResponse)
+def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
+    """Applies dynamic Bates numbering or custom header/footer pagination across document pages."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        color_tuple = None
+        if request.color and len(request.color) == 3:
+            color_tuple = (float(request.color[0]), float(request.color[1]), float(request.color[2]))
+
+        affected = doc.add_pagination(
+            format=request.format,
+            position=request.position,
+            font_size=request.font_size,
+            color=color_tuple,
+            margin=request.margin,
+            start_page_num=request.start_page_num,
+            skip_first_page=request.skip_first_page,
+            page_indices=request.page_indices,
+        )
+        return WatermarkActionResponse(
+            success=True,
+            document_id=doc_id,
+            affected_pages=affected,
+            message=f"Applied pagination across {affected} page(s).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to apply pagination: {e}")
+
+
+@app.post("/api/documents/{doc_id}/watermark/text", response_model=WatermarkActionResponse)
+def add_text_watermark_endpoint(doc_id: str, request: AddTextWatermarkRequest):
+    """Applies a semi-transparent rotated text watermark across document pages."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        color_tuple = None
+        if request.color and len(request.color) == 3:
+            color_tuple = (float(request.color[0]), float(request.color[1]), float(request.color[2]))
+
+        affected = doc.add_text_watermark(
+            text=request.text,
+            font_size=request.font_size,
+            color=color_tuple,
+            opacity=request.opacity,
+            rotation_degrees=request.rotation_degrees,
+            placement=request.placement,
+            page_indices=request.page_indices,
+        )
+        return WatermarkActionResponse(
+            success=True,
+            document_id=doc_id,
+            affected_pages=affected,
+            message=f"Applied text watermark across {affected} page(s).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to apply text watermark: {e}")
+
+
+@app.post("/api/documents/{doc_id}/watermark/image", response_model=WatermarkActionResponse)
+async def add_image_watermark_endpoint(
+    doc_id: str,
+    file: UploadFile = File(...),
+    width: Optional[float] = Form(None),
+    height: Optional[float] = Form(None),
+    opacity: Optional[float] = Form(0.25),
+    rotation_degrees: Optional[float] = Form(0.0),
+    placement: Optional[str] = Form("background"),
+    page_indices: Optional[str] = Form(None),
+):
+    """Embeds and applies a semi-transparent image watermark across document pages."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        image_bytes = await file.read()
+        target_indices = None
+        if page_indices:
+            try:
+                target_indices = [int(p.strip()) for p in page_indices.split(",") if p.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="page_indices must be comma-separated integers.")
+
+        affected = doc.add_image_watermark(
+            image_bytes=image_bytes,
+            width=width,
+            height=height,
+            opacity=opacity,
+            rotation_degrees=rotation_degrees,
+            placement=placement,
+            page_indices=target_indices,
+        )
+        return WatermarkActionResponse(
+            success=True,
+            document_id=doc_id,
+            affected_pages=affected,
+            message=f"Applied image watermark across {affected} page(s).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to apply image watermark: {e}")
+
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")

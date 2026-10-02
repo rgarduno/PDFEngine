@@ -25,7 +25,12 @@ import {
   ExternalLink,
   Link2,
   Underline,
+  Stamp,
 } from 'lucide-react';
+import {
+  AddPaginationPayload,
+  AddTextWatermarkPayload,
+} from '@/lib/types';
 
 interface SidebarProps {
   paragraphs: Paragraph[];
@@ -57,6 +62,9 @@ interface SidebarProps {
   onAddStamp?: (stampType: string) => void;
   onDeleteAnnotation?: (id: number) => void;
   onFlattenAnnotations?: () => void;
+  onApplyPagination?: (payload: AddPaginationPayload) => void;
+  onApplyTextWatermark?: (payload: AddTextWatermarkPayload) => void;
+  onTriggerImageWatermark?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -89,9 +97,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onAddStamp,
   onDeleteAnnotation,
   onFlattenAnnotations,
+  onApplyPagination,
+  onApplyTextWatermark,
+  onTriggerImageWatermark,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark'>('paragraphs');
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
+
+  const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
+  const [pagPosition, setPagPosition] = useState<'top_left' | 'top_center' | 'top_right' | 'bottom_left' | 'bottom_center' | 'bottom_right'>('bottom_center');
+  const [pagFontSize, setPagFontSize] = useState<number>(9);
+  const [pagMargin, setPagMargin] = useState<number>(36);
+  const [pagSkipFirst, setPagSkipFirst] = useState<boolean>(false);
+
+  const [wmText, setWmText] = useState<string>('CONFIDENCIAL');
+  const [wmFontSize, setWmFontSize] = useState<number>(52);
+  const [wmOpacity, setWmOpacity] = useState<number>(0.22);
+  const [wmRotation, setWmRotation] = useState<number>(45);
+  const [wmPlacement, setWmPlacement] = useState<'background' | 'foreground'>('background');
+  const [wmTargetAll, setWmTargetAll] = useState<boolean>(true);
 
   return (
     <aside className="w-80 border-l border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 flex flex-col h-[calc(100vh-4rem)] select-none">
@@ -107,61 +131,72 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-5 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-6 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
-            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
               activeTab === 'paragraphs'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
           >
-            <AlignLeft size={11} />
+            <AlignLeft size={10} />
             <span>Blocks</span>
           </button>
           <button
             onClick={() => setActiveTab('images')}
-            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
               activeTab === 'images'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
           >
-            <ImageIcon size={11} />
+            <ImageIcon size={10} />
             <span>Imgs</span>
           </button>
           <button
             onClick={() => setActiveTab('forms')}
-            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
               activeTab === 'forms'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
           >
-            <FileText size={11} />
+            <FileText size={10} />
             <span>Forms</span>
           </button>
           <button
             onClick={() => setActiveTab('annots')}
-            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
               activeTab === 'annots'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
           >
-            <Highlighter size={11} />
+            <Highlighter size={10} />
             <span>Marks</span>
           </button>
           <button
             onClick={() => setActiveTab('pages')}
-            className={`flex items-center justify-center gap-1 py-1.5 text-[10px] font-medium rounded-md transition-all ${
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
               activeTab === 'pages'
                 ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
             }`}
           >
-            <FileStack size={11} />
-            <span>Pages ({totalPages})</span>
+            <FileStack size={10} />
+            <span>Pages</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('watermark')}
+            className={`flex items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium rounded-md transition-all ${
+              activeTab === 'watermark'
+                ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            <Stamp size={10} />
+            <span>Folio</span>
           </button>
         </div>
       </div>
@@ -684,6 +719,300 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Trash2 size={12} />
                 <span>Delete Page {pageNumber}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'watermark' && (
+          <div className="space-y-4">
+            {/* Dynamic Pagination & Bates Numbering Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-xs text-neutral-800 dark:text-neutral-200">
+                  <Stamp size={13} className="text-indigo-500" />
+                  <span>Dynamic Foliado & Bates</span>
+                </div>
+                <span className="text-[10px] text-neutral-400 font-mono">ISO 32000 §8.4</span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Inject dynamic headers, footers, and Bates numbering across pages.
+              </p>
+
+              {/* Template Format Chips */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-neutral-500 uppercase">Format Template</label>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    'Página {page} de {total}',
+                    'Page {page} of {total}',
+                    '- {page} -',
+                    'DocRef-00{page}',
+                  ].map((fmt) => (
+                    <button
+                      key={fmt}
+                      type="button"
+                      onClick={() => setPagFormat(fmt)}
+                      className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                        pagFormat === fmt
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-medium'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300'
+                      }`}
+                    >
+                      {fmt}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={pagFormat}
+                  onChange={(e) => setPagFormat(e.target.value)}
+                  className="w-full mt-1 text-xs px-2 py-1.5 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-mono focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              {/* Spatial Placement Grid */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-neutral-500 uppercase">Position</label>
+                <div className="grid grid-cols-3 gap-1 text-[10px]">
+                  {[
+                    { id: 'top_left', label: 'Top Left' },
+                    { id: 'top_center', label: 'Top Center' },
+                    { id: 'top_right', label: 'Top Right' },
+                    { id: 'bottom_left', label: 'Btm Left' },
+                    { id: 'bottom_center', label: 'Btm Center' },
+                    { id: 'bottom_right', label: 'Btm Right' },
+                  ].map((pos) => (
+                    <button
+                      key={pos.id}
+                      type="button"
+                      onClick={() => setPagPosition(pos.id as any)}
+                      className={`py-1 px-1 text-center rounded border transition-colors cursor-pointer ${
+                        pagPosition === pos.id
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-medium'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300'
+                      }`}
+                    >
+                      {pos.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Options: Font size, Margin */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">Font Size (pt)</label>
+                  <input
+                    type="number"
+                    min={6}
+                    max={24}
+                    value={pagFontSize}
+                    onChange={(e) => setPagFontSize(Number(e.target.value))}
+                    className="w-full mt-1 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">Margin (pt)</label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={100}
+                    value={pagMargin}
+                    onChange={(e) => setPagMargin(Number(e.target.value))}
+                    className="w-full mt-1 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={pagSkipFirst}
+                  onChange={(e) => setPagSkipFirst(e.target.checked)}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+                <span>Skip First Page (Cover)</span>
+              </label>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onApplyPagination?.({
+                    format: pagFormat,
+                    position: pagPosition,
+                    font_size: pagFontSize,
+                    margin: pagMargin,
+                    skip_first_page: pagSkipFirst,
+                  })
+                }
+                className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Stamp size={12} />
+                <span>Apply Foliado Across Pages</span>
+              </button>
+            </div>
+
+            {/* Text Watermark Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-xs text-neutral-800 dark:text-neutral-200">
+                  <Award size={13} className="text-rose-500" />
+                  <span>Text Watermark</span>
+                </div>
+                <span className="text-[10px] text-neutral-400 font-mono">ExtGState /ca</span>
+              </div>
+
+              {/* Text Presets */}
+              <div className="space-y-1">
+                <div className="flex flex-wrap gap-1">
+                  {['CONFIDENCIAL', 'BORRADOR', 'DRAFT', 'ORIGINAL', 'COPIA'].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setWmText(t)}
+                      className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                        wmText === t
+                          ? 'border-rose-500 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 font-semibold'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={wmText}
+                  onChange={(e) => setWmText(e.target.value)}
+                  className="w-full mt-1 text-xs px-2 py-1.5 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 font-semibold focus:outline-hidden focus:ring-1 focus:ring-rose-500"
+                />
+              </div>
+
+              {/* Depth Placement & Rotation */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">Layer</label>
+                  <div className="flex mt-1 rounded border border-neutral-200 dark:border-neutral-700 p-0.5 bg-neutral-100 dark:bg-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => setWmPlacement('background')}
+                      className={`flex-1 py-1 text-[10px] rounded transition-colors cursor-pointer ${
+                        wmPlacement === 'background'
+                          ? 'bg-white dark:bg-neutral-700 font-semibold shadow-xs text-neutral-900 dark:text-neutral-100'
+                          : 'text-neutral-500'
+                      }`}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWmPlacement('foreground')}
+                      className={`flex-1 py-1 text-[10px] rounded transition-colors cursor-pointer ${
+                        wmPlacement === 'foreground'
+                          ? 'bg-white dark:bg-neutral-700 font-semibold shadow-xs text-neutral-900 dark:text-neutral-100'
+                          : 'text-neutral-500'
+                      }`}
+                    >
+                      Front
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">Rotation</label>
+                  <select
+                    value={wmRotation}
+                    onChange={(e) => setWmRotation(Number(e.target.value))}
+                    className="w-full mt-1 px-2 py-1 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 text-xs"
+                  >
+                    <option value={45}>45° Diagonal</option>
+                    <option value={0}>0° Horizontal</option>
+                    <option value={-45}>-45° Diagonal</option>
+                    <option value={90}>90° Vertical</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Opacity & Font Size */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px] text-neutral-500">
+                  <span>Opacity (Alpha):</span>
+                  <span className="font-mono font-medium">{Math.round(wmOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={5}
+                  max={60}
+                  value={Math.round(wmOpacity * 100)}
+                  onChange={(e) => setWmOpacity(Number(e.target.value) / 100)}
+                  className="w-full accent-rose-600"
+                />
+              </div>
+
+              {/* Target Scope */}
+              <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
+                <span>Apply to:</span>
+                <div className="flex gap-2">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="wmTarget"
+                      checked={wmTargetAll}
+                      onChange={() => setWmTargetAll(true)}
+                    />
+                    <span>All Pages</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="wmTarget"
+                      checked={!wmTargetAll}
+                      onChange={() => setWmTargetAll(false)}
+                    />
+                    <span>Page {pageNumber}</span>
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onApplyTextWatermark?.({
+                    text: wmText,
+                    font_size: wmFontSize,
+                    opacity: wmOpacity,
+                    rotation_degrees: wmRotation,
+                    placement: wmPlacement,
+                    page_indices: wmTargetAll ? undefined : [pageNumber - 1],
+                  })
+                }
+                className="w-full py-1.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-medium transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Award size={12} />
+                <span>Apply Text Watermark</span>
+              </button>
+            </div>
+
+            {/* Image Watermark Card */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-xs text-neutral-800 dark:text-neutral-200">
+                  <ImageIcon size={13} className="text-emerald-500" />
+                  <span>Image Watermark / Logo</span>
+                </div>
+                <span className="text-[10px] text-neutral-400 font-mono">PNG / JPEG</span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Embed a semi-transparent company logo or official seal.
+              </p>
+              <button
+                type="button"
+                onClick={onTriggerImageWatermark}
+                className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Plus size={12} />
+                <span>Upload & Apply Logo Watermark...</span>
               </button>
             </div>
           </div>

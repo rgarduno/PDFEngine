@@ -189,3 +189,32 @@ export interface FlattenAnnotationsResponse {
   flattened_count: number;
   message: string;
 }
+
+export interface AddPaginationPayload {
+  format?: string;
+  position?: 'top_left' | 'top_center' | 'top_right' | 'bottom_left' | 'bottom_center' | 'bottom_right';
+  font_size?: number;
+  color?: number[];
+  margin?: number;
+  start_page_num?: number;
+  skip_first_page?: boolean;
+  page_indices?: number[];
+}
+
+export interface AddTextWatermarkPayload {
+  text: string;
+  font_size?: number;
+  color?: number[];
+  opacity?: number;
+  rotation_degrees?: number;
+  placement?: 'background' | 'foreground';
+  page_indices?: number[];
+}
+
+export interface WatermarkActionResponse {
+  success: boolean;
+  document_id: string;
+  affected_pages: number;
+  message: string;
+}
+

@@ -260,3 +260,35 @@ class FlattenAnnotationsResponse(BaseModel):
     document_id: str
     flattened_count: int
     message: str
+
+
+class AddPaginationRequest(BaseModel):
+    """Request payload to apply dynamic pagination, headers, or footers."""
+    format: Optional[str] = Field(default="Página {page} de {total}", description="Format template with {page} and {total}")
+    position: Optional[str] = Field(default="bottom_center", description="top_left, top_center, top_right, bottom_left, bottom_center, bottom_right")
+    font_size: Optional[float] = Field(default=9.0, description="Font size in points")
+    color: Optional[List[float]] = Field(default=[0.35, 0.35, 0.35], description="RGB color array [r, g, b] in [0.0, 1.0]")
+    margin: Optional[float] = Field(default=36.0, description="Margin distance from page edge")
+    start_page_num: Optional[int] = Field(default=1, description="Starting page count number")
+    skip_first_page: Optional[bool] = Field(default=False, description="Whether to omit numbering on first page")
+    page_indices: Optional[List[int]] = Field(default=None, description="Specific 0-based page indices or null for all")
+
+
+class AddTextWatermarkRequest(BaseModel):
+    """Request payload to apply a semi-transparent text watermark."""
+    text: str = Field(default="CONFIDENCIAL", description="Watermark text")
+    font_size: Optional[float] = Field(default=52.0, description="Font size in points")
+    color: Optional[List[float]] = Field(default=[0.80, 0.20, 0.20], description="RGB color array [r, g, b]")
+    opacity: Optional[float] = Field(default=0.22, description="Alpha opacity between 0.0 and 1.0")
+    rotation_degrees: Optional[float] = Field(default=45.0, description="Rotation angle in degrees")
+    placement: Optional[str] = Field(default="background", description="background or foreground")
+    page_indices: Optional[List[int]] = Field(default=None, description="Specific 0-based page indices or null for all")
+
+
+class WatermarkActionResponse(BaseModel):
+    """Response returned upon applying pagination or watermarks."""
+    success: bool
+    document_id: str
+    affected_pages: int
+    message: str
+
