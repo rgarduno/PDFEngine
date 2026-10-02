@@ -1638,6 +1638,82 @@ def test_ws_ticket_is_single_use_and_requires_a_bearer():
     assert rejected
 
 
+def test_unlisted_and_wildcard_origins_are_not_reflected(monkeypatch):
+    monkeypatch.delenv("PDFENGINE_CORS_ORIGINS", raising=False)
+    unset = anonymous.get("/api/health", headers={"Origin": "http://evil.example"})
+    assert unset.status_code == 200
+    assert "access-control-allow-origin" not in unset.headers
+    assert "access-control-allow-credentials" not in unset.headers
+
+    monkeypatch.setenv("PDFENGINE_CORS_ORIGINS", "*")
+    wildcard = anonymous.get("/api/health", headers={"Origin": "http://evil.example"})
+    assert wildcard.status_code == 200
+    assert "access-control-allow-origin" not in wildcard.headers
+    assert "access-control-allow-credentials" not in wildcard.headers
+
+
+def test_listed_origin_is_reflected_with_credentials(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_CORS_ORIGINS", "http://localhost:3000")
+    allowed = anonymous.get("/api/health", headers={"Origin": "http://localhost:3000"})
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert allowed.headers["access-control-allow-credentials"] == "true"
+
+    denied = anonymous.get("/api/health", headers={"Origin": "http://evil.example"})
+    assert denied.status_code == 200
+    assert "access-control-allow-origin" not in denied.headers
+    assert "access-control-allow-credentials" not in denied.headers
+
+    unauthorized = anonymous.get(
+        "/api/documents/missing/pages/1/scenegraph",
+        headers={"Origin": "http://localhost:3000"},
+    )
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert unauthorized.headers["access-control-allow-credentials"] == "true"
+
+
+def test_preflight_allows_only_a_listed_origin(monkeypatch):
+    monkeypatch.setenv("PDFENGINE_CORS_ORIGINS", "http://localhost:3000")
+    allowed = anonymous.options(
+        "/api/health",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert allowed.status_code == 204
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert allowed.headers["access-control-allow-credentials"] == "true"
+    assert allowed.headers["access-control-allow-headers"] == "authorization,content-type"
+    assert allowed.text == ""
+
+    denied = anonymous.options(
+        "/api/health",
+        headers={
+            "Origin": "http://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert denied.status_code == 400
+    assert "access-control-allow-origin" not in denied.headers
+    assert "access-control-allow-credentials" not in denied.headers
+    assert "evil.example" not in denied.text
+
+
+def test_parse_failure_hides_engine_text():
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("broken.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == "The request could not be completed."
+    assert "startxref" not in response.text
+    assert "offset" not in response.text
+
+
 
 
 

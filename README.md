@@ -186,6 +186,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Unbounded uploads and sessions** | A client pins process memory by uploading without a limit or by leaving documents open. | Uploads above 32 MiB are rejected (413). The process keeps at most 32 sessions and 256 MiB of accounted file bytes, and each session expires 30 minutes after its last successful load (429). |
 | **Object count and optimizer work** | A cross-reference reserves a slot per object number, an object stream declares a huge `/N`, or compressed objects point at each other. | At most 500,000 objects. Cross-reference streams list only occupied numbers. Object-stream `/N` and `/First` outside the decoded stream are rejected. A compressed-object cycle fails closed. Each object stream holds at most 100 objects, and zlib-best recompression skips streams larger than 1 MiB. |
 | **Optimizer on protected files** | A size rewrite moves every byte offset. A byte-range signature would no longer match, and encryption is not re-applied. | Optimization is refused (409) when the trailer has `/Encrypt`, or when an object is `/Type /Sig` or `/SubFilter /PDFEngine.sha256`. The file is left unchanged. Words drawn in a content stream are not treated as a signature. |
+| **Browser origin and error text** | Any site can call the API with credentials, and a handler returns the engine's internal error text. | `PDFENGINE_CORS_ORIGINS` lists the exact origins that may call the API. Credentials are attached only for an origin on that list. A wildcard is ignored. Clients receive `The request could not be completed.` and the cause stays in the server log. |
 
 ---
 
@@ -307,6 +308,7 @@ backend/.venv/bin/pip install -r backend/requirements.txt
 
 # Start production server
 export PDFENGINE_API_KEYS="replace-with-a-long-random-token"
+export PDFENGINE_CORS_ORIGINS="http://localhost:3000"
 PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -323,6 +325,12 @@ Next.js inlines that value into the browser bundle, so it is visible to anyone
 who can load the studio page. Use it for a single-user studio. A shared
 deployment should terminate at a proxy that injects the bearer header and
 should not publish a tenant key to the browser.
+
+The studio page at `http://localhost:3000` calls the API on another origin.
+`PDFENGINE_CORS_ORIGINS` is a comma-separated list of exact origins, such as
+`http://localhost:3000`. A wildcard is ignored. The API attaches credentials
+only when the request `Origin` is on that list. An empty list allows no
+browser origin.
 
 Browser WebSockets cannot set `Authorization`. `POST /api/auth/ws-ticket`
 returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.

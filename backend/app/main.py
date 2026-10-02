@@ -4,9 +4,11 @@ High-performance FastAPI service providing document ingestion,
 interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
+import logging
+import os
 from typing import List, Optional
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from app.auth import (
@@ -96,17 +98,108 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Auth is registered first so CORS stays the outermost middleware.
-# Preflight responses and 401 bodies then still carry the CORS headers.
-# The origin list stays permissive until that policy is tightened on its own.
+logger = logging.getLogger("pdfengine.api")
+
+# Shown to clients when the engine raises. The cause is written to the server log.
+_PUBLIC_FAILURE_DETAIL = "The request could not be completed."
+_CORS_ALLOW_METHODS = b"GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD"
+
+
+def _public_error(status_code: int, exc: BaseException) -> HTTPException:
+    """Returns a stable client error and records the engine failure on the server."""
+    logger.warning("Request failed (%s)", type(exc).__name__, exc_info=exc)
+    return HTTPException(status_code=status_code, detail=_PUBLIC_FAILURE_DETAIL)
+
+
+def _cors_origins() -> list[str]:
+    """Exact browser origins allowed to call the API.
+
+    ``PDFENGINE_CORS_ORIGINS`` is a comma-separated list. A wildcard is ignored.
+    An empty list allows no browser origin, and credentials are never sent with one.
+    """
+    raw = os.environ.get("PDFENGINE_CORS_ORIGINS", "")
+    origins: list[str] = []
+    for part in raw.split(","):
+        item = part.strip()
+        if not item or item == "*" or not item.isascii():
+            continue
+        if any(ch in item for ch in "\r\n\x00"):
+            continue
+        if not (item.startswith("http://") or item.startswith("https://")):
+            continue
+        origins.append(item)
+    return origins
+
+
+class ExplicitOriginMiddleware:
+    """Reflects ``Origin`` only when that exact value is configured.
+
+    Registered outside authentication so a preflight is answered before the
+    bearer check. Credentials are attached only to a reflected origin.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        header_map = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        origin = header_map.get("origin")
+        reflect = origin if origin and origin in _cors_origins() else None
+
+        if (
+            scope["method"] == "OPTIONS"
+            and origin
+            and "access-control-request-method" in header_map
+        ):
+            await self._preflight(send, reflect, header_map)
+            return
+
+        async def send_cors(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"vary", b"Origin"))
+                if reflect is not None:
+                    headers.append((b"access-control-allow-origin", reflect.encode("ascii")))
+                    headers.append((b"access-control-allow-credentials", b"true"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_cors)
+
+    async def _preflight(self, send, reflect: Optional[str], header_map: dict) -> None:
+        headers = [(b"vary", b"Origin")]
+        status = 400
+        if reflect is not None:
+            status = 204
+            headers.extend(
+                [
+                    (b"access-control-allow-origin", reflect.encode("ascii")),
+                    (b"access-control-allow-credentials", b"true"),
+                    (b"access-control-allow-methods", _CORS_ALLOW_METHODS),
+                    (b"access-control-max-age", b"600"),
+                ]
+            )
+            requested = header_map.get("access-control-request-headers", "").strip()
+            if requested and "\r" not in requested and "\n" not in requested:
+                headers.append(
+                    (b"access-control-allow-headers", requested.encode("latin-1"))
+                )
+        await send({"type": "http.response.start", "status": status, "headers": headers})
+        await send({"type": "http.response.body", "body": b""})
+
+
+# Auth is registered first so the origin middleware stays outermost.
+# A preflight is answered before the bearer check, and a 401 still carries
+# the origin headers when the caller is on the configured list.
 app.add_middleware(AuthMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(ExplicitOriginMiddleware)
 
 
 @app.get("/api/health")
@@ -168,8 +261,10 @@ async def upload_document(file: UploadFile = File(...)):
 
     try:
         doc = pdf_engine.Document.from_bytes(content)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Failed to parse PDF document: {e}")
+        raise _public_error(422, e)
 
     page_count = doc.page_count()
     doc_id = bind_session(doc, file.filename, len(content))
@@ -189,8 +284,10 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
     doc = session["doc"]
     try:
         page = doc.get_page(page_idx)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _public_error(400, e)
 
     paragraphs_raw = page.get_paragraphs()
     paragraph_models = []
@@ -273,8 +370,10 @@ def get_page_rotation_endpoint(doc_id: str, page_idx: int):
     try:
         rotation = doc.get_page_rotation(page_idx)
         return {"document_id": doc_id, "page_number": page_idx, "rotation": rotation}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _public_error(400, e)
 
 
 
@@ -293,8 +392,10 @@ def edit_paragraph(
         page = doc.get_page(page_idx)
         page.edit_paragraph(paragraph_id, request.new_text)
         doc.update_page(page)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Surgical edit error: {e}")
+        raise _public_error(400, e)
 
     return EditParagraphResponse(
         success=True,
@@ -338,7 +439,7 @@ def export_document(doc_id: str, optimized: bool = False):
         refusal = _optimization_refusal(e)
         if refusal is not None:
             raise refusal
-        raise HTTPException(status_code=500, detail=f"Failed to serialize PDF: {e}")
+        raise _public_error(500, e)
 
     filename = session.get("filename", "document.pdf")
     base_name = filename.rsplit(".", 1)[0]
@@ -365,8 +466,10 @@ def list_page_fonts(doc_id: str, page_idx: int):
             "fonts": list(fonts.keys()),
             "embedded_count": len(fonts),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _public_error(400, e)
 
 
 @app.get("/api/documents/{doc_id}/pages/{page_idx}/fonts/{font_name}")
@@ -377,8 +480,10 @@ def get_page_font_binary(doc_id: str, page_idx: int, font_name: str):
     doc = session["doc"]
     try:
         fonts = doc.get_page_fonts(page_idx)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _public_error(400, e)
 
     font_bytes = fonts.get(font_name)
     if not font_bytes:
@@ -439,8 +544,10 @@ def get_page_images(doc_id: str, page_idx: int):
             images=images,
             count=len(images),
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _public_error(400, e)
 
 
 @app.get("/api/documents/{doc_id}/images/{image_id}")
@@ -460,8 +567,10 @@ def get_image_binary(doc_id: str, image_id: int):
                 "Cache-Control": "public, max-age=86400",
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Image {image_id} error: {e}")
+        raise _public_error(404, e)
 
 
 @app.post("/api/documents/{doc_id}/images/{image_id}/replace")
@@ -484,8 +593,10 @@ async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)
             "byte_size": len(new_bytes),
             "message": f"Image {image_id} successfully replaced in-place with {file.filename}.",
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to replace image: {e}")
+        raise _public_error(400, e)
 
 
 @app.get("/api/documents/{doc_id}/forms", response_model=DocumentFormsResponse)
@@ -528,8 +639,10 @@ def get_document_forms(doc_id: str):
             count=len(field_models),
             fields=field_models,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to extract form fields: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/forms/fill", response_model=FillFormsResponse)
@@ -546,8 +659,10 @@ def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
             updated_count=updated_count,
             message=f"Successfully filled {updated_count} form field(s).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fill form fields: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/forms/flatten", response_model=FlattenFormsResponse)
@@ -564,8 +679,10 @@ def flatten_document_forms_endpoint(doc_id: str):
             flattened_count=flattened_count,
             message=f"Successfully flattened {flattened_count} form field(s) into permanent page graphics.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to flatten form fields: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/forms", response_model=CreateFormFieldResponse)
@@ -621,8 +738,10 @@ def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFi
             document_id=doc_id,
             field=field_model,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to create form field: {e}")
+        raise _public_error(400, e)
 
 
 @app.delete("/api/documents/{doc_id}/forms/{field_name}", response_model=DeleteFormFieldResponse)
@@ -644,7 +763,7 @@ def delete_form_field_endpoint(doc_id: str, field_name: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to delete form field: {e}")
+        raise _public_error(400, e)
 
 
 @app.put("/api/documents/{doc_id}/forms/{field_name}", response_model=UpdateFormFieldResponse)
@@ -700,7 +819,7 @@ def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateForm
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to update form field: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/rotate", response_model=RotatePageResponse)
@@ -717,8 +836,10 @@ def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest)
             page_number=page_idx,
             new_rotation=new_rotation,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to rotate page: {e}")
+        raise _public_error(400, e)
 
 
 def _split_part_count(doc, request: SplitDocumentRequest) -> int:
@@ -793,7 +914,7 @@ def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to split document: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/merge", response_model=MergeDocumentsResponse)
@@ -822,7 +943,7 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to merge documents: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/pages/reorder", response_model=PageOperationResponse)
@@ -842,8 +963,10 @@ def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
             page_count=doc.page_count(),
             message="Pages reordered successfully.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to reorder pages: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/pages/delete", response_model=PageOperationResponse)
@@ -860,8 +983,10 @@ def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
             page_count=doc.page_count(),
             message=f"Deleted {len(request.page_indices)} page(s) successfully.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to delete pages: {e}")
+        raise _public_error(400, e)
 
 
 def annot_to_model(a) -> AnnotationModel:
@@ -907,8 +1032,10 @@ def get_page_annotations_endpoint(doc_id: str, page_idx: int):
             count=len(annots),
             annotations=[annot_to_model(a) for a in annots],
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to retrieve annotations: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -939,8 +1066,10 @@ def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupReque
             annotation_id=annot_id,
             message=f"{request.subtype} markup annotation created successfully.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to add markup annotation: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -987,7 +1116,7 @@ def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to add link annotation: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1018,8 +1147,10 @@ def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
             annotation_id=annot_id,
             message=f"Stamp '{request.stamp_type}' created successfully.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to add stamp annotation: {e}")
+        raise _public_error(400, e)
 
 
 @app.delete(
@@ -1045,7 +1176,7 @@ def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to delete annotation: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1065,8 +1196,10 @@ def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None)
             flattened_count=flattened_count,
             message=f"Flattened {flattened_count} annotation(s) into page graphics.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to flatten annotations: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/pagination", response_model=WatermarkActionResponse)
@@ -1096,8 +1229,10 @@ def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
             affected_pages=affected,
             message=f"Applied pagination across {affected} page(s).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to apply pagination: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/watermark/text", response_model=WatermarkActionResponse)
@@ -1126,8 +1261,10 @@ def add_text_watermark_endpoint(doc_id: str, request: AddTextWatermarkRequest):
             affected_pages=affected,
             message=f"Applied text watermark across {affected} page(s).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to apply text watermark: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/watermark/image", response_model=WatermarkActionResponse)
@@ -1169,8 +1306,10 @@ async def add_image_watermark_endpoint(
             affected_pages=affected,
             message=f"Applied image watermark across {affected} page(s).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to apply image watermark: {e}")
+        raise _public_error(400, e)
 
 
 
@@ -1234,8 +1373,11 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int, tic
                         })
                     else:
                         await websocket.send_json({"status": "ok", "paragraph_id": paragraph_id})
+                except HTTPException:
+                    raise
                 except Exception as e:
-                    await websocket.send_json({"status": "error", "message": str(e)})
+                    failure = _public_error(400, e)
+                    await websocket.send_json({"status": "error", "message": failure.detail})
         except WebSocketDisconnect:
             pass
     finally:
@@ -1284,8 +1426,10 @@ def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
             summaries=[summary_model],
             message=f"Applied {summary.blackout_boxes_count} redaction(s) on page {request.page_number} (purged {summary.purged_glyphs_count} glyphs).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to redact regions: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1339,8 +1483,10 @@ def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
             summaries=summary_models,
             message=f"Redacted {tot_boxes} occurrence(s) across {len(summaries)} page(s) (purged {tot_glyphs} glyphs).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to redact pattern: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1392,8 +1538,10 @@ def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
             summaries=summary_models,
             message=f"Redacted '{request.query}': {tot_boxes} occurrence(s) across {len(summaries)} page(s).",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to redact text: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1413,8 +1561,10 @@ def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
             modified=modified,
             message="Document metadata sanitized successfully." if modified else "No metadata modified.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to sanitize document: {e}")
+        raise _public_error(400, e)
 
 
 @app.get(
@@ -1450,8 +1600,10 @@ def get_security_status_endpoint(doc_id: str):
             is_encrypted=is_enc,
             signatures=sig_models,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to inspect security status: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1490,8 +1642,10 @@ def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
             message="Document successfully encrypted with AES-128.",
             is_encrypted=True,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to encrypt document: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1511,8 +1665,10 @@ def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
             message="Document successfully decrypted.",
             is_encrypted=False,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to decrypt document: {e}")
+        raise _public_error(400, e)
 
 
 @app.post(
@@ -1553,8 +1709,10 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
             message=f"SHA-256 byte-range attestation created for {request.signer_name}.",
             signature=sig_model,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to sign document: {e}")
+        raise _public_error(400, e)
 
 
 @app.get(
@@ -1584,8 +1742,10 @@ def get_signatures_endpoint(doc_id: str):
             )
             for s in raw_sigs
         ]
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to retrieve signatures: {e}")
+        raise _public_error(400, e)
 
 
 @app.get(
@@ -1646,8 +1806,10 @@ def get_page_tables_endpoint(doc_id: str, page_idx: int):
             total_tables=len(tables),
             tables=tables,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to extract tables: {e}")
+        raise _public_error(400, e)
 
 
 @app.get(
@@ -1698,8 +1860,10 @@ def export_table_endpoint(
             row_count=row_count,
             col_count=col_count,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to export table: {e}")
+        raise _public_error(400, e)
 
 
 @app.post("/api/documents/{doc_id}/optimize", response_model=OptimizeResponse)
@@ -1753,7 +1917,7 @@ async def optimize_document_endpoint(
         refusal = _optimization_refusal(e)
         if refusal is not None:
             raise refusal
-        raise HTTPException(status_code=400, detail=f"Failed to optimize document: {e}")
+        raise _public_error(400, e)
 
 
 
