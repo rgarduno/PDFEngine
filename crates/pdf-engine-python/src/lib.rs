@@ -100,6 +100,60 @@ impl PyImageInfo {
     }
 }
 
+/// High-level representation of an interactive AcroForm field in Python.
+#[pyclass(name = "FormField")]
+#[derive(Debug, Clone)]
+pub struct PyFormField {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub alt_name: Option<String>,
+    #[pyo3(get)]
+    pub field_type: String,
+    #[pyo3(get)]
+    pub value: String,
+    #[pyo3(get)]
+    pub default_value: Option<String>,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+    #[pyo3(get)]
+    pub page_number: usize,
+    #[pyo3(get)]
+    pub options: Vec<String>,
+    #[pyo3(get)]
+    pub is_read_only: bool,
+    #[pyo3(get)]
+    pub is_required: bool,
+    #[pyo3(get)]
+    pub is_multiline: bool,
+    #[pyo3(get)]
+    pub max_length: Option<usize>,
+}
+
+#[pymethods]
+impl PyFormField {
+    fn __repr__(&self) -> String {
+        format!(
+            "<FormField id={} name='{}' type='{}' value='{}' page={} bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
+            self.id, self.name, self.field_type, self.value, self.page_number,
+            self.min_x, self.min_y, self.max_x, self.max_y
+        )
+    }
+
+    /// Returns spatial bounding box coordinates as a tuple (min_x, min_y, max_x, max_y).
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -408,6 +462,95 @@ impl PyPdfDocument {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to replace image: {}", e)))
     }
 
+    /// Extracts all interactive AcroForm fields from the document.
+    pub fn get_form_fields(&mut self) -> PyResult<Vec<PyFormField>> {
+        let fields = pdf_engine_core::forms::extract_document_forms(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract form fields: {}", e)))?;
+
+        Ok(fields
+            .into_iter()
+            .map(|f| PyFormField {
+                id: f.id.number,
+                name: f.name,
+                alt_name: f.alt_name,
+                field_type: f.field_type.as_str().to_string(),
+                value: f.value,
+                default_value: f.default_value,
+                min_x: f.rect.min_x,
+                min_y: f.rect.min_y,
+                max_x: f.rect.max_x,
+                max_y: f.rect.max_y,
+                page_number: f.page_number,
+                options: f.options,
+                is_read_only: f.is_read_only,
+                is_required: f.is_required,
+                is_multiline: f.is_multiline,
+                max_length: f.max_length,
+            })
+            .collect())
+    }
+
+    /// Fills a single form field by name or ID.
+    pub fn fill_form_field(&mut self, name_or_id: &str, value: &str) -> PyResult<bool> {
+        pdf_engine_core::forms::fill_field_value(&mut self.doc, name_or_id, value)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to fill form field: {}", e)))
+    }
+
+    /// Fills multiple form fields in a single batch pass.
+    pub fn fill_form_fields(
+        &mut self,
+        values: std::collections::HashMap<String, String>,
+    ) -> PyResult<usize> {
+        pdf_engine_core::forms::fill_fields_batch(&mut self.doc, &values)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to batch fill form fields: {}", e)))
+    }
+
+    /// Flattens all interactive form fields into permanent page content and strips widget annotations.
+    pub fn flatten_forms(&mut self) -> PyResult<usize> {
+        let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e)))?;
+
+        // Reload active pages so that get_page() reflects the newly flattened visual operations
+        let page_ids = self.page_ids.clone();
+        let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+        let mut reloaded_pages = Vec::with_capacity(page_ids.len());
+
+        for (idx, &page_id) in page_ids.iter().enumerate() {
+            if let Ok(page_obj) = self.doc.get_object(page_id) {
+                if let Some(dict) = page_obj.as_dict() {
+                    let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
+                    let (ast, paragraphs) = if let Some(c_ref) = contents_id {
+                        if let Ok(PdfObject::Stream(s)) = self.doc.get_object(c_ref) {
+                            let mut tokenizer = ContentStreamTokenizer::new(&s.content);
+                            let ops = tokenizer.tokenize_all().unwrap_or_default();
+                            let ast = build_ast_from_operations(ops);
+                            let reconstructor =
+                                LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
+                            let paragraphs = reconstructor.reconstruct();
+                            (ast, paragraphs)
+                        } else {
+                            (ContentAst::new(), Vec::new())
+                        }
+                    } else {
+                        (ContentAst::new(), Vec::new())
+                    };
+
+                    reloaded_pages.push(PyPage {
+                        page_number: idx + 1,
+                        page_id,
+                        contents_id,
+                        ast,
+                        paragraphs,
+                        metrics: metrics.clone(),
+                    });
+                }
+            }
+        }
+        self.active_pages = reloaded_pages;
+
+        Ok(count)
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -431,5 +574,6 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPage>()?;
     m.add_class::<PyParagraph>()?;
     m.add_class::<PyImageInfo>()?;
+    m.add_class::<PyFormField>()?;
     Ok(())
 }

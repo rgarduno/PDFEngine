@@ -16,10 +16,15 @@ except ImportError:
     pdf_engine = None
 
 from app.models import (
+    BatchFillFormsRequest,
     BoundingBox,
+    DocumentFormsResponse,
     DocumentUploadResponse,
     EditParagraphRequest,
     EditParagraphResponse,
+    FillFormsResponse,
+    FlattenFormsResponse,
+    FormFieldModel,
     ImageModel,
     PageImagesResponse,
     PageSceneGraph,
@@ -331,6 +336,92 @@ async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to replace image: {e}")
+
+
+@app.get("/api/documents/{doc_id}/forms", response_model=DocumentFormsResponse)
+def get_document_forms(doc_id: str):
+    """Retrieves all interactive AcroForm fields present in the document."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        raw_fields = doc.get_form_fields()
+        field_models = []
+        for f in raw_fields:
+            min_x, min_y, max_x, max_y = f.bbox()
+            field_models.append(
+                FormFieldModel(
+                    id=f.id,
+                    name=f.name,
+                    alt_name=f.alt_name,
+                    field_type=f.field_type,
+                    value=f.value,
+                    default_value=f.default_value,
+                    bbox=BoundingBox(
+                        min_x=round(min_x, 2),
+                        min_y=round(min_y, 2),
+                        max_x=round(max_x, 2),
+                        max_y=round(max_y, 2),
+                        width=round(max_x - min_x, 2),
+                        height=round(max_y - min_y, 2),
+                    ),
+                    page_number=f.page_number,
+                    options=f.options,
+                    is_read_only=f.is_read_only,
+                    is_required=f.is_required,
+                    is_multiline=f.is_multiline,
+                    max_length=f.max_length,
+                )
+            )
+        return DocumentFormsResponse(
+            document_id=doc_id,
+            count=len(field_models),
+            fields=field_models,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract form fields: {e}")
+
+
+@app.post("/api/documents/{doc_id}/forms/fill", response_model=FillFormsResponse)
+def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
+    """Fills one or more interactive form fields by name in a batch transaction."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        updated_count = doc.fill_form_fields(request.fields)
+        return FillFormsResponse(
+            success=True,
+            document_id=doc_id,
+            updated_count=updated_count,
+            message=f"Successfully filled {updated_count} form field(s).",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fill form fields: {e}")
+
+
+@app.post("/api/documents/{doc_id}/forms/flatten", response_model=FlattenFormsResponse)
+def flatten_document_forms_endpoint(doc_id: str):
+    """Permanently flattens all interactive form fields into page vectors and strips widget annotations."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        flattened_count = doc.flatten_forms()
+        return FlattenFormsResponse(
+            success=True,
+            document_id=doc_id,
+            flattened_count=flattened_count,
+            message=f"Successfully flattened {flattened_count} form field(s) into permanent page graphics.",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to flatten form fields: {e}")
 
 
 @app.websocket("/ws/documents/{doc_id}/pages/{page_idx}/reflow")

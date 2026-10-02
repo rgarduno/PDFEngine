@@ -8,6 +8,7 @@ import {
   MOCK_SESSION,
   MOCK_SCENEGRAPH,
   MOCK_IMAGES,
+  MOCK_FORMS,
   uploadPdf,
   getPageScenegraph,
   getPageImages,
@@ -15,15 +16,20 @@ import {
   editParagraph,
   getExportUrl,
   connectReflowWebSocket,
+  getDocumentForms,
+  fillFormField,
+  flattenDocumentForms,
 } from '@/lib/api';
-import { DocumentSession, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { DocumentSession, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 
 export default function Home() {
   const [session, setSession] = useState<DocumentSession>(MOCK_SESSION);
   const [paragraphs, setParagraphs] = useState<Paragraph[]>(MOCK_SCENEGRAPH.paragraphs);
   const [images, setImages] = useState<ImageElement[]>(MOCK_IMAGES);
+  const [forms, setForms] = useState<FormFieldElement[]>(MOCK_FORMS);
   const [selectedParagraphId, setSelectedParagraphId] = useState<number | null>(0);
   const [selectedImageId, setSelectedImageId] = useState<number | null>(null);
+  const [selectedFormFieldName, setSelectedFormFieldName] = useState<string | null>(null);
   const [replacingImageId, setReplacingImageId] = useState<number | null>(null);
   const [zoom, setZoom] = useState<number>(1.0);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -196,6 +202,15 @@ export default function Home() {
       }
       setSelectedImageId(null);
 
+      try {
+        const docForms = await getDocumentForms(newSession.document_id);
+        setForms(docForms.fields);
+      } catch (err) {
+        console.warn('No AcroForms extracted or endpoint unavailable', err);
+        setForms([]);
+      }
+      setSelectedFormFieldName(null);
+
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
     } catch (err) {
@@ -226,6 +241,45 @@ export default function Home() {
       if (imageFileInputRef.current) {
         imageFileInputRef.current.value = '';
       }
+    }
+  };
+
+  // Form Field Value Change Handler
+  const handleUpdateFormFieldValue = async (name: string, value: string) => {
+    setForms((prev) =>
+      prev.map((f) => (f.name === name ? { ...f, value } : f))
+    );
+
+    try {
+      await fillFormField(session.document_id, name, value);
+    } catch (err) {
+      console.warn('Backend fillFormField call failed or offline fallback:', err);
+    }
+  };
+
+  // Form Flattening Handler
+  const handleFlattenForms = async () => {
+    if (!confirm('Are you sure you want to flatten all forms? This will burn field values permanently into page content streams and remove interactive widgets.')) {
+      return;
+    }
+
+    try {
+      await flattenDocumentForms(session.document_id);
+      // Refresh forms and scenegraph
+      const docForms = await getDocumentForms(session.document_id);
+      setForms(docForms.fields);
+      setSelectedFormFieldName(null);
+
+      const scenegraph = await getPageScenegraph(session.document_id, 1);
+      setParagraphs(scenegraph.paragraphs);
+
+      alert('All interactive form fields have been successfully flattened into permanent vector content.');
+    } catch (err) {
+      console.error('Failed to flatten forms', err);
+      // Offline fallback: clear form fields locally
+      setForms([]);
+      setSelectedFormFieldName(null);
+      alert('Forms flattened (client-side simulation).');
     }
   };
 
@@ -309,7 +363,10 @@ export default function Home() {
           selectedParagraphId={selectedParagraphId}
           onSelectParagraph={(id) => {
             setSelectedParagraphId(id);
-            if (id !== null) setSelectedImageId(null);
+            if (id !== null) {
+              setSelectedImageId(null);
+              setSelectedFormFieldName(null);
+            }
           }}
           onUpdateParagraphText={handleUpdateParagraphText}
           zoom={zoom}
@@ -320,9 +377,22 @@ export default function Home() {
           selectedImageId={selectedImageId}
           onSelectImage={(id) => {
             setSelectedImageId(id);
-            if (id !== null) setSelectedParagraphId(null);
+            if (id !== null) {
+              setSelectedParagraphId(null);
+              setSelectedFormFieldName(null);
+            }
           }}
           onTriggerReplaceImage={handleTriggerReplaceImage}
+          forms={forms}
+          selectedFormFieldName={selectedFormFieldName}
+          onSelectFormField={(name) => {
+            setSelectedFormFieldName(name);
+            if (name !== null) {
+              setSelectedParagraphId(null);
+              setSelectedImageId(null);
+            }
+          }}
+          onUpdateFormFieldValue={handleUpdateFormFieldValue}
         />
 
         <Sidebar
@@ -331,6 +401,7 @@ export default function Home() {
           onSelectParagraph={(id) => {
             setSelectedParagraphId(id);
             setSelectedImageId(null);
+            setSelectedFormFieldName(null);
           }}
           documentId={session.document_id}
           images={images}
@@ -338,8 +409,18 @@ export default function Home() {
           onSelectImage={(id) => {
             setSelectedImageId(id);
             setSelectedParagraphId(null);
+            setSelectedFormFieldName(null);
           }}
           onTriggerReplaceImage={handleTriggerReplaceImage}
+          forms={forms}
+          selectedFormFieldName={selectedFormFieldName}
+          onSelectFormField={(name) => {
+            setSelectedFormFieldName(name);
+            setSelectedParagraphId(null);
+            setSelectedImageId(null);
+          }}
+          onUpdateFormFieldValue={handleUpdateFormFieldValue}
+          onFlattenForms={handleFlattenForms}
         />
       </div>
     </div>

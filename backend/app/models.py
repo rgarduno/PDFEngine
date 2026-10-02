@@ -75,3 +75,55 @@ class PageImagesResponse(BaseModel):
     images: List[ImageModel]
     count: int
 
+
+class FormFieldModel(BaseModel):
+    """Interactive AcroForm field definition."""
+    id: int
+    name: str
+    alt_name: Optional[str] = None
+    field_type: str
+    value: str
+    default_value: Optional[str] = None
+    bbox: BoundingBox
+    page_number: int
+    options: List[str] = Field(default_factory=list)
+    is_read_only: bool = False
+    is_required: bool = False
+    is_multiline: bool = False
+    max_length: Optional[int] = None
+
+
+class DocumentFormsResponse(BaseModel):
+    """Response containing all extracted interactive form fields in the document."""
+    document_id: str
+    count: int
+    fields: List[FormFieldModel]
+
+
+class FillFormFieldRequest(BaseModel):
+    """Request payload to fill a single form field."""
+    name_or_id: str
+    value: str
+
+
+class BatchFillFormsRequest(BaseModel):
+    """Request payload to fill multiple form fields by name in batch."""
+    fields: dict[str, str]
+
+
+class FillFormsResponse(BaseModel):
+    """Response returned upon filling form fields."""
+    success: bool
+    document_id: str
+    updated_count: int
+    message: str
+
+
+class FlattenFormsResponse(BaseModel):
+    """Response returned upon permanently flattening form fields into page vectors."""
+    success: bool
+    document_id: str
+    flattened_count: int
+    message: str
+
+

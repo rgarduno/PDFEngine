@@ -20,6 +20,7 @@ pub mod cos;
 pub mod editor;
 pub mod error;
 pub mod fonts;
+pub mod forms;
 pub mod images;
 pub mod layout;
 pub mod security;
@@ -32,6 +33,10 @@ pub use error::{PdfError, PdfResult};
 pub use fonts::{
     compose_ligatures, decompose_ligatures, FontEncoder, FontMetrics, GlyphFallback, ToUnicodeMap,
     WinAnsiEncoding,
+};
+pub use forms::{
+    extract_document_forms, fill_field_value, fill_fields_batch, flatten_document_forms, FormField,
+    FormFieldType,
 };
 pub use images::{
     encode_png, extract_page_images, get_image_binary, parse_jpeg, parse_png_header,

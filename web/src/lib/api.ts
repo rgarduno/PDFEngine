@@ -1,4 +1,12 @@
-import { DocumentSession, ImageElement, PageSceneGraph, Paragraph, ReflowWebSocketMessage } from './types';
+import {
+  DocumentFormsResponse,
+  DocumentSession,
+  FormFieldElement,
+  ImageElement,
+  PageSceneGraph,
+  Paragraph,
+  ReflowWebSocketMessage,
+} from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
@@ -24,9 +32,52 @@ export const MOCK_IMAGES: ImageElement[] = [
   },
 ];
 
+export const MOCK_FORMS: FormFieldElement[] = [
+  {
+    id: 201,
+    name: 'AuthorizedSignatory',
+    alt_name: 'Full Name of Signatory',
+    field_type: 'Text',
+    value: 'Johnathan Smith',
+    bbox: { min_x: 72, min_y: 310, max_x: 260, max_y: 335, width: 188, height: 25 },
+    page_number: 1,
+    options: [],
+    is_read_only: false,
+    is_required: true,
+    is_multiline: false,
+  },
+  {
+    id: 202,
+    name: 'ContractTerm',
+    alt_name: 'Subscription Period',
+    field_type: 'Choice',
+    value: 'Annual Enterprise License',
+    bbox: { min_x: 320, min_y: 310, max_x: 540, max_y: 335, width: 220, height: 25 },
+    page_number: 1,
+    options: ['Monthly Standard', 'Annual Enterprise License', 'Multi-Year Dedicated'],
+    is_read_only: false,
+    is_required: true,
+    is_multiline: false,
+  },
+  {
+    id: 203,
+    name: 'AgreeToTerms',
+    alt_name: 'Accept Terms and Conditions',
+    field_type: 'Checkbox',
+    value: 'Yes',
+    bbox: { min_x: 72, min_y: 275, max_x: 92, max_y: 295, width: 20, height: 20 },
+    page_number: 1,
+    options: [],
+    is_read_only: false,
+    is_required: true,
+    is_multiline: false,
+  },
+];
+
 export const MOCK_SCENEGRAPH: PageSceneGraph = {
   page_number: 1,
   images: MOCK_IMAGES,
+  forms: MOCK_FORMS,
   paragraphs: [
     {
       id: 0,
@@ -248,5 +299,63 @@ export function connectReflowWebSocket(
   } catch (e) {
     console.warn('WebSocket connection not available in local offline mode', e);
     return null;
+  }
+}
+
+export async function getDocumentForms(
+  docId: string
+): Promise<DocumentFormsResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms`);
+    if (!res.ok) {
+      return { document_id: docId, count: MOCK_FORMS.length, fields: MOCK_FORMS };
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, using mock form data:', e);
+    return { document_id: docId, count: MOCK_FORMS.length, fields: MOCK_FORMS };
+  }
+}
+
+export async function fillFormField(
+  docId: string,
+  fieldName: string,
+  value: string
+): Promise<{ success: boolean; updated_count: number }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/forms/fill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: { [fieldName]: value } }),
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fill form field');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock form fill:', e);
+    return { success: true, updated_count: 1 };
+  }
+}
+
+export async function flattenDocumentForms(
+  docId: string
+): Promise<{ success: boolean; flattened_count: number; message: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/documents/${docId}/forms/flatten`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      throw new Error('Failed to flatten form fields');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock form flatten:', e);
+    return {
+      success: true,
+      flattened_count: MOCK_FORMS.length,
+      message: 'All form fields flattened locally.',
+    };
   }
 }

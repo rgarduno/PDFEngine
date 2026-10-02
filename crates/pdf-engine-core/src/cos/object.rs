@@ -161,6 +161,11 @@ impl PdfDictionary {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Checks whether the dictionary contains a specific key.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(&PdfName(key.to_string()))
+    }
 }
 
 /// Type alias for PDF Array objects (ISO 32000-1 §7.3.6).
@@ -263,6 +268,31 @@ impl PdfObject {
     pub fn as_array(&self) -> Option<&[PdfObject]> {
         match self {
             Self::Array(a) => Some(a.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract a mutable reference to an array.
+    pub fn as_array_mut(&mut self) -> Option<&mut Vec<PdfObject>> {
+        match self {
+            Self::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract a PdfString.
+    pub fn as_string(&self) -> Option<&PdfString> {
+        match self {
+            Self::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract the raw byte slice of a string or name.
+    pub fn as_string_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::String(s) => Some(&s.bytes),
+            Self::Name(n) => Some(n.0.as_bytes()),
             _ => None,
         }
     }

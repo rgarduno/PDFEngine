@@ -340,3 +340,128 @@ def test_image_extraction_and_replacement_endpoints():
     assert export_resp.status_code == 200
     assert b"/Filter /DCTDecode" in export_resp.content
 
+
+def create_pdf_with_acroform_bytes() -> bytes:
+    """Generates a valid PDF containing an interactive AcroForm with text, checkbox, and choice fields."""
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R /Annots [ 6 0 R 7 0 R 8 0 R ] >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = b"q\nBT\n/F1 12 Tf\n100 700 Td\n(Interactive Form Document) Tj\nET\nQ\n"
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"endstream\nendobj\n")
+
+    off5 = len(pdf)
+    pdf.extend(b"5 0 obj\n<< /Fields [ 6 0 R 7 0 R 8 0 R ] /NeedAppearances true >>\nendobj\n")
+
+    # Field 1: Text Field (FullName)
+    off6 = len(pdf)
+    pdf.extend(
+        b"6 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Tx /T (FullName) /V (Jane Doe) /Rect [ 100 600 250 620 ] /P 3 0 R >>\nendobj\n"
+    )
+
+    # Field 2: Checkbox Field (Subscribe)
+    off7 = len(pdf)
+    pdf.extend(
+        b"7 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Btn /T (Subscribe) /V /Off /AS /Off /Rect [ 100 560 120 580 ] /P 3 0 R >>\nendobj\n"
+    )
+
+    # Field 3: Choice Field (Role)
+    off8 = len(pdf)
+    pdf.extend(
+        b"8 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Ch /T (Role) /V (Developer) /Opt [ (Developer) (Designer) (Manager) ] /Rect [ 100 520 220 540 ] /P 3 0 R >>\nendobj\n"
+    )
+
+    xref_offset = len(pdf)
+    pdf.extend(b"xref\n0 9\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010} 00000 n \n".encode())
+    pdf.extend(f"{off2:010} 00000 n \n".encode())
+    pdf.extend(f"{off3:010} 00000 n \n".encode())
+    pdf.extend(f"{off4:010} 00000 n \n".encode())
+    pdf.extend(f"{off5:010} 00000 n \n".encode())
+    pdf.extend(f"{off6:010} 00000 n \n".encode())
+    pdf.extend(f"{off7:010} 00000 n \n".encode())
+    pdf.extend(f"{off8:010} 00000 n \n".encode())
+
+    pdf.extend(b"trailer\n<< /Size 9 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+
+    return bytes(pdf)
+
+
+def test_acroform_endpoints():
+    pdf_bytes = create_pdf_with_acroform_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("acroform_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 1. Query interactive form fields
+    forms_resp = client.get(f"/api/documents/{doc_id}/forms")
+    assert forms_resp.status_code == 200
+    forms_data = forms_resp.json()
+    assert forms_data["count"] == 3
+    fields = {f["name"]: f for f in forms_data["fields"]}
+
+    assert "FullName" in fields
+    assert fields["FullName"]["field_type"] == "Text"
+    assert fields["FullName"]["value"] == "Jane Doe"
+    assert fields["FullName"]["bbox"]["min_x"] == 100.0
+    assert fields["FullName"]["bbox"]["min_y"] == 600.0
+
+    assert "Subscribe" in fields
+    assert fields["Subscribe"]["field_type"] == "Checkbox"
+    assert fields["Subscribe"]["value"] == "Off"
+
+    assert "Role" in fields
+    assert fields["Role"]["field_type"] == "Choice"
+    assert fields["Role"]["value"] == "Developer"
+    assert fields["Role"]["options"] == ["Developer", "Designer", "Manager"]
+
+    # 2. Batch fill form fields
+    fill_resp = client.post(
+        f"/api/documents/{doc_id}/forms/fill",
+        json={"fields": {"FullName": "Alex Mercer", "Subscribe": "Yes", "Role": "Manager"}},
+    )
+    assert fill_resp.status_code == 200
+    assert fill_resp.json()["updated_count"] == 3
+
+    # 3. Verify updated field values
+    updated_forms_resp = client.get(f"/api/documents/{doc_id}/forms")
+    assert updated_forms_resp.status_code == 200
+    updated_fields = {f["name"]: f for f in updated_forms_resp.json()["fields"]}
+    assert updated_fields["FullName"]["value"] == "Alex Mercer"
+    assert updated_fields["Subscribe"]["value"] == "Yes"
+    assert updated_fields["Role"]["value"] == "Manager"
+
+    # 4. Flatten all form fields into permanent page graphics
+    flatten_resp = client.post(f"/api/documents/{doc_id}/forms/flatten")
+    assert flatten_resp.status_code == 200
+    assert flatten_resp.json()["flattened_count"] == 3
+
+    # 5. Verify forms count is now 0 (completely flattened)
+    post_flatten_resp = client.get(f"/api/documents/{doc_id}/forms")
+    assert post_flatten_resp.status_code == 200
+    assert post_flatten_resp.json()["count"] == 0
+
+    # 6. Verify exported binary contains the burned text
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert b"Alex Mercer" in export_resp.content
+    assert b"Flattened AcroForm Fields" in export_resp.content
+
+

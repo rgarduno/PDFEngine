@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 import { getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
-import { Check, Edit3, ImageIcon, Layers, Move, RefreshCw } from 'lucide-react';
+import { Check, Edit3, FileText, ImageIcon, Layers, Move, RefreshCw } from 'lucide-react';
 
 interface DualCanvasViewerProps {
   paragraphs: Paragraph[];
@@ -18,6 +18,10 @@ interface DualCanvasViewerProps {
   selectedImageId?: number | null;
   onSelectImage?: (id: number | null) => void;
   onTriggerReplaceImage?: (id: number) => void;
+  forms?: FormFieldElement[];
+  selectedFormFieldName?: string | null;
+  onSelectFormField?: (name: string | null) => void;
+  onUpdateFormFieldValue?: (name: string, value: string) => void;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -37,6 +41,10 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   selectedImageId = null,
   onSelectImage,
   onTriggerReplaceImage,
+  forms = [],
+  selectedFormFieldName = null,
+  onSelectFormField,
+  onUpdateFormFieldValue,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,6 +133,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
       onClick={() => {
         onSelectParagraph(null);
         onSelectImage?.(null);
+        onSelectFormField?.(null);
         setEditingId(null);
       }}
       className="flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-950 p-8 flex items-center justify-center min-h-[calc(100vh-4rem)] relative"
@@ -218,6 +227,93 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
             </div>
           );
         })}
+
+        {/* Layer 1.8: Interactive AcroForm Fields Overlay */}
+        {forms
+          .filter((f) => f.page_number === pageNumber)
+          .map((field) => {
+            const { left, top, width, height } = pdfToScreenCoordinates(field.bbox);
+            const isSelected = selectedFormFieldName === field.name;
+
+            return (
+              <div
+                key={field.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectParagraph(null);
+                  onSelectImage?.(null);
+                  onSelectFormField?.(field.name);
+                }}
+                style={{
+                  left: `${left}px`,
+                  top: `${top}px`,
+                  width: `${Math.max(width, 24 * zoom)}px`,
+                  height: `${Math.max(height, 20 * zoom)}px`,
+                }}
+                className={`absolute transition-all group z-15 ${
+                  isSelected
+                    ? 'ring-2 ring-purple-500 shadow-md'
+                    : 'hover:ring-1 hover:ring-purple-400'
+                }`}
+              >
+                {/* Form Input based on type */}
+                {field.field_type === 'Checkbox' ? (
+                  <label className="flex items-center justify-center w-full h-full cursor-pointer bg-white/90 dark:bg-neutral-800/90 border border-purple-400/80 rounded-xs">
+                    <input
+                      type="checkbox"
+                      checked={field.value.toLowerCase() === 'yes' || field.value === '1' || field.value.toLowerCase() === 'true'}
+                      onChange={(e) => {
+                        onUpdateFormFieldValue?.(field.name, e.target.checked ? 'Yes' : 'Off');
+                      }}
+                      className="w-3.5 h-3.5 text-purple-600 rounded-xs focus:ring-0 cursor-pointer"
+                    />
+                  </label>
+                ) : field.field_type === 'Choice' ? (
+                  <select
+                    value={field.value}
+                    onChange={(e) => {
+                      onUpdateFormFieldValue?.(field.name, e.target.value);
+                    }}
+                    style={{
+                      fontSize: `${11 * zoom}px`,
+                    }}
+                    className="w-full h-full px-1.5 bg-purple-50/90 dark:bg-purple-950/40 border border-purple-400/80 rounded-xs text-purple-950 dark:text-purple-100 font-sans outline-none focus:border-purple-600"
+                  >
+                    {field.options.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={field.value}
+                    placeholder={field.alt_name || field.name}
+                    onChange={(e) => {
+                      onUpdateFormFieldValue?.(field.name, e.target.value);
+                    }}
+                    style={{
+                      fontSize: `${11 * zoom}px`,
+                    }}
+                    className="w-full h-full px-2 bg-purple-50/80 dark:bg-purple-950/30 border border-purple-400/80 rounded-xs text-purple-950 dark:text-purple-100 font-sans outline-none focus:border-purple-600 focus:bg-white dark:focus:bg-neutral-900"
+                  />
+                )}
+
+                {/* Field Badge */}
+                <div
+                  className={`absolute -top-5 left-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono transition-opacity ${
+                    isSelected
+                      ? 'bg-purple-600 text-white opacity-100'
+                      : 'bg-black/75 text-purple-300 opacity-0 group-hover:opacity-100'
+                  }`}
+                >
+                  <FileText size={9} />
+                  <span>{field.name}</span>
+                </div>
+              </div>
+            );
+          })}
 
         {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
         {paragraphs.map((p) => {
