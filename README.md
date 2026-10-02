@@ -106,7 +106,19 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
 │    - Complete metadata scrubbing: /Info dictionary & /Metadata XMP stream   │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 11. Security & Resource Hardening                                           │
+│ 11. PDF Security, Permissions & PKCS#7 Signatures (ISO 32000 §7.6 & §12.8)  │
+│    - Pure Rust cryptographic primitives: AES-128/256 CBC, SHA-256, MD5      │
+│    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
+│    - Granular permissions bitmask (print, edit, extract, forms, assemble)  │
+│    - Digital signatures with AcroForm /Sig fields and /ByteRange validation │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 12. Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4│
+│    - Vector lattice grid solver with path projection and collinear merging  │
+│    - Stream/borderless fallback via whitespace clustering & margin alignment│
+│    - Precision paragraph & span association with cell containment threshold │
+│    - Multi-format exporters: RFC 4180 CSV, JSON, Markdown, and semantic HTML│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 13. Security & Resource Hardening                                           │
 │    - Bounded Flate expansion: 100:1 max ratio, 250 MB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Active code neutralization (strips /JavaScript, /Launch, /SubmitForm) │
@@ -126,7 +138,8 @@ PDFEngine/
 │   │   ├── src/
 │   │   │   ├── lib.rs          # Public crate API and layer re-exports
 │   │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
-│   │   │   ├── security/       # Resource limits, recursion & zip bomb guards
+│   │   │   ├── crypto/         # Pure Rust AES-128/256, SHA-256, MD5 primitives
+│   │   │   ├── security/       # Standard Security Handler Rev 4, permissions & signatures
 │   │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
 │   │   │   ├── stream/         # Content Stream AST & graphics state evaluator
 │   │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
@@ -137,11 +150,12 @@ PDFEngine/
 │   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
 │   │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
 │   │   │   ├── redact/         # ISO 32000-1 §14.11 legal redaction, PII scanning & metadata scrubbing
+│   │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
 │   │   │   └── editor/         # Surgical stream mutator & reflow engine
 │   │   └── tests/              # Conformance and integration test suite
 │   └── pdf-engine-python/      # High-performance PyO3 native Python extension
 │       ├── Cargo.toml
-│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation, PyRedaction exports
+│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation, PyRedaction, PyTable exports
 ├── backend/                    # Commercial FastAPI REST & WebSocket service
 │   ├── app/
 │   │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
