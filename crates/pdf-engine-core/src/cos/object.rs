@@ -67,6 +67,30 @@ impl From<&str> for PdfName {
     }
 }
 
+impl PartialEq<str> for PdfName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PdfName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<PdfName> for &str {
+    fn eq(&self, other: &PdfName) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialEq<PdfName> for str {
+    fn eq(&self, other: &PdfName) -> bool {
+        self == other.0
+    }
+}
+
 /// Format of a PDF string literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringFormat {
@@ -166,6 +190,15 @@ impl PdfDictionary {
     pub fn contains_key(&self, key: &str) -> bool {
         self.0.contains_key(&PdfName(key.to_string()))
     }
+    /// Returns an iterator over the dictionary key-value pairs.
+    pub fn iter(&self) -> std::collections::btree_map::Iter<'_, PdfName, PdfObject> {
+        self.0.iter()
+    }
+
+    /// Returns a mutable iterator over the dictionary key-value pairs.
+    pub fn iter_mut(&mut self) -> std::collections::btree_map::IterMut<'_, PdfName, PdfObject> {
+        self.0.iter_mut()
+    }
 }
 
 /// Type alias for PDF Array objects (ISO 32000-1 §7.3.6).
@@ -221,12 +254,30 @@ impl PdfObject {
         matches!(self, Self::Null)
     }
 
+    /// Attempts to extract a boolean value.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Alias for `as_bool`.
+    pub fn as_boolean(&self) -> Option<bool> {
+        self.as_bool()
+    }
+
     /// Attempts to extract an `i64` integer.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Self::Integer(i) => Some(*i),
             _ => None,
         }
+    }
+
+    /// Alias for `as_i64`.
+    pub fn as_integer(&self) -> Option<i64> {
+        self.as_i64()
     }
 
     /// Attempts to extract an `f64` numeric value (converting integers if necessary).
@@ -236,6 +287,11 @@ impl PdfObject {
             Self::Integer(i) => Some(*i as f64),
             _ => None,
         }
+    }
+
+    /// Alias for `as_f64`.
+    pub fn as_real(&self) -> Option<f64> {
+        self.as_f64()
     }
 
     /// Attempts to extract a string reference.

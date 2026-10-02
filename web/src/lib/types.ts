@@ -285,4 +285,64 @@ export interface SanitizeDocumentResponse {
   message: string;
 }
 
+export interface PermissionsPayload {
+  print_low_res?: boolean;
+  print_high_res?: boolean;
+  modify_contents?: boolean;
+  copy_extract?: boolean;
+  modify_annotations?: boolean;
+  fill_forms?: boolean;
+  accessibility_extract?: boolean;
+  assemble_document?: boolean;
+}
+
+export interface EncryptDocumentPayload {
+  user_password?: string;
+  owner_password?: string;
+  permissions?: PermissionsPayload;
+  encrypt_metadata?: boolean;
+}
+
+export interface DecryptDocumentPayload {
+  password: string;
+}
+
+export interface SignDocumentPayload {
+  signer_name: string;
+  reason: string;
+  location: string;
+  page_number?: number;
+  rect?: number[];
+  contact_info?: string;
+}
+
+export interface SignatureItem {
+  field_name: string;
+  signer_name: string;
+  reason: string;
+  location: string;
+  date: string;
+  sub_filter: string;
+  byte_range: number[];
+  contents_hex: string;
+  byte_range_valid: boolean;
+  rect: number[];
+  page_number: number;
+}
+
+export interface SecurityStatusResponse {
+  document_id: string;
+  is_encrypted: boolean;
+  signatures: SignatureItem[];
+}
+
+export interface SecurityActionResponse {
+  success: boolean;
+  document_id: string;
+  message: string;
+  is_encrypted?: boolean;
+  signature?: SignatureItem;
+}
+
+
 

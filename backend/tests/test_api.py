@@ -833,6 +833,100 @@ def test_redaction_and_sanitization_workflow():
     assert sanitize_resp.json()["success"] is True
 
 
+def test_security_and_digital_signatures_workflow():
+    """Validates encryption, permissions, decryption, and digital signatures API workflow."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("contract.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+
+    # 1. Initial security status: not encrypted, 0 signatures
+    sec_resp = client.get(f"/api/documents/{doc_id}/security")
+    assert sec_resp.status_code == 200
+    sec_data = sec_resp.json()
+    assert sec_data["is_encrypted"] is False
+    assert len(sec_data["signatures"]) == 0
+
+    # 2. Inscribe digital signature
+    sign_resp = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json={
+            "signer_name": "Lic. Roberto Garduño",
+            "reason": "Dictamen Legal Aprobatorio",
+            "location": "Ciudad de México, MX",
+            "page_number": 1,
+            "rect": [72.0, 72.0, 272.0, 142.0],
+            "contact_info": "rgarduno@pdfengine.com",
+        },
+    )
+    assert sign_resp.status_code == 200
+    sign_data = sign_resp.json()
+    assert sign_data["success"] is True
+    assert sign_data["signature"]["signer_name"] == "Lic. Roberto Garduño"
+    assert sign_data["signature"]["byte_range_valid"] is True
+
+    # 3. Verify signatures list endpoint
+    sigs_resp = client.get(f"/api/documents/{doc_id}/security/signatures")
+    assert sigs_resp.status_code == 200
+    sigs_list = sigs_resp.json()
+    assert len(sigs_list) == 1
+    assert sigs_list[0]["signer_name"] == "Lic. Roberto Garduño"
+    assert sigs_list[0]["location"] == "Ciudad de México, MX"
+
+    # 4. Encrypt document with AES-128 and granular permissions
+    encrypt_resp = client.post(
+        f"/api/documents/{doc_id}/security/encrypt",
+        json={
+            "user_password": "secret_user",
+            "owner_password": "secret_admin",
+            "permissions": {
+                "print_low_res": True,
+                "print_high_res": False,
+                "modify_contents": False,
+                "copy_extract": False,
+                "modify_annotations": False,
+                "fill_forms": False,
+                "accessibility_extract": True,
+                "assemble_document": False,
+            },
+            "encrypt_metadata": True,
+        },
+    )
+    assert encrypt_resp.status_code == 200
+    enc_data = encrypt_resp.json()
+    assert enc_data["success"] is True
+    assert enc_data["is_encrypted"] is True
+
+    # Check status endpoint reflects encryption
+    sec_resp2 = client.get(f"/api/documents/{doc_id}/security")
+    assert sec_resp2.status_code == 200
+    assert sec_resp2.json()["is_encrypted"] is True
+
+    # Verify exported PDF contains /Encrypt
+    export_enc = client.get(f"/api/documents/{doc_id}/export")
+    assert export_enc.status_code == 200
+    assert b"/Encrypt" in export_enc.content
+
+    # 5. Decrypt document
+    decrypt_resp = client.post(
+        f"/api/documents/{doc_id}/security/decrypt",
+        json={"password": "secret_user"},
+    )
+    assert decrypt_resp.status_code == 200
+    dec_data = decrypt_resp.json()
+    assert dec_data["success"] is True
+    assert dec_data["is_encrypted"] is False
+
+    # Check status endpoint reflects decryption
+    sec_resp3 = client.get(f"/api/documents/{doc_id}/security")
+    assert sec_resp3.status_code == 200
+    assert sec_resp3.json()["is_encrypted"] is False
+
+
+
 
 
 

@@ -5,7 +5,7 @@ interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
 import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -56,6 +56,13 @@ from app.models import (
     RedactionSummaryModel,
     RedactionActionResponse,
     SanitizeDocumentResponse,
+    PermissionsModel,
+    EncryptDocumentRequest,
+    DecryptDocumentRequest,
+    SignDocumentRequest,
+    SignatureModel,
+    SecurityStatusResponse,
+    SecurityActionResponse,
 )
 
 app = FastAPI(
@@ -1148,5 +1155,187 @@ def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to sanitize document: {e}")
+
+
+@app.get(
+    "/api/documents/{doc_id}/security",
+    response_model=SecurityStatusResponse,
+)
+def get_security_status_endpoint(doc_id: str):
+    """Retrieves document encryption and digital signature verification state."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        is_enc = doc.is_encrypted()
+        raw_sigs = doc.verify_signatures()
+        sig_models = [
+            SignatureModel(
+                field_name=s.field_name,
+                signer_name=s.signer_name,
+                reason=s.reason,
+                location=s.location,
+                date=s.date,
+                sub_filter=s.sub_filter,
+                byte_range=s.byte_range,
+                contents_hex=s.contents_hex,
+                byte_range_valid=s.byte_range_valid,
+                rect=list(s.rect),
+                page_number=s.page_number,
+            )
+            for s in raw_sigs
+        ]
+        return SecurityStatusResponse(
+            document_id=doc_id,
+            is_encrypted=is_enc,
+            signatures=sig_models,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to inspect security status: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/security/encrypt",
+    response_model=SecurityActionResponse,
+)
+def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
+    """Encrypts document using AES-128 and password protection."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        perms = None
+        if request.permissions is not None:
+            p = request.permissions
+            perms = pdf_engine.PdfPermissions(
+                p.print_low_res,
+                p.print_high_res,
+                p.modify_contents,
+                p.copy_extract,
+                p.modify_annotations,
+                p.fill_forms,
+                p.accessibility_extract,
+                p.assemble_document,
+            )
+
+        doc.encrypt(
+            user_password=request.user_password,
+            owner_password=request.owner_password,
+            permissions=perms,
+            encrypt_metadata=request.encrypt_metadata if request.encrypt_metadata is not None else True,
+        )
+        return SecurityActionResponse(
+            success=True,
+            document_id=doc_id,
+            message="Document successfully encrypted with AES-128.",
+            is_encrypted=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to encrypt document: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/security/decrypt",
+    response_model=SecurityActionResponse,
+)
+def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
+    """Decrypts document using the provided password."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        doc.decrypt(request.password)
+        return SecurityActionResponse(
+            success=True,
+            document_id=doc_id,
+            message="Document successfully decrypted.",
+            is_encrypted=False,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to decrypt document: {e}")
+
+
+@app.post(
+    "/api/documents/{doc_id}/security/sign",
+    response_model=SecurityActionResponse,
+)
+def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
+    """Inscribes a visual cryptographic digital signature into the document."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        rect = request.rect if request.rect and len(request.rect) == 4 else [72.0, 72.0, 272.0, 142.0]
+        sig = doc.sign(
+            request.signer_name,
+            request.reason,
+            request.location,
+            rect,
+            request.page_number,
+            request.contact_info,
+        )
+        sig_model = SignatureModel(
+            field_name=sig.field_name,
+            signer_name=sig.signer_name,
+            reason=sig.reason,
+            location=sig.location,
+            date=sig.date,
+            sub_filter=sig.sub_filter,
+            byte_range=sig.byte_range,
+            contents_hex=sig.contents_hex,
+            byte_range_valid=sig.byte_range_valid,
+            rect=list(sig.rect),
+            page_number=sig.page_number,
+        )
+        return SecurityActionResponse(
+            success=True,
+            document_id=doc_id,
+            message=f"Digital signature created for {request.signer_name}.",
+            signature=sig_model,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to sign document: {e}")
+
+
+@app.get(
+    "/api/documents/{doc_id}/security/signatures",
+    response_model=List[SignatureModel],
+)
+def get_signatures_endpoint(doc_id: str):
+    """Lists all verified digital signatures in the document."""
+    session = DOCUMENT_SESSIONS.get(doc_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document session not found.")
+
+    doc = session["doc"]
+    try:
+        raw_sigs = doc.verify_signatures()
+        return [
+            SignatureModel(
+                field_name=s.field_name,
+                signer_name=s.signer_name,
+                reason=s.reason,
+                location=s.location,
+                date=s.date,
+                sub_filter=s.sub_filter,
+                byte_range=s.byte_range,
+                contents_hex=s.contents_hex,
+                byte_range_valid=s.byte_range_valid,
+                rect=list(s.rect),
+                page_number=s.page_number,
+            )
+            for s in raw_sigs
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to retrieve signatures: {e}")
+
 
 

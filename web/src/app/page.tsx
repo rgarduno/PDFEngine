@@ -37,6 +37,11 @@ import {
   redactText,
   redactRegions,
   sanitizeDocument,
+  getSecurityStatus,
+  encryptDocument,
+  decryptDocument,
+  signDocument,
+  getSignatures,
 } from '@/lib/api';
 import {
   AddPaginationPayload,
@@ -50,6 +55,9 @@ import {
   RedactPatternPayload,
   RedactTextPayload,
   RedactRegionsPayload,
+  SignatureItem,
+  EncryptDocumentPayload,
+  SignDocumentPayload,
 } from '@/lib/types';
 
 export default function Home() {
@@ -69,6 +77,8 @@ export default function Home() {
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [activeReflowId, setActiveReflowId] = useState<number | null>(null);
+  const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
+  const [signatures, setSignatures] = useState<SignatureItem[]>([]);
 
   // Undo / Redo History Stacks
   const [history, setHistory] = useState<Paragraph[][]>([MOCK_SCENEGRAPH.paragraphs]);
@@ -255,6 +265,17 @@ export default function Home() {
         setAnnotations([]);
       }
       setSelectedAnnotationId(null);
+
+      try {
+        const secStatus = await getSecurityStatus(newSession.document_id);
+        setIsEncrypted(Boolean(secStatus.is_encrypted));
+        const sigs = await getSignatures(newSession.document_id);
+        setSignatures(sigs);
+      } catch (err) {
+        console.warn('Security info unavailable:', err);
+        setIsEncrypted(false);
+        setSignatures([]);
+      }
 
       setHistory([scenegraph.paragraphs]);
       setHistoryIndex(0);
@@ -701,6 +722,41 @@ export default function Home() {
     }
   };
 
+  // Document Security Handlers
+  const handleEncryptDocument = async (payload: EncryptDocumentPayload) => {
+    try {
+      const res = await encryptDocument(session.document_id, payload);
+      setIsEncrypted(Boolean(res.is_encrypted));
+      alert(res.message || 'Documento cifrado con éxito. Los permisos han sido aplicados.');
+    } catch (err) {
+      console.error('Failed to encrypt document:', err);
+      alert('Error al cifrar el documento. Verifique los parámetros.');
+    }
+  };
+
+  const handleDecryptDocument = async (password: string) => {
+    try {
+      const res = await decryptDocument(session.document_id, { password });
+      setIsEncrypted(Boolean(res.is_encrypted));
+      alert(res.message || 'Documento descifrado con éxito. Restricciones eliminadas.');
+    } catch (err) {
+      console.error('Failed to decrypt document:', err);
+      alert('Error al descifrar el documento. Contraseña incorrecta.');
+    }
+  };
+
+  const handleSignDocument = async (payload: SignDocumentPayload) => {
+    try {
+      const res = await signDocument(session.document_id, payload);
+      alert(res.message || 'Firma digital generada con éxito. Sello visual estampado.');
+      const sigs = await getSignatures(session.document_id);
+      setSignatures(sigs);
+    } catch (err) {
+      console.error('Failed to sign document:', err);
+      alert('Error al firmar digitalmente el documento.');
+    }
+  };
+
   // Export modified PDF
   const handleExportClick = async () => {
     setIsExporting(true);
@@ -910,6 +966,11 @@ export default function Home() {
           onRedactText={handleRedactText}
           onRedactRegions={handleRedactRegions}
           onSanitizeDocument={handleSanitizeDocument}
+          isEncrypted={isEncrypted}
+          signatures={signatures}
+          onEncryptDocument={handleEncryptDocument}
+          onDecryptDocument={handleDecryptDocument}
+          onSignDocument={handleSignDocument}
         />
       </div>
     </div>

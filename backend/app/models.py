@@ -372,3 +372,70 @@ class SanitizeDocumentResponse(BaseModel):
     message: str
 
 
+class PermissionsModel(BaseModel):
+    """Granular user access permissions matching ISO 32000-1 §7.6.3.2."""
+    print_low_res: bool = True
+    print_high_res: bool = True
+    modify_contents: bool = True
+    copy_extract: bool = True
+    modify_annotations: bool = True
+    fill_forms: bool = True
+    accessibility_extract: bool = True
+    assemble_document: bool = True
+
+
+class EncryptDocumentRequest(BaseModel):
+    """Request payload to encrypt document with AES-128 and password protection."""
+    user_password: str = Field(default="", description="Password required to open and read document")
+    owner_password: str = Field(default="admin", description="Master administrative password")
+    permissions: Optional[PermissionsModel] = Field(default=None, description="Granular access permissions")
+    encrypt_metadata: Optional[bool] = Field(default=True, description="Whether to encrypt metadata stream")
+
+
+class DecryptDocumentRequest(BaseModel):
+    """Request payload to remove encryption from a document."""
+    password: str = Field(description="User or Owner password to decrypt the document")
+
+
+class SignDocumentRequest(BaseModel):
+    """Request payload to apply a cryptographic digital signature stamp."""
+    signer_name: str = Field(default="PDFEngine Certified Signer", description="Signer identity or common name")
+    reason: str = Field(default="Aprobación y Certificación Digital", description="Operational/legal reason for signing")
+    location: str = Field(default="Ciudad de México, MX", description="Physical or corporate signing location")
+    page_number: int = Field(default=1, description="1-based page number where signature badge will appear")
+    rect: Optional[List[float]] = Field(default=None, description="[min_x, min_y, max_x, max_y] bounding box or default placement")
+    contact_info: Optional[str] = Field(default=None, description="Optional contact email or URL")
+
+
+class SignatureModel(BaseModel):
+    """Verified digital signature information."""
+    field_name: str
+    signer_name: str
+    reason: str
+    location: str
+    date: str
+    sub_filter: str
+    byte_range: List[int]
+    contents_hex: str
+    byte_range_valid: bool
+    rect: List[float]
+    page_number: int
+
+
+class SecurityStatusResponse(BaseModel):
+    """Response detailing encryption and digital signature status."""
+    document_id: str
+    is_encrypted: bool
+    signatures: List[SignatureModel]
+
+
+class SecurityActionResponse(BaseModel):
+    """Generic action response for security operations."""
+    success: bool
+    document_id: str
+    message: str
+    is_encrypted: Optional[bool] = None
+    signature: Optional[SignatureModel] = None
+
+
+

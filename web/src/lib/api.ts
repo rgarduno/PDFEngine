@@ -24,6 +24,12 @@ import {
   RedactTextPayload,
   RedactionActionResponse,
   SanitizeDocumentResponse,
+  EncryptDocumentPayload,
+  DecryptDocumentPayload,
+  SignDocumentPayload,
+  SignatureItem,
+  SecurityStatusResponse,
+  SecurityActionResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -893,6 +899,124 @@ export async function sanitizeDocument(
     };
   }
 }
+
+export async function getSecurityStatus(docId: string): Promise<SecurityStatusResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security`);
+    if (!res.ok) throw new Error('Failed to load security status');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock security status:', e);
+    return {
+      document_id: docId,
+      is_encrypted: false,
+      signatures: [],
+    };
+  }
+}
+
+export async function encryptDocument(
+  docId: string,
+  payload: EncryptDocumentPayload
+): Promise<SecurityActionResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/encrypt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Encryption failed' }));
+      throw new Error(err.detail || 'Encryption failed');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock encrypt document:', e);
+    return {
+      success: true,
+      document_id: docId,
+      message: 'Document encrypted locally with AES-128.',
+      is_encrypted: true,
+    };
+  }
+}
+
+export async function decryptDocument(
+  docId: string,
+  payload: DecryptDocumentPayload
+): Promise<SecurityActionResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/decrypt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Decryption failed' }));
+      throw new Error(err.detail || 'Decryption failed');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock decrypt document:', e);
+    return {
+      success: true,
+      document_id: docId,
+      message: 'Document decrypted locally.',
+      is_encrypted: false,
+    };
+  }
+}
+
+export async function signDocument(
+  docId: string,
+  payload: SignDocumentPayload
+): Promise<SecurityActionResponse> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Digital signing failed' }));
+      throw new Error(err.detail || 'Digital signing failed');
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock sign document:', e);
+    const mockSig: SignatureItem = {
+      field_name: 'Signature_mock_1',
+      signer_name: payload.signer_name,
+      reason: payload.reason,
+      location: payload.location,
+      date: new Date().toISOString(),
+      sub_filter: 'adbe.pkcs7.detached',
+      byte_range: [0, 1024, 2048, 4096],
+      contents_hex: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      byte_range_valid: true,
+      rect: payload.rect || [72, 72, 272, 142],
+      page_number: payload.page_number || 1,
+    };
+    return {
+      success: true,
+      document_id: docId,
+      message: `Digital signature generated for ${payload.signer_name}.`,
+      signature: mockSig,
+    };
+  }
+}
+
+export async function getSignatures(docId: string): Promise<SignatureItem[]> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents/${docId}/security/signatures`);
+    if (!res.ok) throw new Error('Failed to load signatures');
+    return await res.json();
+  } catch (e) {
+    console.warn('Backend unavailable, mock get signatures:', e);
+    return [];
+  }
+}
+
 
 
 

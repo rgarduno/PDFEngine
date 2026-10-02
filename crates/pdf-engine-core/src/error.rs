@@ -108,6 +108,10 @@ pub enum PdfError {
     #[error("Document operation error: {0}")]
     OperationError(String),
 
+    /// Cryptographic or security handler error (e.g. invalid key, authentication failure, padding error).
+    #[error("Cryptography error: {0}")]
+    CryptographyError(String),
+
     /// I/O error encountered while reading or writing PDF data.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

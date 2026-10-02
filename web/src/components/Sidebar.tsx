@@ -28,6 +28,11 @@ import {
   Stamp,
   EyeOff,
   ShieldAlert,
+  Lock,
+  Unlock,
+  Key,
+  FileCheck,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -35,6 +40,9 @@ import {
   RedactPatternPayload,
   RedactTextPayload,
   RedactRegionsPayload,
+  SignatureItem,
+  EncryptDocumentPayload,
+  SignDocumentPayload,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -74,6 +82,11 @@ interface SidebarProps {
   onRedactText?: (payload: RedactTextPayload) => void;
   onRedactRegions?: (payload: RedactRegionsPayload) => void;
   onSanitizeDocument?: (scrubMetadata: boolean) => void;
+  isEncrypted?: boolean;
+  signatures?: SignatureItem[];
+  onEncryptDocument?: (payload: EncryptDocumentPayload) => void;
+  onDecryptDocument?: (password: string) => void;
+  onSignDocument?: (payload: SignDocumentPayload) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -113,8 +126,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRedactText,
   onRedactRegions,
   onSanitizeDocument,
+  isEncrypted = false,
+  signatures = [],
+  onEncryptDocument,
+  onDecryptDocument,
+  onSignDocument,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security'>('paragraphs');
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
 
   const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
@@ -143,6 +161,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [redactBoxMaxX, setRedactBoxMaxX] = useState<number>(250);
   const [redactBoxMaxY, setRedactBoxMaxY] = useState<number>(720);
 
+  // Security & Signature State
+  const [secUserPass, setSecUserPass] = useState<string>('');
+  const [secOwnerPass, setSecOwnerPass] = useState<string>('admin');
+  const [secDecryptPass, setSecDecryptPass] = useState<string>('');
+  const [secPermPrintHigh, setSecPermPrintHigh] = useState<boolean>(true);
+  const [secPermModifyContents, setSecPermModifyContents] = useState<boolean>(false);
+  const [secPermCopyExtract, setSecPermCopyExtract] = useState<boolean>(false);
+  const [secPermModifyAnnots, setSecPermModifyAnnots] = useState<boolean>(true);
+  const [secPermFillForms, setSecPermFillForms] = useState<boolean>(true);
+  const [secPermAccessibility, setSecPermAccessibility] = useState<boolean>(true);
+  const [secPermAssemble, setSecPermAssemble] = useState<boolean>(false);
+
+  const [sigName, setSigName] = useState<string>('Lic. Roberto Garduño');
+  const [sigReason, setSigReason] = useState<string>('Aprobación y Certificación Legal');
+  const [sigLocation, setSigLocation] = useState<string>('Ciudad de México, MX');
+  const [sigPage, setSigPage] = useState<number>(pageNumber || 1);
+
   return (
     <aside className="w-80 border-l border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 flex flex-col h-[calc(100vh-4rem)] select-none">
       {/* Header */}
@@ -157,7 +192,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-7 gap-0.5 p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-4 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
@@ -241,6 +276,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <EyeOff size={10} />
             <span>Censura</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('security')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'security'
+                ? 'bg-amber-600 text-white font-semibold shadow-xs'
+                : 'text-amber-600 hover:text-amber-700 dark:hover:text-amber-400'
+            }`}
+            title="Cifrado, Permisos y Firmas Digitales"
+          >
+            <Lock size={10} />
+            <span>Seguridad</span>
           </button>
         </div>
       </div>
@@ -1368,6 +1415,346 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <ShieldAlert size={12} className="text-amber-400" />
                 <span>Purgar Metadatos del Documento</span>
               </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'security' && (
+          <div className="space-y-4">
+            {/* Header & Status Banner */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                Seguridad y Firmas
+              </span>
+              <span className="text-[10px] font-mono text-neutral-400">
+                ISO 32000 §7.6 & §12.8
+              </span>
+            </div>
+
+            {/* Status Card */}
+            <div className={`p-3 rounded-lg border ${
+              isEncrypted
+                ? 'border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/20'
+                : 'border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {isEncrypted ? (
+                    <Lock size={15} className="text-emerald-600 dark:text-emerald-400" />
+                  ) : (
+                    <Unlock size={15} className="text-neutral-500 dark:text-neutral-400" />
+                  )}
+                  <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                    {isEncrypted ? 'Cifrado AES-128 Activo' : 'Sin Cifrado (Abierto)'}
+                  </span>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${
+                  isEncrypted
+                    ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300'
+                }`}>
+                  {isEncrypted ? 'Rev 4 (AES-CBC)' : 'Desprotegido'}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400 leading-normal">
+                {isEncrypted
+                  ? 'El documento está protegido con cifrado de flujo y diccionario /Encrypt activo.'
+                  : 'Cifre el documento para restringir la visualización, copia, impresión y edición.'}
+              </p>
+            </div>
+
+            {/* Encryption & Decryption Controls */}
+            {isEncrypted ? (
+              <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                  <Key size={13} className="text-amber-500" />
+                  <span>Descifrar Documento</span>
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                    Contraseña de Usuario o Admin
+                  </label>
+                  <input
+                    type="password"
+                    value={secDecryptPass}
+                    onChange={(e) => setSecDecryptPass(e.target.value)}
+                    placeholder="Ingrese contraseña..."
+                    className="w-full mt-1 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!secDecryptPass) {
+                      alert('Ingrese la contraseña para descifrar.');
+                      return;
+                    }
+                    onDecryptDocument?.(secDecryptPass);
+                    setSecDecryptPass('');
+                  }}
+                  className="w-full py-2 px-3 bg-neutral-800 hover:bg-neutral-900 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Unlock size={12} />
+                  <span>Descifrar y Quitar Restricciones</span>
+                </button>
+              </div>
+            ) : (
+              <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                  <Lock size={13} className="text-amber-500" />
+                  <span>Cifrar con AES-128</span>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                      Contraseña de Apertura (Usuario)
+                    </label>
+                    <input
+                      type="password"
+                      value={secUserPass}
+                      onChange={(e) => setSecUserPass(e.target.value)}
+                      placeholder="Opcional (dejar vacío si es abierto)"
+                      className="w-full mt-0.5 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                      Contraseña de Administración (Propietario)
+                    </label>
+                    <input
+                      type="password"
+                      value={secOwnerPass}
+                      onChange={(e) => setSecOwnerPass(e.target.value)}
+                      placeholder="admin"
+                      className="w-full mt-0.5 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Permissions Bitmask Checkboxes */}
+                <div className="space-y-1.5 pt-1 border-t border-neutral-200/60 dark:border-neutral-800">
+                  <span className="text-[10px] font-semibold text-neutral-400 uppercase">
+                    Permisos de Usuario (/P Bitmask)
+                  </span>
+                  <div className="grid grid-cols-1 gap-1 text-[11px] text-neutral-600 dark:text-neutral-300">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermPrintHigh}
+                        onChange={(e) => setSecPermPrintHigh(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Impresión en Alta Resolución</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermModifyContents}
+                        onChange={(e) => setSecPermModifyContents(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Modificación de Contenido</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermCopyExtract}
+                        onChange={(e) => setSecPermCopyExtract(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Copia y Extracción de Texto</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermModifyAnnots}
+                        onChange={(e) => setSecPermModifyAnnots(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Anotaciones y Comentarios</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermFillForms}
+                        onChange={(e) => setSecPermFillForms(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Llenado de Formularios Interactivos</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermAccessibility}
+                        onChange={(e) => setSecPermAccessibility(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Extracción para Accesibilidad</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={secPermAssemble}
+                        onChange={(e) => setSecPermAssemble(e.target.checked)}
+                        className="rounded text-amber-600"
+                      />
+                      <span>Ensamblado de Páginas</span>
+                    </label>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onEncryptDocument?.({
+                      user_password: secUserPass,
+                      owner_password: secOwnerPass || 'admin',
+                      permissions: {
+                        print_low_res: true,
+                        print_high_res: secPermPrintHigh,
+                        modify_contents: secPermModifyContents,
+                        copy_extract: secPermCopyExtract,
+                        modify_annotations: secPermModifyAnnots,
+                        fill_forms: secPermFillForms,
+                        accessibility_extract: secPermAccessibility,
+                        assemble_document: secPermAssemble,
+                      },
+                      encrypt_metadata: true,
+                    });
+                  }}
+                  className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Lock size={12} />
+                  <span>Aplicar Cifrado AES-128</span>
+                </button>
+              </div>
+            )}
+
+            {/* Digital Signatures Section */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                  <FileCheck size={13} className="text-blue-500" />
+                  <span>Firma Digital PKCS#7</span>
+                </div>
+                <span className="text-[10px] text-neutral-400 font-mono">ISO 32000 §12.8</span>
+              </div>
+
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                    Nombre del Firmante / Entidad
+                  </label>
+                  <input
+                    type="text"
+                    value={sigName}
+                    onChange={(e) => setSigName(e.target.value)}
+                    placeholder="Ej. Lic. Roberto Garduño"
+                    className="w-full mt-0.5 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                    Motivo / Razón Legal
+                  </label>
+                  <input
+                    type="text"
+                    value={sigReason}
+                    onChange={(e) => setSigReason(e.target.value)}
+                    placeholder="Ej. Aprobación y Certificación Legal"
+                    className="w-full mt-0.5 px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                      Lugar / Jurisdicción
+                    </label>
+                    <input
+                      type="text"
+                      value={sigLocation}
+                      onChange={(e) => setSigLocation(e.target.value)}
+                      placeholder="CDMX, MX"
+                      className="w-full mt-0.5 px-2 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                      Página Destino
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={sigPage}
+                      onChange={(e) => setSigPage(parseInt(e.target.value) || 1)}
+                      className="w-full mt-0.5 px-2 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!sigName.trim()) {
+                    alert('Ingrese el nombre del firmante.');
+                    return;
+                  }
+                  onSignDocument?.({
+                    signer_name: sigName.trim(),
+                    reason: sigReason.trim(),
+                    location: sigLocation.trim(),
+                    page_number: sigPage,
+                    rect: [72.0, 72.0, 272.0, 142.0],
+                  });
+                }}
+                className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <CheckCircle2 size={13} />
+                <span>Estampar Sello de Firma Criptográfica</span>
+              </button>
+            </div>
+
+            {/* Signatures List */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-semibold text-neutral-400 uppercase">
+                  Firmas Verificadas ({signatures.length})
+                </span>
+                <span className="text-[10px] font-mono text-neutral-400">ByteRange</span>
+              </div>
+
+              {signatures.length === 0 ? (
+                <div className="p-3 rounded-lg border border-dashed border-neutral-200 dark:border-neutral-800 text-center text-xs text-neutral-400">
+                  No hay firmas registradas en este documento.
+                </div>
+              ) : (
+                signatures.map((sig, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200">
+                        {sig.signer_name}
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                        <CheckCircle2 size={10} />
+                        Válida
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
+                      <div><strong className="text-neutral-500 font-medium">Motivo:</strong> {sig.reason || 'Sin motivo'}</div>
+                      <div><strong className="text-neutral-500 font-medium">Lugar:</strong> {sig.location || 'N/A'}</div>
+                      <div><strong className="text-neutral-500 font-medium">Página:</strong> {sig.page_number}</div>
+                      <div className="font-mono text-[10px] text-neutral-400 truncate">
+                        Fmt: {sig.sub_filter}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}

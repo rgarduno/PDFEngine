@@ -23,7 +23,11 @@ use pdf_engine_core::watermark::{
     WatermarkPlacement,
 };
 use pdf_engine_core::redact::{
-    RedactionConfig, RedactionPattern, RedactionRect, RedactionSummary,
+    RedactionConfig, RedactionPattern, RedactionSummary,
+};
+use pdf_engine_core::security::{
+    DigitalSignatureConfig, EncryptionOptions, EncryptionRevision, PdfPermissions,
+    VerifiedSignature,
 };
 
 
@@ -298,6 +302,171 @@ impl PyRedactionSummary {
             blackout_boxes_count: s.blackout_boxes_count,
             pruned_annotations_count: s.pruned_annotations_count,
             applied_rects: rects,
+        }
+    }
+}
+
+/// Granular user access permissions matching ISO 32000-1 §7.6.3.2 Table 22.
+#[pyclass(name = "PdfPermissions")]
+#[derive(Debug, Clone)]
+pub struct PyPdfPermissions {
+    #[pyo3(get, set)]
+    pub print_low_res: bool,
+    #[pyo3(get, set)]
+    pub print_high_res: bool,
+    #[pyo3(get, set)]
+    pub modify_contents: bool,
+    #[pyo3(get, set)]
+    pub copy_extract: bool,
+    #[pyo3(get, set)]
+    pub modify_annotations: bool,
+    #[pyo3(get, set)]
+    pub fill_forms: bool,
+    #[pyo3(get, set)]
+    pub accessibility_extract: bool,
+    #[pyo3(get, set)]
+    pub assemble_document: bool,
+}
+
+#[pymethods]
+impl PyPdfPermissions {
+    #[new]
+    #[pyo3(signature = (
+        print_low_res=true,
+        print_high_res=true,
+        modify_contents=true,
+        copy_extract=true,
+        modify_annotations=true,
+        fill_forms=true,
+        accessibility_extract=true,
+        assemble_document=true
+    ))]
+    pub fn new(
+        print_low_res: bool,
+        print_high_res: bool,
+        modify_contents: bool,
+        copy_extract: bool,
+        modify_annotations: bool,
+        fill_forms: bool,
+        accessibility_extract: bool,
+        assemble_document: bool,
+    ) -> Self {
+        Self {
+            print_low_res,
+            print_high_res,
+            modify_contents,
+            copy_extract,
+            modify_annotations,
+            fill_forms,
+            accessibility_extract,
+            assemble_document,
+        }
+    }
+
+    #[staticmethod]
+    pub fn read_only() -> Self {
+        Self {
+            print_low_res: true,
+            print_high_res: false,
+            modify_contents: false,
+            copy_extract: false,
+            modify_annotations: false,
+            fill_forms: false,
+            accessibility_extract: true,
+            assemble_document: false,
+        }
+    }
+
+    #[staticmethod]
+    pub fn full_access() -> Self {
+        Self::new(true, true, true, true, true, true, true, true)
+    }
+
+    pub fn to_p_value(&self) -> i32 {
+        self.to_core().to_p_value()
+    }
+}
+
+impl PyPdfPermissions {
+    pub fn to_core(&self) -> PdfPermissions {
+        PdfPermissions {
+            print_low_res: self.print_low_res,
+            print_high_res: self.print_high_res,
+            modify_contents: self.modify_contents,
+            copy_extract: self.copy_extract,
+            modify_annotations: self.modify_annotations,
+            fill_forms: self.fill_forms,
+            accessibility_extract: self.accessibility_extract,
+            assemble_document: self.assemble_document,
+        }
+    }
+
+    pub fn from_core(p: PdfPermissions) -> Self {
+        Self {
+            print_low_res: p.print_low_res,
+            print_high_res: p.print_high_res,
+            modify_contents: p.modify_contents,
+            copy_extract: p.copy_extract,
+            modify_annotations: p.modify_annotations,
+            fill_forms: p.fill_forms,
+            accessibility_extract: p.accessibility_extract,
+            assemble_document: p.assemble_document,
+        }
+    }
+}
+
+/// Cryptographic verification data of an embedded digital signature.
+#[pyclass(name = "VerifiedSignature")]
+#[derive(Debug, Clone)]
+pub struct PyVerifiedSignature {
+    #[pyo3(get)]
+    pub field_name: String,
+    #[pyo3(get)]
+    pub signer_name: String,
+    #[pyo3(get)]
+    pub reason: String,
+    #[pyo3(get)]
+    pub location: String,
+    #[pyo3(get)]
+    pub date: String,
+    #[pyo3(get)]
+    pub sub_filter: String,
+    #[pyo3(get)]
+    pub byte_range: Vec<usize>,
+    #[pyo3(get)]
+    pub contents_hex: String,
+    #[pyo3(get)]
+    pub byte_range_valid: bool,
+    #[pyo3(get)]
+    pub rect: [f64; 4],
+    #[pyo3(get)]
+    pub page_number: usize,
+}
+
+#[pymethods]
+impl PyVerifiedSignature {
+    fn __repr__(&self) -> String {
+        format!(
+            "<VerifiedSignature field='{}' signer='{}' valid={}>",
+            self.field_name, self.signer_name, self.byte_range_valid
+        )
+    }
+}
+
+impl PyVerifiedSignature {
+    pub fn from_core(s: VerifiedSignature) -> Self {
+        Self {
+            field_name: s.field_name,
+            signer_name: s.signer_name,
+            reason: s.reason,
+            location: s.location,
+            date: s.date,
+            sub_filter: s.sub_filter,
+            byte_range: s.byte_range,
+            contents_hex: s.contents_hex,
+            byte_range_valid: s.byte_range_valid,
+            rect: s.rect,
+            page_number: s.page_number,
         }
     }
 }
@@ -1327,6 +1496,73 @@ impl PyPdfDocument {
         Ok(modified)
     }
 
+    /// Encrypts the PDF document using AES-128 standard security handler with user/owner passwords and permissions.
+    #[pyo3(signature = (user_password="", owner_password="admin", permissions=None, encrypt_metadata=true))]
+    pub fn encrypt(
+        &mut self,
+        user_password: &str,
+        owner_password: &str,
+        permissions: Option<PyPdfPermissions>,
+        encrypt_metadata: bool,
+    ) -> PyResult<()> {
+        let perms = permissions.map(|p| p.to_core()).unwrap_or_default();
+        let options = EncryptionOptions {
+            user_password: user_password.to_string(),
+            owner_password: owner_password.to_string(),
+            permissions: perms,
+            revision: EncryptionRevision::Aes128,
+            encrypt_metadata,
+        };
+        pdf_engine_core::security::encrypt_document(&mut self.doc, &options)
+            .map_err(|e| PyRuntimeError::new_err(format!("Encryption failed: {}", e)))?;
+        Ok(())
+    }
+
+    /// Decrypts the PDF document in place using the supplied password.
+    pub fn decrypt(&mut self, password: &str) -> PyResult<()> {
+        pdf_engine_core::security::decrypt_document(&mut self.doc, password)
+            .map_err(|e| PyRuntimeError::new_err(format!("Decryption failed: {}", e)))?;
+        self.reload_active_pages();
+        Ok(())
+    }
+
+    /// Returns true if the document has an `/Encrypt` trailer dictionary.
+    pub fn is_encrypted(&self) -> bool {
+        self.doc.xref.trailer.contains_key("Encrypt")
+    }
+
+    /// Embeds an ISO 32000-1 §12.8 cryptographic digital signature stamp into the document.
+    #[pyo3(signature = (signer_name, reason, location, rect, page_number=1, contact_info=None))]
+    pub fn sign(
+        &mut self,
+        signer_name: &str,
+        reason: &str,
+        location: &str,
+        rect: [f64; 4],
+        page_number: usize,
+        contact_info: Option<String>,
+    ) -> PyResult<PyVerifiedSignature> {
+        let config = DigitalSignatureConfig {
+            signer_name: signer_name.to_string(),
+            reason: reason.to_string(),
+            location: location.to_string(),
+            rect,
+            page_number,
+            visual_badge: true,
+            contact_info,
+        };
+        let sig = pdf_engine_core::security::sign_document(&mut self.doc, &config)
+            .map_err(|e| PyRuntimeError::new_err(format!("Signing failed: {}", e)))?;
+        self.reload_active_pages();
+        Ok(PyVerifiedSignature::from_core(sig))
+    }
+
+    /// Extracts and cryptographically verifies all embedded digital signatures in the document.
+    pub fn verify_signatures(&self) -> PyResult<Vec<PyVerifiedSignature>> {
+        let sigs = pdf_engine_core::security::verify_document_signatures(&self.doc);
+        Ok(sigs.into_iter().map(PyVerifiedSignature::from_core).collect())
+    }
+
     /// Saves the modified PDF document to a filesystem path.
     pub fn save(&mut self, path: &str) -> PyResult<()> {
         let bytes = self.save_to_bytes()?;
@@ -1370,6 +1606,8 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFormField>()?;
     m.add_class::<PyAnnotation>()?;
     m.add_class::<PyRedactionSummary>()?;
+    m.add_class::<PyPdfPermissions>()?;
+    m.add_class::<PyVerifiedSignature>()?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

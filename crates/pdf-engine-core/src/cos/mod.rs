@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashSet};
 
 pub use filters::decode_stream;
 pub use lexer::{Lexer, Token};
-pub use object::{ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString};
+pub use object::{ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString, StringFormat};
 pub use parser::Parser;
 pub use writer::Writer;
 pub use xref::{XRefEntry, XRefTable};

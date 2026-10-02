@@ -18,6 +18,7 @@
 
 pub mod annots;
 pub mod cos;
+pub mod crypto;
 pub mod editor;
 pub mod error;
 pub mod fonts;
