@@ -291,7 +291,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 3: Semantic Layout & Surgical Reflow** (Glyph clustering, paragraph reflow, in-place AST mutator)
 - [x] **Phase 4: Python Bindings & FastAPI Backend** (PyO3 native bindings, document upload, scene graph inspection, surgical edit endpoints, WebSocket reflow)
 - [x] **Phase 5: React / Next.js Web Application** (Dual-layer canvas, in-situ editing, live WebSocket reflow)
-- [ ] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing)
+- [x] **Phase 6: Hardening & Conformance Suite** (Real-world stress corpus, visual regression diffing, zip bomb mitigation, circular reference loop prevention)
 
 ---
 
