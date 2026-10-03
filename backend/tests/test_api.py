@@ -1,8 +1,13 @@
 """Integration tests for the PDFEngine REST API."""
 
+import base64
 import io
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
+from pathlib import Path
 
 os.environ["PDFENGINE_API_KEYS"] = "pdfengine-test-key-0001,pdfengine-test-key-0002"
 
@@ -21,6 +26,7 @@ from app.auth import (
     document_mutations,
     reset_subject,
 )
+from app import tsa
 from app.main import app, get_document_overview, rotate_page_endpoint
 from app.models import RotatePageRequest
 
@@ -2079,6 +2085,354 @@ def test_merging_locks_documents_in_id_order():
     assert later.is_alive() is False
     assert names["first"] == ["b.pdf", "a.pdf"]
     assert names["second"] == ["a.pdf", "b.pdf"]
+
+
+def _rsa_material():
+    """Builds one short-lived RSA certificate, key, and PKCS#12 bag for API tests."""
+    cached = getattr(_rsa_material, "value", None)
+    if cached is not None:
+        return cached
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl is required")
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        key_path = directory / "signer.key"
+        cert_path = directory / "signer.crt"
+        p12_path = directory / "signer.p12"
+        requested = subprocess.run(
+            [
+                openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-days", "2", "-subj", "/CN=PDFEngine Test Signer",
+                "-keyout", str(key_path), "-out", str(cert_path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if requested.returncode != 0:
+            pytest.fail("openssl req failed")
+        exported = subprocess.run(
+            [
+                openssl, "pkcs12", "-export",
+                "-inkey", str(key_path), "-in", str(cert_path),
+                "-out", str(p12_path),
+                "-keypbe", "AES-256-CBC", "-certpbe", "AES-256-CBC",
+                "-macalg", "SHA256", "-iter", "2048",
+                "-passout", "pass:correct-horse",
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if exported.returncode != 0:
+            pytest.fail("openssl pkcs12 failed")
+        cached = (
+            cert_path.read_text(),
+            key_path.read_text(),
+            p12_path.read_bytes(),
+            "correct-horse",
+        )
+    _rsa_material.value = cached
+    return cached
+
+
+def _cms_payload(**extra):
+    body = {
+        "signer_name": "Lic. Roberto Garduño",
+        "reason": "Dictamen Legal Aprobatorio",
+        "location": "Ciudad de México, MX",
+        "page_number": 1,
+        "rect": [72.0, 72.0, 272.0, 142.0],
+    }
+    body.update(extra)
+    return body
+
+
+def _document_id(name="contract.pdf"):
+    _pdf, response = _upload_minimal(name)
+    assert response.status_code == 200
+    return response.json()["document_id"]
+
+
+def _audit_actions():
+    listed = client.get("/api/audit")
+    assert listed.status_code == 200
+    return [row["action"] for row in listed.json()]
+
+
+def test_pem_credentials_write_a_detached_pkcs7_signature():
+    """PEM material produces a detached CMS signature that survives download."""
+    cert, key, _p12, _password = _rsa_material()
+    doc_id = _document_id()
+    signed = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(certificate_pem=cert, private_key_pem=key),
+    )
+    assert signed.status_code == 200
+    body = signed.json()
+    signature = body["signature"]
+    assert body["message"] == (
+        "PKCS#7 detached signature created for Lic. Roberto Garduño."
+    )
+    assert "legally" not in body["message"].lower()
+    assert signature["sub_filter"] == "adbe.pkcs7.detached"
+    assert signature["byte_range_valid"] is True
+    contents = signature["contents_hex"]
+    assert len(contents) > 64 and len(contents) % 2 == 0
+    assert contents == contents.lower()
+    assert "PRIVATE KEY" not in signed.text
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"/Adobe.PPKLite" in exported.content
+    assert b"/adbe.pkcs7.detached" in exported.content
+    assert b"/PDFEngine.sha256" not in exported.content
+    assert b"PRIVATE KEY" not in exported.content
+
+    reupload = client.post(
+        "/api/documents/upload",
+        files={"file": ("signed.pdf", exported.content, "application/pdf")},
+    )
+    assert reupload.status_code == 200
+    signed_id = reupload.json()["document_id"]
+    reread = client.get(f"/api/documents/{signed_id}/security/signatures")
+    assert reread.status_code == 200
+    assert reread.json()[0]["byte_range_valid"] is True
+    assert reread.json()[0]["sub_filter"] == "adbe.pkcs7.detached"
+
+    refused = client.post(f"/api/documents/{doc_id}/optimize", json={})
+    assert refused.status_code == 409
+    assert (
+        refused.json()["detail"]
+        == "Optimization is refused for encrypted or signed documents."
+    )
+    still = client.get(f"/api/documents/{doc_id}/security/signatures")
+    assert still.json()[0]["byte_range_valid"] is True
+
+    tampered = exported.content.replace(b"(Contract", b"(Kontract", 1)
+    assert tampered != exported.content
+    damaged = client.post(
+        "/api/documents/upload",
+        files={"file": ("tampered.pdf", tampered, "application/pdf")},
+    )
+    assert damaged.status_code == 200
+    damaged_id = damaged.json()["document_id"]
+    checked = client.get(f"/api/documents/{damaged_id}/security/signatures")
+    assert checked.status_code == 200
+    assert checked.json()[0]["byte_range_valid"] is False
+
+
+def test_pkcs12_credentials_write_a_detached_pkcs7_signature():
+    """A password-protected PKCS#12 bag produces the same detached signature."""
+    _cert, _key, p12, password = _rsa_material()
+    doc_id = _document_id("pkcs12.pdf")
+    signed = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            pkcs12_base64=base64.b64encode(p12).decode("ascii"),
+            pkcs12_password=password,
+        ),
+    )
+    assert signed.status_code == 200
+    signature = signed.json()["signature"]
+    assert signature["sub_filter"] == "adbe.pkcs7.detached"
+    assert signature["byte_range_valid"] is True
+    assert password not in signed.text
+
+
+def test_pkcs12_wrong_password_does_not_echo_the_secret():
+    _cert, _key, p12, password = _rsa_material()
+    doc_id = _document_id("wrong-password.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            pkcs12_base64=base64.b64encode(p12).decode("ascii"),
+            pkcs12_password="wrong-password",
+        ),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "PKCS#12 could not be opened."
+    assert "wrong-password" not in refused.text
+    assert password not in refused.text
+    assert client.get(f"/api/documents/{doc_id}/security/signatures").json() == []
+
+
+def test_pem_and_pkcs12_together_are_rejected():
+    cert, key, p12, password = _rsa_material()
+    doc_id = _document_id("both.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            certificate_pem=cert,
+            private_key_pem=key,
+            pkcs12_base64=base64.b64encode(p12).decode("ascii"),
+            pkcs12_password=password,
+        ),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Provide either PEM credentials or a PKCS#12 file."
+    assert client.get(f"/api/documents/{doc_id}/security/signatures").json() == []
+
+
+def test_incomplete_pem_is_rejected():
+    cert, _key, _p12, _password = _rsa_material()
+    doc_id = _document_id("half-pem.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(certificate_pem=cert),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Certificate and private key are required."
+    assert "PRIVATE KEY" not in refused.text
+
+
+def test_pkcs12_without_a_password_is_rejected():
+    _cert, _key, p12, password = _rsa_material()
+    doc_id = _document_id("no-password.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(pkcs12_base64=base64.b64encode(p12).decode("ascii")),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "PKCS#12 password is required."
+    assert password not in refused.text
+
+
+def test_password_without_a_pkcs12_file_is_rejected():
+    doc_id = _document_id("password-only.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(pkcs12_password="secret-value"),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Provide either PEM credentials or a PKCS#12 file."
+    assert "secret-value" not in refused.text
+
+
+def test_invalid_pkcs12_base64_is_rejected_without_echoing_the_password():
+    doc_id = _document_id("bad-base64.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(pkcs12_base64="!!!!", pkcs12_password="secret-value"),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "PKCS#12 could not be opened."
+    assert "secret-value" not in refused.text
+
+
+def test_oversized_signing_material_is_rejected_without_echoing_it():
+    doc_id = _document_id("huge-pem.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            certificate_pem="A" * (64 * 1024 + 1),
+            private_key_pem="short-key",
+        ),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Signing material is too large."
+    assert "AAAA" not in refused.text
+
+
+def test_timestamp_url_is_rejected_before_signing():
+    doc_id = _document_id("rejected-tsa.pdf")
+    before = _audit_actions()
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            certificate_pem="dummy-cert",
+            private_key_pem="dummy-key",
+            tsa_url="http://example.com/tsa",
+        ),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Timestamp authority URL was rejected."
+    assert "example.com" not in refused.text
+    assert client.get(f"/api/documents/{doc_id}/security/signatures").json() == []
+    assert _audit_actions() == before
+    assert "sign" not in _audit_actions()
+
+
+def test_timestamp_without_credentials_is_rejected():
+    doc_id = _document_id("tsa-without-key.pdf")
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(tsa_url="https://example.com/tsa"),
+    )
+    assert refused.status_code == 400
+    assert (
+        refused.json()["detail"]
+        == "A certificate and private key are required to request a timestamp."
+    )
+    assert "example.com" not in refused.text
+    assert client.get(f"/api/documents/{doc_id}/security/signatures").json() == []
+
+
+def test_timestamp_request_failure_restores_the_unsigned_file(monkeypatch):
+    """A failed timestamp rolls the session back to the file from before the signature."""
+    cert, key, _p12, _password = _rsa_material()
+    seen = {"prefix": b""}
+
+    def _accept_url(_url):
+        return ("tsa.example", "203.0.113.5", 443, "/tsa")
+
+    def _reject_fetch(_url, body):
+        seen["prefix"] = bytes(body[:1])
+        raise ValueError("Timestamp authority request failed.")
+
+    monkeypatch.setattr("app.tsa.validate_tsa_url", _accept_url)
+    monkeypatch.setattr("app.tsa.fetch_timestamp", _reject_fetch)
+    doc_id = _document_id("rollback.pdf")
+    before = _audit_actions()
+    refused = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json=_cms_payload(
+            certificate_pem=cert,
+            private_key_pem=key,
+            tsa_url="https://tsa.example/tsa",
+        ),
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "Timestamp authority request failed."
+    assert seen["prefix"] == b"\x30"
+    assert "tsa.example" not in refused.text
+    assert "203.0.113.5" not in refused.text
+    assert client.get(f"/api/documents/{doc_id}/security/signatures").json() == []
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"adbe.pkcs7.detached" not in exported.content
+    assert _audit_actions() == before
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/tsa",
+        "https://127.0.0.1/tsa",
+        "https://user:pass@example.com/tsa",
+        "https://localhost/tsa",
+        "https://10.0.0.1/tsa",
+        "https://192.168.1.1/tsa",
+        "https://169.254.1.1/tsa",
+        "https://[::1]/tsa",
+        "https://100.64.0.1/tsa",
+        "https://example.local/tsa",
+        "https://224.0.0.1/tsa",
+        "https://2130706433/tsa",
+        "https://127.00.0.1/tsa",
+    ],
+)
+def test_timestamp_url_rejects_non_public_targets(url):
+    with pytest.raises(ValueError, match="^Timestamp authority URL was rejected\\.$"):
+        tsa.validate_tsa_url(url)
+
+
+def test_rejected_timestamp_url_does_not_open_a_connection(monkeypatch):
+    def _connected(*_args, **_kwargs):
+        raise AssertionError("connected")
+
+    monkeypatch.setattr(tsa.socket, "create_connection", _connected)
+    with pytest.raises(ValueError, match="^Timestamp authority URL was rejected\\.$"):
+        tsa.fetch_timestamp("http://127.0.0.1/tsa", b"\x30")
 
 
 

@@ -5,6 +5,9 @@
 //! The two ranges cover the saved file exactly once and skip only the hex digits
 //! of `/Contents`. This records file integrity. It is not a CMS signature and it
 //! does not establish the signer's identity.
+//!
+//! PKCS#7 detached signatures are built by `cms` and use `/SubFilter /adbe.pkcs7.detached`.
+//! Saving a PKCS#7 file rewrites offsets and does not reseal that signature.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,13 +72,15 @@ pub struct VerifiedSignature {
     pub location: String,
     /// `/M` value as stored in the file.
     pub date: String,
-    /// `/SubFilter` name. Attestations produced here use `PDFEngine.sha256`.
+    /// `/SubFilter` name. Attestations use `PDFEngine.sha256`. PKCS#7 uses `adbe.pkcs7.detached`.
     pub sub_filter: String,
     /// `/ByteRange` as four non-negative integers.
     pub byte_range: Vec<usize>,
-    /// Lowercase hex of `/Contents`. For a valid attestation this is the SHA-256 digest.
+    /// Lowercase hex of `/Contents`, including zero padding.
+    /// An attestation stores the SHA-256 digest. PKCS#7 stores the CMS encoding.
     pub contents_hex: String,
-    /// True when `/ByteRange` covers `raw_data` except the Contents hex digits and the digest matches.
+    /// True when `/ByteRange` covers the file except the Contents hex and the
+    /// attestation digest or the PKCS#7 signature checks against the certificate inside it.
     pub byte_range_valid: bool,
     /// Widget rectangle `[min_x, min_y, max_x, max_y]`.
     pub rect: [f64; 4],
@@ -85,7 +90,11 @@ pub struct VerifiedSignature {
 
 /// Draws the visual stamp. The stamp does not include the digest: the digest
 /// covers this stream, so embedding it would change the bytes being hashed.
-fn synthesize_signature_appearance(config: &DigitalSignatureConfig, date_str: &str) -> PdfStream {
+fn synthesize_signature_appearance(
+    config: &DigitalSignatureConfig,
+    date_str: &str,
+    badge_line: &str,
+) -> PdfStream {
     let width = (config.rect[2] - config.rect[0]).max(10.0);
     let height = (config.rect[3] - config.rect[1]).max(10.0);
 
@@ -192,7 +201,7 @@ fn synthesize_signature_appearance(config: &DigitalSignatureConfig, date_str: &s
     ops.push_str("0.4 0.45 0.55 rg\n");
     ops.push_str("BT\n/Helv 6 Tf\n");
     ops.push_str(&format!("{:.2} {:.2} Td\n", text_x, line4_y));
-    ops.push_str("(SHA-256 sobre el rango de bytes) Tj\n");
+    ops.push_str(&format!("({}) Tj\n", escape_pdf_str(badge_line)));
     ops.push_str("ET\n");
     ops.push_str("Q\n");
 
@@ -207,7 +216,7 @@ fn escape_pdf_str(s: &str) -> String {
         .replace(')', "\\)")
 }
 
-fn padded_byte_range(a: u64, b: u64, c: u64, d: u64) -> String {
+pub(crate) fn padded_byte_range(a: u64, b: u64, c: u64, d: u64) -> String {
     format!("[ {:010} {:010} {:010} {:010} ]", a, b, c, d)
 }
 
@@ -219,6 +228,37 @@ pub fn sign_document(
     doc: &mut PdfDocument,
     config: &DigitalSignatureConfig,
 ) -> PdfResult<VerifiedSignature> {
+    let field_name = stamp_signature(
+        doc,
+        config,
+        FILTER_NAME,
+        SUBFILTER_NAME,
+        CONTENTS_HOLE,
+        "SHA-256 sobre el rango de bytes",
+    )?;
+    let limits = doc.limits.clone();
+    let sealed = doc.save_to_vec()?;
+    *doc = PdfDocument::load_with_limits(&sealed, limits)?;
+    verify_document_signatures(doc)
+        .into_iter()
+        .rev()
+        .find(|sig| sig.field_name == field_name)
+        .ok_or_else(|| {
+            PdfError::CryptographyError(
+                "The integrity attestation was written but could not be read back.".to_string(),
+            )
+        })
+}
+
+/// Inserts a signature dictionary and widget. Does not save the document.
+pub(crate) fn stamp_signature(
+    doc: &mut PdfDocument,
+    config: &DigitalSignatureConfig,
+    filter: &str,
+    subfilter: &str,
+    contents_hole: &[u8],
+    badge_line: &str,
+) -> PdfResult<String> {
     let pages = doc.get_pages()?;
     let pages_count = pages.len();
     if config.page_number == 0 || config.page_number > pages_count {
@@ -238,8 +278,8 @@ pub fn sign_document(
 
     let mut sig_dict = PdfDictionary::new();
     sig_dict.insert("Type", PdfObject::Name(PdfName::new("Sig")));
-    sig_dict.insert("Filter", PdfObject::Name(PdfName::new(FILTER_NAME)));
-    sig_dict.insert("SubFilter", PdfObject::Name(PdfName::new(SUBFILTER_NAME)));
+    sig_dict.insert("Filter", PdfObject::Name(PdfName::new(filter)));
+    sig_dict.insert("SubFilter", PdfObject::Name(PdfName::new(subfilter)));
     sig_dict.insert(
         "Name",
         PdfObject::String(PdfString::literal(config.signer_name.as_bytes())),
@@ -269,14 +309,14 @@ pub fn sign_document(
     sig_dict.insert("ByteRange", PdfObject::Array(byte_range_arr));
     sig_dict.insert(
         "Contents",
-        PdfObject::String(PdfString::hex(CONTENTS_HOLE.to_vec())),
+        PdfObject::String(PdfString::hex(contents_hole.to_vec())),
     );
 
     let sig_dict_id = doc.alloc_object_id();
     doc.objects
         .insert(sig_dict_id, PdfObject::Dictionary(sig_dict));
 
-    let ap_stream = synthesize_signature_appearance(config, &iso_date);
+    let ap_stream = synthesize_signature_appearance(config, &iso_date, badge_line);
     let ap_stream_id = doc.alloc_object_id();
     doc.objects
         .insert(ap_stream_id, PdfObject::Stream(ap_stream));
@@ -362,19 +402,7 @@ pub fn sign_document(
         }
     }
 
-    let limits = doc.limits.clone();
-    let sealed = doc.save_to_vec()?;
-    *doc = PdfDocument::load_with_limits(&sealed, limits)?;
-
-    verify_document_signatures(doc)
-        .into_iter()
-        .rev()
-        .find(|sig| sig.field_name == field_name)
-        .ok_or_else(|| {
-            PdfError::CryptographyError(
-                "The integrity attestation was written but could not be read back.".to_string(),
-            )
-        })
+    Ok(field_name)
 }
 
 /// Reads every `/Sig` dictionary and checks `/Contents` against `/ByteRange`.
@@ -426,8 +454,15 @@ pub fn verify_document_signatures(doc: &PdfDocument) -> Vec<VerifiedSignature> {
             ranges_ok = false;
         }
 
-        let byte_range_valid =
-            ranges_ok && attestation_matches(doc.raw_data(), &byte_range, &contents);
+        let byte_range_valid = if !ranges_ok {
+            false
+        } else if sub_filter == SUBFILTER_NAME {
+            attestation_matches(doc.raw_data(), &byte_range, &contents)
+        } else if sub_filter == "adbe.pkcs7.detached" {
+            crate::security::cms::cms_byte_range_valid(doc.raw_data(), &byte_range, &contents)
+        } else {
+            false
+        };
 
         let mut field_name = format!("Signature_{}", id.number);
         let mut rect = [0.0, 0.0, 0.0, 0.0];
@@ -623,17 +658,22 @@ fn dict_text(dict: &PdfDictionary, key: &str) -> Option<String> {
 }
 
 fn find_attestation(file: &[u8]) -> Option<usize> {
+    find_marked_signature(file, SUBFILTER_MARK)
+}
+
+/// Last `mark` whose following 32 bytes contain `/Type /Sig`.
+pub(crate) fn find_marked_signature(file: &[u8], mark: &[u8]) -> Option<usize> {
     let mut search_from = 0;
     let mut found = None;
-    while search_from + SUBFILTER_MARK.len() <= file.len() {
+    while search_from + mark.len() <= file.len() {
         let Some(rel) = file[search_from..]
-            .windows(SUBFILTER_MARK.len())
-            .position(|window| window == SUBFILTER_MARK)
+            .windows(mark.len())
+            .position(|window| window == mark)
         else {
             break;
         };
         let at = search_from + rel;
-        let after = at + SUBFILTER_MARK.len();
+        let after = at + mark.len();
         let window_end = (after + 32).min(file.len());
         if file[after..window_end]
             .windows(TYPE_SIG_MARK.len())
@@ -644,6 +684,106 @@ fn find_attestation(file: &[u8]) -> Option<usize> {
         search_from = after;
     }
     found
+}
+
+/// Replaces a short `/ByteRange [ 0 0 0 0 ]` with the fixed 10-digit zero form.
+pub(crate) fn widen_byte_range_placeholder(file: &mut Vec<u8>, mark: &[u8]) -> PdfResult<()> {
+    let sub_at = find_marked_signature(file, mark).ok_or_else(|| {
+        PdfError::CryptographyError("Signature marker disappeared while reserving ByteRange.".into())
+    })?;
+    let obj_start = object_start(file, sub_at);
+    let bracket = find_byte_range_bracket(file, obj_start, sub_at)?;
+    let array_end = file[bracket..]
+        .iter()
+        .position(|byte| *byte == b']')
+        .map(|rel| bracket + rel + 1)
+        .ok_or_else(|| PdfError::CryptographyError("Signature /ByteRange is not closed.".into()))?;
+    let padded = padded_byte_range(0, 0, 0, 0);
+    if &file[bracket..array_end] != padded.as_bytes() {
+        let delta = padded.len() as i64 - (array_end - bracket) as i64;
+        file.splice(bracket..array_end, padded.bytes());
+        adjust_classic_xref(file, bracket, delta)?;
+    }
+    Ok(())
+}
+
+/// Writes the real 10-digit `/ByteRange` over the reserved zeros.
+///
+/// Returns the Contents hex span. The hex digits stay excluded from the range.
+pub(crate) fn write_covered_byte_range(file: &mut [u8], mark: &[u8]) -> PdfResult<(usize, usize)> {
+    let (hex_start, hex_end, bracket, array_end) = contents_geometry(file, mark)?;
+    let padded = padded_byte_range(0, 0, 0, 0);
+    if array_end > file.len() || &file[bracket..array_end] != padded.as_bytes() {
+        return Err(PdfError::CryptographyError(
+            "Signature /ByteRange could not be reserved at a fixed width.".into(),
+        ));
+    }
+    let len1 = hex_start;
+    let start2 = hex_end;
+    let len2 = file.len() - start2;
+    if len1 > 9_999_999_999 || start2 > 9_999_999_999 || len2 > 9_999_999_999 {
+        return Err(PdfError::CryptographyError(
+            "Signature does not support files whose offsets exceed 10 digits.".into(),
+        ));
+    }
+    let rendered = padded_byte_range(0, len1 as u64, start2 as u64, len2 as u64);
+    file[bracket..array_end].copy_from_slice(rendered.as_bytes());
+    Ok((hex_start, hex_end))
+}
+
+/// Locates the Contents hex digits of the marked signature.
+pub(crate) fn contents_hex_span(file: &[u8], mark: &[u8]) -> PdfResult<(usize, usize)> {
+    let (hex_start, hex_end, _, _) = contents_geometry(file, mark)?;
+    Ok((hex_start, hex_end))
+}
+
+fn contents_geometry(file: &[u8], mark: &[u8]) -> PdfResult<(usize, usize, usize, usize)> {
+    let sub_at = find_marked_signature(file, mark).ok_or_else(|| {
+        PdfError::CryptographyError("Signature marker disappeared while sealing.".into())
+    })?;
+    let obj_start = object_start(file, sub_at);
+    let contents_at = rfind(&file[obj_start..sub_at], b"/Contents <")
+        .map(|rel| obj_start + rel)
+        .ok_or_else(|| PdfError::CryptographyError("Signature is missing /Contents.".into()))?;
+    let hex_start = contents_at + b"/Contents <".len();
+    let hex_len = file[hex_start..sub_at]
+        .iter()
+        .position(|byte| *byte == b'>')
+        .ok_or_else(|| PdfError::CryptographyError("Signature /Contents is not closed.".into()))?;
+    if hex_len == 0 || hex_len % 2 != 0 {
+        return Err(PdfError::CryptographyError(
+            "Signature /Contents hex length is not an even positive width.".into(),
+        ));
+    }
+    let hex_end = hex_start + hex_len;
+    let bracket = find_byte_range_bracket(file, obj_start, hex_start)?;
+    let padded_len = padded_byte_range(0, 0, 0, 0).len();
+    Ok((hex_start, hex_end, bracket, bracket + padded_len))
+}
+
+/// Writes `payload` as uppercase hex and zero-pads the rest of the hole.
+pub(crate) fn write_contents_hex(
+    file: &mut [u8],
+    hex_start: usize,
+    hex_end: usize,
+    payload: &[u8],
+) -> PdfResult<()> {
+    let capacity = (hex_end - hex_start) / 2;
+    if payload.len() > capacity {
+        return Err(PdfError::CryptographyError(
+            "CMS does not fit the reserved contents hole.".into(),
+        ));
+    }
+    let mut raw = vec![0u8; capacity];
+    raw[..payload.len()].copy_from_slice(payload);
+    let encoded: String = raw.iter().map(|byte| format!("{:02X}", byte)).collect();
+    if encoded.len() != hex_end - hex_start {
+        return Err(PdfError::CryptographyError(
+            "CMS does not fit the reserved contents hole.".into(),
+        ));
+    }
+    file[hex_start..hex_end].copy_from_slice(encoded.as_bytes());
+    Ok(())
 }
 
 fn clear_digest_hole(file: &[u8], sub_at: usize) -> bool {
@@ -664,13 +804,13 @@ fn clear_digest_hole(file: &[u8], sub_at: usize) -> bool {
             .all(u8::is_ascii_hexdigit)
 }
 
-fn object_start(file: &[u8], position: usize) -> usize {
+pub(crate) fn object_start(file: &[u8], position: usize) -> usize {
     rfind(&file[..position], b"endobj")
         .map(|at| at + b"endobj".len())
         .unwrap_or(0)
 }
 
-fn find_byte_range_bracket(file: &[u8], start: usize, end: usize) -> PdfResult<usize> {
+pub(crate) fn find_byte_range_bracket(file: &[u8], start: usize, end: usize) -> PdfResult<usize> {
     let key = rfind(&file[start..end], b"/ByteRange ").ok_or_else(|| {
         PdfError::CryptographyError("Integrity attestation is missing /ByteRange.".into())
     })?;
@@ -684,7 +824,7 @@ fn find_byte_range_bracket(file: &[u8], start: usize, end: usize) -> PdfResult<u
         })
 }
 
-fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
@@ -694,7 +834,7 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Shifts classic xref offsets and `startxref` after an insertion at `pivot`.
-fn adjust_classic_xref(file: &mut Vec<u8>, pivot: usize, delta: i64) -> PdfResult<()> {
+pub(crate) fn adjust_classic_xref(file: &mut Vec<u8>, pivot: usize, delta: i64) -> PdfResult<()> {
     if delta == 0 {
         return Ok(());
     }

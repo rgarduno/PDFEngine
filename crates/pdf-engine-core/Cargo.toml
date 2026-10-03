@@ -11,5 +11,23 @@ thiserror = { workspace = true }
 flate2 = { workspace = true }
 log = { workspace = true }
 getrandom = { workspace = true }
+cms = { version = "0.2.3", features = ["builder"] }
+hmac = "0.12.1"
+sha1 = "0.10.7"
+const-oid = "0.9.6"
+der = { version = "0.7.10", features = ["alloc", "derive", "oid", "pem"] }
+p256 = { version = "0.13.2", features = ["ecdsa", "pem", "pkcs8"] }
+pem-rfc7468 = "0.7.0"
+pkcs1 = { version = "0.7.5", features = ["pem"] }
+pkcs5 = { version = "0.7.1", features = ["pbes2"] }
+pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
+pkcs12 = { version = "0.1.0", features = ["kdf"] }
+rsa = { version = "0.9.10", features = ["pem", "sha2"] }
+sha2 = "0.10.9"
+signature = { version = "2.2.0", features = ["digest"] }
+spki = { version = "0.7.3", features = ["alloc"] }
+x509-cert = { version = "0.2.5", features = ["builder", "pem"] }
+zeroize = { version = "1.8", features = ["alloc"] }
 
 [dev-dependencies]
+rand = "0.8"

@@ -5,6 +5,7 @@ interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
 import asyncio
+import base64
 import inspect
 import logging
 import os
@@ -15,6 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, W
 from fastapi.responses import Response
 
 from app.audit import events_for, record_document_action
+from app import tsa
 from app.auth import (
     AuthMiddleware,
     adopt_subject,
@@ -522,6 +524,127 @@ def _link_scheme_refusal(exc: Exception) -> Optional[HTTPException]:
     return None
 
 
+_SIGNING_DETAILS = (
+    "Certificate and private key are required.",
+    "Provide either PEM credentials or a PKCS#12 file.",
+    "PKCS#12 password is required.",
+    "PKCS#12 could not be opened.",
+    "PKCS#12 bag uses an unsupported cipher.",
+    "PKCS#12 contains more than one private key.",
+    "PKCS#12 does not contain a private key.",
+    "Certificate or private key could not be read.",
+    "Signing material is too large.",
+    "CMS does not fit the reserved contents hole.",
+    "Timestamp token was rejected.",
+    "A timestamp is already present.",
+    "Unsupported certificate public key.",
+    "Private key does not match the certificate.",
+    "Signature could not be verified.",
+    "A certificate and private key are required to request a timestamp.",
+    "Timestamp authority URL was rejected.",
+    "Timestamp authority request failed.",
+)
+_PEM_CAP = 64 * 1024
+_PKCS12_TEXT_CAP = 100_000
+_PKCS12_DER_CAP = 96 * 1024
+_PASSWORD_CAP = 256
+_TSA_URL_CAP = 512
+
+
+def _signing_failure(exc: BaseException) -> HTTPException:
+    """Maps a signing failure to a stable sentence. Unknown text stays in the log."""
+    text = str(exc)
+    for sentence in _SIGNING_DETAILS:
+        if sentence in text:
+            return HTTPException(status_code=400, detail=sentence)
+    return _public_error(400, exc)
+
+
+def _timestamp_credentials(request: SignDocumentRequest) -> bool:
+    pem = request.certificate_pem is not None and request.private_key_pem is not None
+    return pem or request.pkcs12_base64 is not None
+
+
+def _uses_signing_material(request: SignDocumentRequest) -> bool:
+    return any(
+        value is not None
+        for value in (
+            request.certificate_pem,
+            request.private_key_pem,
+            request.chain_pem,
+            request.pkcs12_base64,
+            request.pkcs12_password,
+        )
+    )
+
+
+def _prepare_signing_material(request: SignDocumentRequest) -> Optional[bytes]:
+    """Validates credential shape. Returns PKCS#12 DER, or None for PEM or an attestation."""
+    if request.tsa_url is not None and not _timestamp_credentials(request):
+        raise HTTPException(
+            status_code=400,
+            detail="A certificate and private key are required to request a timestamp.",
+        )
+    if request.tsa_url is not None:
+        try:
+            tsa.validate_tsa_url(request.tsa_url)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Timestamp authority URL was rejected.",
+            )
+    for value in (request.certificate_pem, request.private_key_pem, request.chain_pem):
+        if value is not None and len(value) > _PEM_CAP:
+            raise HTTPException(status_code=400, detail="Signing material is too large.")
+    if request.pkcs12_password is not None and len(request.pkcs12_password.encode("utf-8")) > _PASSWORD_CAP:
+        raise HTTPException(status_code=400, detail="Signing material is too large.")
+    if request.tsa_url is not None and len(request.tsa_url) > _TSA_URL_CAP:
+        raise HTTPException(status_code=400, detail="Signing material is too large.")
+    if request.pkcs12_base64 is not None and len(request.pkcs12_base64) > _PKCS12_TEXT_CAP:
+        raise HTTPException(status_code=400, detail="Signing material is too large.")
+
+    pem_side = any(
+        value is not None
+        for value in (request.certificate_pem, request.private_key_pem, request.chain_pem)
+    )
+    p12_side = request.pkcs12_base64 is not None or request.pkcs12_password is not None
+    if pem_side and p12_side:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either PEM credentials or a PKCS#12 file.",
+        )
+    if request.pkcs12_password is not None and request.pkcs12_base64 is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either PEM credentials or a PKCS#12 file.",
+        )
+    if pem_side:
+        if not request.certificate_pem or not request.private_key_pem:
+            raise HTTPException(
+                status_code=400,
+                detail="Certificate and private key are required.",
+            )
+        return None
+    if request.pkcs12_base64 is None:
+        return None
+    if request.pkcs12_password is None:
+        raise HTTPException(status_code=400, detail="PKCS#12 password is required.")
+    try:
+        der = base64.b64decode(request.pkcs12_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="PKCS#12 could not be opened.")
+    if not der:
+        raise HTTPException(status_code=400, detail="PKCS#12 could not be opened.")
+    if len(der) > _PKCS12_DER_CAP:
+        raise HTTPException(status_code=400, detail="Signing material is too large.")
+    return der
+
+
+def _rollback_document(doc, snapshot: Optional[bytes]) -> None:
+    if snapshot is not None:
+        doc.replace_bytes(snapshot)
+
+
 def _optimization_refusal(exc: Exception) -> Optional[HTTPException]:
     """Maps the engine's protected-file refusal to a stable client error.
 
@@ -535,9 +658,30 @@ def _optimization_refusal(exc: Exception) -> Optional[HTTPException]:
     return None
 
 
+def _download_bytes(doc):
+    """Returns stored bytes while a PKCS#7 signature still verifies.
+
+    An attestation is rewritten so its digest is sealed again. A full rewrite
+    would move a PKCS#7 byte range, so that download returns the stored file.
+    Later edits stay out of that download until the signature no longer verifies.
+    """
+    try:
+        signatures = doc.verify_signatures()
+    except Exception:
+        signatures = ()
+    for sig in signatures:
+        if sig.sub_filter == "adbe.pkcs7.detached" and sig.byte_range_valid:
+            return doc.raw_bytes()
+    return doc.save_to_bytes()
+
+
 @app.get("/api/documents/{doc_id}/export")
 def export_document(doc_id: str, optimized: bool = False):
-    """Serializes the edited document into a downloadable PDF binary."""
+    """Serializes the edited document into a downloadable PDF binary.
+
+    A still-valid detached PKCS#7 signature is downloaded as stored. An
+    attestation is rewritten and resealed.
+    """
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -547,7 +691,7 @@ def export_document(doc_id: str, optimized: bool = False):
         elif optimized:
             pdf_bytes, _ = doc.save_optimized_to_bytes()
         else:
-            pdf_bytes = doc.save_to_bytes()
+            pdf_bytes = _download_bytes(doc)
     except HTTPException:
         raise
     except Exception as e:
@@ -1717,7 +1861,7 @@ def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
     response_model=SecurityStatusResponse,
 )
 def get_security_status_endpoint(doc_id: str):
-    """Retrieves encryption state and SHA-256 byte-range attestation checks."""
+    """Retrieves encryption state and each signature integrity check."""
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -1824,39 +1968,99 @@ def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
 )
 @serialized_mutation
 def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
-    """Stamps a SHA-256 byte-range integrity attestation. This is not a CMS signature."""
+    """Stamps a SHA-256 attestation, or a detached PKCS#7 signature when a certificate is supplied.
+
+    A timestamp is requested only after the signature exists. A failed timestamp
+    restores the file from before the signature. The audit row is written after
+    the whole operation succeeds.
+    """
     session = load_session(doc_id)
 
     doc = session["doc"]
     try:
+        pkcs12_der = _prepare_signing_material(request)
+        cms = _uses_signing_material(request)
         rect = request.rect if request.rect and len(request.rect) == 4 else [72.0, 72.0, 272.0, 142.0]
-        sig = doc.sign(
-            request.signer_name,
-            request.reason,
-            request.location,
-            rect,
-            request.page_number,
-            request.contact_info,
-        )
-        sig_model = SignatureModel(
-            field_name=sig.field_name,
-            signer_name=sig.signer_name,
-            reason=sig.reason,
-            location=sig.location,
-            date=sig.date,
-            sub_filter=sig.sub_filter,
-            byte_range=sig.byte_range,
-            contents_hex=sig.contents_hex,
-            byte_range_valid=sig.byte_range_valid,
-            rect=list(sig.rect),
-            page_number=sig.page_number,
-        )
+        snapshot = bytes(doc.save_to_bytes()) if cms else None
+        try:
+            kwargs = {}
+            if request.certificate_pem is not None:
+                kwargs["certificate_pem"] = request.certificate_pem
+            if request.private_key_pem is not None:
+                kwargs["private_key_pem"] = request.private_key_pem
+            if request.chain_pem is not None:
+                kwargs["chain_pem"] = request.chain_pem
+            if pkcs12_der is not None:
+                kwargs["pkcs12_der"] = pkcs12_der
+                kwargs["pkcs12_password"] = request.pkcs12_password.encode("utf-8")
+            if request.tsa_url:
+                kwargs["reserve_timestamp"] = True
+            sig = doc.sign(
+                request.signer_name,
+                request.reason,
+                request.location,
+                rect,
+                request.page_number,
+                request.contact_info,
+                **kwargs,
+            )
+            if request.tsa_url:
+                query = None
+                try:
+                    query = bytes(doc.cms_timestamp_request())
+                    token = tsa.fetch_timestamp(request.tsa_url, query)
+                    sig = doc.embed_cms_timestamp(token)
+                except HTTPException:
+                    _rollback_document(doc, snapshot)
+                    raise
+                except ValueError as exc:
+                    _rollback_document(doc, snapshot)
+                    detail = str(exc)
+                    if detail not in (
+                        "Timestamp authority URL was rejected.",
+                        "Timestamp authority request failed.",
+                    ):
+                        detail = "Timestamp authority request failed."
+                    raise HTTPException(status_code=400, detail=detail)
+                except Exception as exc:
+                    _rollback_document(doc, snapshot)
+                    if query is None:
+                        raise _signing_failure(exc)
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Timestamp token was rejected.",
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _rollback_document(doc, snapshot)
+            raise _signing_failure(exc) from None
         record_document_action("sign", doc_id)
+        if request.tsa_url:
+            message = (
+                f"PKCS#7 detached signature and RFC 3161 timestamp created for {request.signer_name}."
+            )
+        elif cms:
+            message = f"PKCS#7 detached signature created for {request.signer_name}."
+        else:
+            message = f"SHA-256 byte-range attestation created for {request.signer_name}."
         return SecurityActionResponse(
             success=True,
             document_id=doc_id,
-            message=f"SHA-256 byte-range attestation created for {request.signer_name}.",
-            signature=sig_model,
+            message=message,
+            signature=SignatureModel(
+                field_name=sig.field_name,
+                signer_name=sig.signer_name,
+                reason=sig.reason,
+                location=sig.location,
+                date=sig.date,
+                sub_filter=sig.sub_filter,
+                byte_range=sig.byte_range,
+                contents_hex=sig.contents_hex,
+                byte_range_valid=sig.byte_range_valid,
+                rect=list(sig.rect),
+                page_number=sig.page_number,
+            ),
         )
     except HTTPException:
         raise
@@ -1869,7 +2073,7 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
     response_model=List[SignatureModel],
 )
 def get_signatures_endpoint(doc_id: str):
-    """Lists signature dictionaries and whether each SHA-256 byte range still matches."""
+    """Lists each signature dictionary and whether its integrity check still matches."""
     session = load_session(doc_id)
 
     doc = session["doc"]

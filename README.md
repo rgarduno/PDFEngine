@@ -106,11 +106,13 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
 │    - Metadata /Info and XMP are removed only when scrub_metadata is set     │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 11. PDF Security, Permissions & SHA-256 Attestation (ISO 32000 §7.6 & §12.8)│
+│ 11. PDF Security, Permissions & Signatures (ISO 32000 §7.6 and §12.8)       │
 │    - Rev 4 security handler: AES-128 CBC, SHA-256, and MD5                  │
 │    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
 │    - /P permission bits are stored and are not enforced by this process     │
-│    - Digital signatures with AcroForm /Sig fields and /ByteRange validation │
+│    - SHA-256 attestation when no certificate is supplied                    │
+│    - Detached PKCS#7 (RSA-SHA256 or P-256) with PEM or PKCS#12              │
+│    - Optional RFC 3161 timestamp. The check does not decide trust.          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 12. Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4│
 │    - Vector lattice grid solver with path projection and collinear merging  │
@@ -139,7 +141,7 @@ PDFEngine/
 │   │   │   ├── lib.rs          # Public crate API and layer re-exports
 │   │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
 │   │   │   ├── crypto/         # AES-128 CBC, SHA-256, and MD5 primitives
-│   │   │   ├── security/       # Standard Security Handler Rev 4, permissions & signatures
+│   │   │   ├── security/       # Rev 4 handler, SHA-256 attestation, and detached PKCS#7
 │   │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
 │   │   │   ├── stream/         # Content Stream AST & graphics state evaluator
 │   │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
@@ -186,6 +188,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Unbounded uploads and sessions** | A client pins process memory by uploading without a limit or by leaving documents open. | Uploads above 32 MiB are rejected (413). The process keeps at most 32 sessions and 256 MiB of accounted file bytes, and each session expires 30 minutes after its last successful load (429). |
 | **Object count and optimizer work** | A cross-reference reserves a slot per object number, an object stream declares a huge `/N`, or compressed objects point at each other. | At most 500,000 objects. Cross-reference streams list only occupied numbers. Object-stream `/N` and `/First` outside the decoded stream are rejected. A compressed-object cycle fails closed. Each object stream holds at most 100 objects, and zlib-best recompression skips streams larger than 1 MiB. |
 | **Optimizer on protected files** | A size rewrite moves every byte offset. A byte-range signature would no longer match, and encryption is not re-applied. | Optimization is refused (409) when the trailer has `/Encrypt`, or when an object is `/Type /Sig` or `/SubFilter /PDFEngine.sha256`. The file is left unchanged. Words drawn in a content stream are not treated as a signature. |
+| **Detached PKCS#7** | A SHA-256 attestation is not a certificate signature. A later full save moves the bytes a PKCS#7 signature covers. | Without a certificate, sign stamps `/SubFilter /PDFEngine.sha256`. With PEM or PKCS#12 it writes `/SubFilter /adbe.pkcs7.detached` (RSA-SHA256 or P-256 ECDSA) and can embed an RFC 3161 token from an HTTPS time-stamping authority. Verification checks the certificate inside the CMS. It does not decide trust and does not claim that a viewer or an authority accepts the file. A download returns the stored bytes while that PKCS#7 signature still verifies. A later full save invalidates the byte range. Export of an attestation still rewrites and reseals it. |
 | **Browser origin and error text** | Any site can call the API with credentials, and a handler returns the engine's internal error text. | `PDFENGINE_CORS_ORIGINS` lists the exact origins that may call the API. Credentials are attached only for an origin on that list. A wildcard is ignored. Clients receive `The request could not be completed.` and the cause stays in the server log. |
 | **Downloads, links, permissions, and redaction** | A download name is taken from the upload, a link can use any scheme, `/P` is described as access control, and redaction is described as ISO legal redaction. | Export names are `document_edited.pdf` and `document_optimized.pdf`. New links accept only `http` and `https`. `/P` is stored and not enforced. Redaction removes intersecting glyphs, page `/Metadata`, and marked-content `/ActualText`, `/Alt`, and `/E` on the rewritten page. Attachments, the structure tree, and form appearances stay. Document `/Info` and catalog XMP are removed only when metadata scrubbing is requested. |
 
@@ -425,7 +428,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
 - [x] **Phase 13: Glyph excision, PII scan, and optional metadata scrub** (Physical glyph and stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` and XMP scrub only when requested, PyO3 bindings, FastAPI endpoints and Web Studio)
-- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, permissions bitmask stored in `/P` and not enforced by this process, SHA-256 /ByteRange integrity attestation)
+- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, permissions bitmask stored in `/P` and not enforced by this process, SHA-256 /ByteRange integrity attestation when no certificate is supplied, detached PKCS#7 with RSA-SHA256 or P-256 ECDSA when PEM or PKCS#12 is supplied, optional RFC 3161 timestamp. Verification checks the certificate inside the CMS and does not decide trust.)
 - [x] **Phase 15: Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4)** (Vector lattice grid solver, borderless fallback, multi-format CSV/JSON/MD/HTML exporters)
 - [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)

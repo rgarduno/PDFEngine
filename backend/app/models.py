@@ -478,17 +478,31 @@ class DecryptDocumentRequest(BaseModel):
 
 
 class SignDocumentRequest(BaseModel):
-    """Request payload to stamp a SHA-256 byte-range integrity attestation."""
+    """Stamp a SHA-256 attestation, or a detached PKCS#7 signature when a certificate is supplied.
+
+    PKCS#7 verification checks the certificate inside the CMS. It does not decide trust.
+    """
     signer_name: str = Field(default="PDFEngine Certified Signer", description="Name stored in /Name. This does not prove identity.")
     reason: str = Field(default="Integridad del archivo", description="Note stored in /Reason")
     location: str = Field(default="Ciudad de México, MX", description="Physical or corporate signing location")
     page_number: int = Field(default=1, description="1-based page number where signature badge will appear")
     rect: Optional[List[float]] = Field(default=None, description="[min_x, min_y, max_x, max_y] bounding box or default placement")
     contact_info: Optional[str] = Field(default=None, description="Optional contact email or URL")
+    certificate_pem: Optional[str] = Field(default=None, description="PEM X.509 certificate. With private_key_pem, writes a detached PKCS#7 signature.")
+    private_key_pem: Optional[str] = Field(default=None, description="PEM PKCS#8 or PKCS#1 private key. Encrypted PEM is rejected.")
+    chain_pem: Optional[str] = Field(default=None, description="Optional extra PEM certificates stored beside the leaf. They are not a trust path.")
+    pkcs12_base64: Optional[str] = Field(default=None, description="Base64 PKCS#12 or PFX. Mutually exclusive with the PEM fields.")
+    pkcs12_password: Optional[str] = Field(default=None, description="Password for pkcs12_base64. An empty string is a supplied password.")
+    tsa_url: Optional[str] = Field(default=None, description="HTTPS RFC 3161 time-stamping authority. Requires a certificate and private key.")
 
 
 class SignatureModel(BaseModel):
-    """Signature dictionary plus the SHA-256 byte-range check. contents_hex is the digest, not CMS."""
+    """One signature dictionary and its integrity check.
+
+    contents_hex is the SHA-256 digest for PDFEngine.sha256, and the CMS bytes
+    (including zero padding) for adbe.pkcs7.detached. byte_range_valid checks
+    that CMS against the certificate embedded in it. It is not a trust decision.
+    """
     field_name: str
     signer_name: str
     reason: str
@@ -503,7 +517,7 @@ class SignatureModel(BaseModel):
 
 
 class SecurityStatusResponse(BaseModel):
-    """Response detailing encryption and byte-range attestation status."""
+    """Encryption state plus each signature integrity check."""
     document_id: str
     is_encrypted: bool
     signatures: List[SignatureModel]

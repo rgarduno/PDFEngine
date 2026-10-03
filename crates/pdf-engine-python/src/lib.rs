@@ -1915,8 +1915,27 @@ impl PyPdfDocument {
         self.doc.xref.trailer.contains_key("Encrypt")
     }
 
-    /// Stamps a SHA-256 byte-range integrity attestation. This does not produce CMS or PKCS#7.
-    #[pyo3(signature = (signer_name, reason, location, rect, page_number=1, contact_info=None))]
+    /// Stamps a signature on one page.
+    ///
+    /// Without certificate material this is a SHA-256 byte-range attestation.
+    /// With PEM or PKCS#12 material it writes `/SubFilter /adbe.pkcs7.detached`
+    /// (RSA-SHA256 or P-256 ECDSA). Verification checks the certificate inside
+    /// the CMS. It does not decide whether a viewer trusts that certificate.
+    #[pyo3(signature = (
+        signer_name,
+        reason,
+        location,
+        rect,
+        page_number=1,
+        contact_info=None,
+        certificate_pem=None,
+        private_key_pem=None,
+        chain_pem=None,
+        pkcs12_der=None,
+        pkcs12_password=None,
+        timestamp_token=None,
+        reserve_timestamp=false
+    ))]
     pub fn sign(
         &mut self,
         signer_name: &str,
@@ -1925,6 +1944,13 @@ impl PyPdfDocument {
         rect: [f64; 4],
         page_number: usize,
         contact_info: Option<String>,
+        certificate_pem: Option<String>,
+        private_key_pem: Option<String>,
+        chain_pem: Option<String>,
+        pkcs12_der: Option<Vec<u8>>,
+        pkcs12_password: Option<Vec<u8>>,
+        timestamp_token: Option<Vec<u8>>,
+        reserve_timestamp: bool,
     ) -> PyResult<PyVerifiedSignature> {
         let config = DigitalSignatureConfig {
             signer_name: signer_name.to_string(),
@@ -1935,13 +1961,69 @@ impl PyPdfDocument {
             visual_badge: true,
             contact_info,
         };
-        let sig = pdf_engine_core::security::sign_document(&mut self.doc, &config)
-            .map_err(|e| PyRuntimeError::new_err(format!("Signing failed: {}", e)))?;
+        let cms = certificate_pem.is_some()
+            || private_key_pem.is_some()
+            || chain_pem.is_some()
+            || pkcs12_der.is_some()
+            || pkcs12_password.is_some()
+            || timestamp_token.is_some()
+            || reserve_timestamp;
+        let sig = if cms {
+            let material = pdf_engine_core::security::CmsSigningMaterial {
+                certificate_pem: certificate_pem.as_deref(),
+                private_key_pem: private_key_pem.as_deref(),
+                chain_pem: chain_pem.as_deref(),
+                pkcs12_der: pkcs12_der.as_deref(),
+                pkcs12_password: pkcs12_password.as_deref(),
+                timestamp_token: timestamp_token.as_deref(),
+                reserve_timestamp,
+            };
+            pdf_engine_core::security::sign_document_cms(&mut self.doc, &config, &material)
+        } else {
+            pdf_engine_core::security::sign_document(&mut self.doc, &config)
+        }
+        .map_err(|e| PyRuntimeError::new_err(format!("Signing failed: {}", e)))?;
         self.reload_active_pages()?;
         Ok(PyVerifiedSignature::from_core(sig))
     }
 
-    /// Reads signature dictionaries and checks each SHA-256 byte-range digest against the file.
+    /// DER TimeStampReq over the signature value of the last valid PKCS#7.
+    pub fn cms_timestamp_request(&self) -> PyResult<Vec<u8>> {
+        pdf_engine_core::security::cms_timestamp_request(&self.doc).map_err(|e| {
+            PyRuntimeError::new_err(format!("Timestamp request failed: {}", e))
+        })
+    }
+
+    /// Embeds an RFC 3161 token into the existing PKCS#7 contents hole.
+    pub fn embed_cms_timestamp(&mut self, token: &[u8]) -> PyResult<PyVerifiedSignature> {
+        let sig = pdf_engine_core::security::embed_cms_timestamp(&mut self.doc, token)
+            .map_err(|e| PyRuntimeError::new_err(format!("Timestamp embed failed: {}", e)))?;
+        self.reload_active_pages()?;
+        Ok(PyVerifiedSignature::from_core(sig))
+    }
+
+    /// Replaces the in-memory document with `bytes`, keeping the current limits.
+    pub fn replace_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        let limits = self.doc.limits.clone();
+        let loaded = PdfDocument::load_with_limits(bytes, limits)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load PDF: {}", e)))?;
+        let rebuilt = Self::from_doc(loaded)?;
+        self.doc = rebuilt.doc;
+        self.page_ids = rebuilt.page_ids;
+        self.active_pages = rebuilt.active_pages;
+        Ok(())
+    }
+
+    /// Returns the stored file bytes without rewriting them.
+    pub fn raw_bytes(&self) -> Vec<u8> {
+        self.doc.raw_data().to_vec()
+    }
+
+    /// Reads signature dictionaries and checks each one.
+    ///
+    /// `PDFEngine.sha256` is compared with the byte-range digest.
+    /// `adbe.pkcs7.detached` is checked against the certificate inside the CMS.
+    /// That check is not a trust decision.
     pub fn verify_signatures(&self) -> PyResult<Vec<PyVerifiedSignature>> {
         let sigs = pdf_engine_core::security::verify_document_signatures(&self.doc);
         Ok(sigs.into_iter().map(PyVerifiedSignature::from_core).collect())
