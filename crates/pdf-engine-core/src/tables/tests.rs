@@ -1,11 +1,15 @@
 //! Unit and integration tests for table detection and multi-format export.
 
+use crate::error::PdfError;
 use crate::layout::geometry::Rect;
 use crate::layout::line::TextLine;
 use crate::layout::paragraph::ParagraphBlock;
 use crate::layout::span::TextSpan;
 use crate::stream::ast::{ContentAst, ContentNode, NodeId, Operation};
-use crate::tables::detector::{detect_borderless_tables, detect_lattice_tables};
+use crate::tables::detector::{
+    detect_borderless_tables, detect_lattice_tables, MAX_LATTICE_CELL_PRODUCT,
+    MAX_MERGED_RULE_LINES, MAX_RAW_VECTOR_SEGMENTS,
+};
 use crate::tables::export::{export_to_csv, export_to_html, export_to_json, export_to_markdown};
 use crate::tables::types::{DetectedTable, TableCell};
 use crate::cos::object::PdfObject;
@@ -185,7 +189,7 @@ fn test_lattice_grid_detection() {
     };
     let para2 = ParagraphBlock::new(1, vec![line2], vec![NodeId(2)]).unwrap();
 
-    let tables = detect_lattice_tables(&ast, &[para1, para2], 1);
+    let tables = detect_lattice_tables(&ast, &[para1, para2], 1).expect("small lattice");
     assert_eq!(tables.len(), 1);
     let table = &tables[0];
     assert_eq!(table.row_count, 2);
@@ -279,4 +283,52 @@ fn test_borderless_whitespace_table_detection() {
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].col_count, 2);
     assert_eq!(tables[0].row_count, 3);
+}
+
+fn assert_segment_limit(result: Result<Vec<DetectedTable>, PdfError>) {
+    match result {
+        Err(PdfError::SecurityLimitExceeded(_)) => {}
+        other => panic!("expected a segment limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_lattice_stops_before_the_raw_segment_budget() {
+    let mut ast = ContentAst::new();
+    for i in 0..=MAX_RAW_VECTOR_SEGMENTS {
+        let y = i as f64 * 4.0;
+        add_horiz_line(&mut ast.nodes, y, 0.0, 40.0);
+    }
+
+    assert_segment_limit(detect_lattice_tables(&ast, &[], 1));
+}
+
+#[test]
+fn test_lattice_stops_before_the_merged_line_search() {
+    let mut ast = ContentAst::new();
+    for i in 0..=MAX_MERGED_RULE_LINES {
+        let y = 800.0 - (i as f64 * 4.0);
+        add_horiz_line(&mut ast.nodes, y, 40.0, 240.0);
+    }
+    add_vert_line(&mut ast.nodes, 40.0, 0.0, 800.0);
+    add_vert_line(&mut ast.nodes, 240.0, 0.0, 800.0);
+
+    assert_segment_limit(detect_lattice_tables(&ast, &[], 1));
+}
+
+#[test]
+fn test_lattice_stops_before_the_cell_product_search() {
+    let mut ast = ContentAst::new();
+    let axis: usize = 100;
+    assert!(axis < MAX_MERGED_RULE_LINES);
+    assert!(axis * axis > MAX_LATTICE_CELL_PRODUCT);
+
+    for i in 0..axis {
+        let y = 2000.0 - (i as f64 * 12.0);
+        add_horiz_line(&mut ast.nodes, y, 0.0, axis as f64 * 20.0);
+        let x = i as f64 * 20.0;
+        add_vert_line(&mut ast.nodes, x, 0.0, 2000.0);
+    }
+
+    assert_segment_limit(detect_lattice_tables(&ast, &[], 1));
 }

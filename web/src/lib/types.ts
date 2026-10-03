@@ -410,6 +410,8 @@ export interface DocumentOverviewResponse {
   document_id: string;
   filename: string;
   total_pages: number;
+  offset: number;
+  limit: number;
   pages: PageOverviewItem[];
 }
 

@@ -318,17 +318,34 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
     )
 
 
+_OVERVIEW_DEFAULT_LIMIT = 24
+_OVERVIEW_MAX_LIMIT = 48
+
+
 @app.get("/api/documents/{doc_id}/pages/overview", response_model=DocumentOverviewResponse)
-def get_document_overview(doc_id: str):
-    """Returns overview metadata, layout metrics, and preview snippets for all pages in the document."""
+def get_document_overview(doc_id: str, offset: int = 0, limit: int = _OVERVIEW_DEFAULT_LIMIT):
+    """Returns one window of page previews.
+
+    Each call reads at most 48 pages. `offset` is the first 0-based page
+    index in the window. Clients request the next window explicitly.
+    """
     session = load_session(doc_id)
+
+    if offset < 0:
+        offset = 0
+    if limit < 1:
+        limit = _OVERVIEW_DEFAULT_LIMIT
+    if limit > _OVERVIEW_MAX_LIMIT:
+        limit = _OVERVIEW_MAX_LIMIT
 
     doc = session["doc"]
     filename = session.get("filename", "document.pdf")
     total_pages = doc.page_count()
+    start = min(offset, total_pages)
+    end = min(total_pages, start + limit)
     pages_overview = []
 
-    for p_num in range(1, total_pages + 1):
+    for p_num in range(start + 1, end + 1):
         try:
             rotation = doc.get_page_rotation(p_num)
         except Exception:
@@ -357,6 +374,8 @@ def get_document_overview(doc_id: str):
         document_id=doc_id,
         filename=filename,
         total_pages=total_pages,
+        offset=start,
+        limit=limit,
         pages=pages_overview,
     )
 

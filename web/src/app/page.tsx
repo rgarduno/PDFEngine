@@ -52,6 +52,7 @@ import {
   exportTableData,
   getTableDownloadUrl,
   getDocumentOverview,
+  DOCUMENT_OVERVIEW_WINDOW,
   getPageRotation,
 } from '@/lib/api';
 import {
@@ -109,6 +110,14 @@ export default function Home() {
       height: 792,
     },
   ]);
+  const [overviewOffset, setOverviewOffset] = useState(0);
+
+  const refreshOverviewWindow = async (docId: string, offset: number) => {
+    const overview = await getDocumentOverview(docId, offset, DOCUMENT_OVERVIEW_WINDOW);
+    setOverviewOffset(overview.offset);
+    setPageOverviews(overview.pages);
+    return overview;
+  };
 
   // Undo / Redo History Stacks
   const [history, setHistory] = useState<Paragraph[][]>([MOCK_SCENEGRAPH.paragraphs]);
@@ -353,9 +362,9 @@ export default function Home() {
       setSelectedTableIdx(null);
 
       try {
-        const overview = await getDocumentOverview(newSession.document_id);
-        setPageOverviews(overview.pages);
+        await refreshOverviewWindow(newSession.document_id, 0);
       } catch {
+        setOverviewOffset(0);
         setPageOverviews(
           Array.from({ length: newSession.page_count }, (_, i) => ({
             page_number: i + 1,
@@ -923,6 +932,16 @@ export default function Home() {
   const handleNavigatePage = async (page: number) => {
     if (page < 1 || page > session.page_count) return;
     setCurrentPage(page);
+    const visible = pageOverviews.some((item) => item.page_number === page);
+    if (!visible) {
+      const nextOffset =
+        Math.floor((page - 1) / DOCUMENT_OVERVIEW_WINDOW) * DOCUMENT_OVERVIEW_WINDOW;
+      try {
+        await refreshOverviewWindow(session.document_id, nextOffset);
+      } catch (e) {
+        console.warn('Overview window unavailable', e);
+      }
+    }
     setSelectedParagraphId(null);
     setSelectedImageId(null);
     setSelectedFormFieldName(null);
@@ -983,11 +1002,18 @@ export default function Home() {
   };
 
   // Reorder pages handler
-  const handleReorderPages = async (newOrder: number[]) => {
+  const handleReorderPages = async (windowOrder: number[]) => {
     try {
-      await reorderPages(session.document_id, newOrder);
-      const overview = await getDocumentOverview(session.document_id);
-      setPageOverviews(overview.pages);
+      const total = session.page_count;
+      const full = Array.from({ length: total }, (_, i) => i + 1);
+      for (let i = 0; i < windowOrder.length; i += 1) {
+        const slot = overviewOffset + i;
+        if (slot < total) {
+          full[slot] = windowOrder[i];
+        }
+      }
+      await reorderPages(session.document_id, full);
+      await refreshOverviewWindow(session.document_id, overviewOffset);
       handleNavigatePage(currentPage);
     } catch (e) {
       console.warn('Reorder failed:', e);
@@ -1019,8 +1045,7 @@ export default function Home() {
   // Optimization completion handler
   const handleOptimizationComplete = async (_stats: OptimizeResponse) => {
     try {
-      const overview = await getDocumentOverview(session.document_id);
-      setPageOverviews(overview.pages);
+      await refreshOverviewWindow(session.document_id, overviewOffset);
     } catch (e) {
       console.warn('Overview refresh failed after optimization:', e);
     }
@@ -1106,6 +1131,10 @@ export default function Home() {
             currentPage={currentPage}
             totalPages={session.page_count}
             pageOverviews={pageOverviews}
+            windowOffset={overviewOffset}
+            onShiftWindow={(offset) => {
+              void refreshOverviewWindow(session.document_id, offset);
+            }}
             onSelectPage={handleNavigatePage}
             onRotatePage={handleRotateSpecificPage}
             onDeletePage={(pageNum) => {
@@ -1114,7 +1143,7 @@ export default function Home() {
               } else {
                 deletePages(session.document_id, [pageNum]).then(() => {
                   setSession((prev) => ({ ...prev, page_count: Math.max(1, prev.page_count - 1) }));
-                  getDocumentOverview(session.document_id).then((o) => setPageOverviews(o.pages));
+                  refreshOverviewWindow(session.document_id, overviewOffset);
                 });
               }
             }}

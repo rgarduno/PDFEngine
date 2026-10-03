@@ -1134,11 +1134,22 @@ export function getTableDownloadUrl(
   return `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/tables/${tableIdx}/export?format=${format}&download=true`;
 }
 
+/** Pages read by one overview request. Matches the API default window. */
+export const DOCUMENT_OVERVIEW_WINDOW = 24;
+
 export async function getDocumentOverview(
-  docId: string
+  docId: string,
+  offset = 0,
+  limit = DOCUMENT_OVERVIEW_WINDOW
 ): Promise<DocumentOverviewResponse> {
   try {
-    const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pages/overview`);
+    const params = new URLSearchParams({
+      offset: String(Math.max(0, offset)),
+      limit: String(limit),
+    });
+    const res = await apiFetch(
+      `${API_BASE_URL}/api/documents/${docId}/pages/overview?${params}`
+    );
     if (!res.ok) throw new Error('Failed to get document overview');
     return await res.json();
   } catch (e) {
@@ -1147,6 +1158,8 @@ export async function getDocumentOverview(
       document_id: docId,
       filename: 'document.pdf',
       total_pages: 1,
+      offset: 0,
+      limit: DOCUMENT_OVERVIEW_WINDOW,
       pages: [
         {
           page_number: 1,

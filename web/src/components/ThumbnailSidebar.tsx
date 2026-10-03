@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect } from 'react';
 import { PageOverviewItem } from '@/lib/types';
+import { DOCUMENT_OVERVIEW_WINDOW } from '@/lib/api';
 import {
   FileText,
   RotateCw,
@@ -21,6 +22,8 @@ interface ThumbnailSidebarProps {
   currentPage: number;
   totalPages: number;
   pageOverviews: PageOverviewItem[];
+  windowOffset: number;
+  onShiftWindow?: (offset: number) => void;
   onSelectPage: (pageNumber: number) => void;
   onRotatePage?: (pageNumber: number, degrees: number) => void;
   onDeletePage?: (pageNumber: number) => void;
@@ -34,6 +37,8 @@ export const ThumbnailSidebar: React.FC<ThumbnailSidebarProps> = ({
   currentPage,
   totalPages,
   pageOverviews,
+  windowOffset,
+  onShiftWindow,
   onSelectPage,
   onRotatePage,
   onDeletePage,
@@ -76,7 +81,9 @@ export const ThumbnailSidebar: React.FC<ThumbnailSidebarProps> = ({
       <div className="p-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-white/60 dark:bg-neutral-800/40">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-200 uppercase tracking-wider">
           <FileText size={14} className="text-blue-500" />
-          <span>Miniaturas ({totalPages})</span>
+          <span>
+            Miniaturas ({pageOverviews.length > 0 ? `${pageOverviews[0].page_number}–${pageOverviews[pageOverviews.length - 1].page_number}` : '0'} / {totalPages})
+          </span>
         </div>
         <button
           onClick={onClose}
@@ -192,7 +199,7 @@ export const ThumbnailSidebar: React.FC<ThumbnailSidebarProps> = ({
                   {/* Move Down */}
                   <button
                     onClick={(e) => handleMovePage(idx, 'down', e)}
-                    disabled={idx === totalPages - 1}
+                    disabled={idx === pageOverviews.length - 1}
                     title="Mover abajo"
                     className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-20 hover:text-neutral-800 dark:hover:text-neutral-200 transition-colors cursor-pointer"
                   >
@@ -222,9 +229,26 @@ export const ThumbnailSidebar: React.FC<ThumbnailSidebarProps> = ({
       </div>
 
       {/* Sidebar Footer info */}
-      <div className="p-2.5 border-t border-neutral-200 dark:border-neutral-800 bg-white/40 dark:bg-neutral-850/40 text-[10px] text-neutral-400 flex items-center justify-between">
-        <span>ISO 32000 Structure</span>
+      <div className="p-2.5 border-t border-neutral-200 dark:border-neutral-800 bg-white/40 dark:bg-neutral-850/40 text-[10px] text-neutral-400 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          disabled={windowOffset <= 0}
+          onClick={() =>
+            onShiftWindow?.(Math.max(0, windowOffset - DOCUMENT_OVERVIEW_WINDOW))
+          }
+          className="px-1.5 py-0.5 rounded border border-neutral-200 dark:border-neutral-700 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+        >
+          Anterior
+        </button>
         <span className="font-mono">{totalPages} Págs</span>
+        <button
+          type="button"
+          disabled={windowOffset + pageOverviews.length >= totalPages}
+          onClick={() => onShiftWindow?.(windowOffset + DOCUMENT_OVERVIEW_WINDOW)}
+          className="px-1.5 py-0.5 rounded border border-neutral-200 dark:border-neutral-700 disabled:opacity-30 cursor-pointer disabled:cursor-default"
+        >
+          Siguiente
+        </button>
       </div>
     </aside>
   );

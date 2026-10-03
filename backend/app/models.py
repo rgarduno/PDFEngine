@@ -46,10 +46,17 @@ class PageOverviewItem(BaseModel):
 
 
 class DocumentOverviewResponse(BaseModel):
-    """Collection of page summaries for multi-page thumbnail navigation."""
+    """One window of page summaries for thumbnail navigation.
+
+    `pages` covers `[offset, offset + len(pages))`. `total_pages` is the
+    document length. A client pages with `offset` instead of requesting
+    every page in one call.
+    """
     document_id: str
     filename: str
     total_pages: int
+    offset: int = 0
+    limit: int = 24
     pages: List[PageOverviewItem]
 
 

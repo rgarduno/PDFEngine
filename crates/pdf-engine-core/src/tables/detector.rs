@@ -32,6 +32,32 @@ pub struct VertSegment {
     pub max_y: f64,
 }
 
+/// Raw ruling fragments kept while scanning one page.
+/// The lattice search does not start once this budget is spent.
+pub(crate) const MAX_RAW_VECTOR_SEGMENTS: usize = 8192;
+
+/// Merged ruling lines allowed on one axis before the cell search.
+pub(crate) const MAX_MERGED_RULE_LINES: usize = 192;
+
+/// Distinct row levels times column levels examined for one lattice.
+pub(crate) const MAX_LATTICE_CELL_PRODUCT: usize = 8192;
+
+/// Cells admitted to the adjacency cluster. That walk is quadratic in this count.
+pub(crate) const MAX_TABLE_CELLS: usize = 1024;
+
+fn vector_budget(horiz: &[HorizSegment], vert: &[VertSegment], rects: &[Rect]) -> usize {
+    horiz.len() + vert.len() + rects.len()
+}
+
+fn ensure_vector_budget(used: usize, adding: usize) -> PdfResult<()> {
+    if used.saturating_add(adding) > MAX_RAW_VECTOR_SEGMENTS {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "table detector refuses more than {MAX_RAW_VECTOR_SEGMENTS} vector segments on one page"
+        )));
+    }
+    Ok(())
+}
+
 /// Detects all structured tables on a given page of the document.
 pub fn detect_tables(doc: &mut PdfDocument, page_idx: usize) -> PdfResult<Vec<DetectedTable>> {
     let pages = doc.get_pages()?;
@@ -56,8 +82,10 @@ pub fn detect_tables(doc: &mut PdfDocument, page_idx: usize) -> PdfResult<Vec<De
     let reconstructor = LayoutReconstructor::new(&ast);
     let paragraphs = reconstructor.reconstruct()?;
 
-    // 2. Try lattice-based (vector ruled grid) table detection
-    let mut tables = detect_lattice_tables(&ast, &paragraphs, page_idx);
+    // 2. Try lattice-based (vector ruled grid) table detection.
+    // A page that exceeds the segment budget fails closed; it is not
+    // reinterpreted as a borderless table.
+    let mut tables = detect_lattice_tables(&ast, &paragraphs, page_idx)?;
 
     // 3. If no ruled tables found, attempt stream (borderless whitespace) table detection
     if tables.is_empty() {
@@ -72,16 +100,30 @@ pub fn detect_lattice_tables(
     ast: &ContentAst,
     paragraphs: &[ParagraphBlock],
     page_number: usize,
-) -> Vec<DetectedTable> {
-    let (mut horiz_lines, mut vert_lines, cell_boxes) = extract_vector_segments(&ast.nodes);
+) -> PdfResult<Vec<DetectedTable>> {
+    let (mut horiz_lines, mut vert_lines, cell_boxes) = extract_vector_segments(&ast.nodes)?;
 
     merge_collinear_horiz_segments(&mut horiz_lines);
     merge_collinear_vert_segments(&mut vert_lines);
 
+    if horiz_lines.len() > MAX_MERGED_RULE_LINES || vert_lines.len() > MAX_MERGED_RULE_LINES {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "table detector refuses a ruling grid above {MAX_MERGED_RULE_LINES} lines on one axis"
+        )));
+    }
+
     // If we have at least 2 horizontal and 2 vertical lines, find grid cells
     let mut detected_cells = Vec::new();
     if horiz_lines.len() >= 2 && vert_lines.len() >= 2 {
-        detected_cells = find_lattice_cells(&horiz_lines, &vert_lines);
+        detected_cells = find_lattice_cells(&horiz_lines, &vert_lines)?;
+    }
+
+    // Explicit `re` cells are matched against every detected cell. Refuse
+    // before that scan when the combined set cannot fit the cluster budget.
+    if detected_cells.len().saturating_add(cell_boxes.len()) > MAX_TABLE_CELLS {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "table detector refuses more than {MAX_TABLE_CELLS} candidate cells"
+        )));
     }
 
     // Merge in any explicit cell rectangles discovered directly from `re` operators
@@ -100,11 +142,11 @@ pub fn detect_lattice_tables(
     }
 
     if detected_cells.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Cluster adjacent cells into table candidates
-    let clusters = cluster_cells_into_tables(detected_cells);
+    let clusters = cluster_cells_into_tables(detected_cells)?;
     let mut results = Vec::new();
 
     for (table_idx, cluster) in clusters.into_iter().enumerate() {
@@ -117,21 +159,21 @@ pub fn detect_lattice_tables(
         }
     }
 
-    results
+    Ok(results)
 }
 
 /// Recursively scans AST nodes tracking CTM and extracting horizontal/vertical vector lines.
 fn extract_vector_segments(
     nodes: &[ContentNode],
-) -> (Vec<HorizSegment>, Vec<VertSegment>, Vec<Rect>) {
+) -> PdfResult<(Vec<HorizSegment>, Vec<VertSegment>, Vec<Rect>)> {
     let mut horiz = Vec::new();
     let mut vert = Vec::new();
     let mut rects = Vec::new();
     let mut state_stack = GraphicsStateStack::new();
 
-    scan_nodes_for_segments(nodes, &mut state_stack, &mut horiz, &mut vert, &mut rects);
+    scan_nodes_for_segments(nodes, &mut state_stack, &mut horiz, &mut vert, &mut rects)?;
 
-    (horiz, vert, rects)
+    Ok((horiz, vert, rects))
 }
 
 fn scan_nodes_for_segments(
@@ -140,7 +182,7 @@ fn scan_nodes_for_segments(
     horiz: &mut Vec<HorizSegment>,
     vert: &mut Vec<VertSegment>,
     rects: &mut Vec<Rect>,
-) {
+) -> PdfResult<()> {
     let mut current_point: Option<Point> = None;
     let mut subpath_start: Option<Point> = None;
 
@@ -148,7 +190,7 @@ fn scan_nodes_for_segments(
         match node {
             ContentNode::GraphicsGroup { children, .. } => {
                 state_stack.push();
-                scan_nodes_for_segments(children, state_stack, horiz, vert, rects);
+                scan_nodes_for_segments(children, state_stack, horiz, vert, rects)?;
                 state_stack.pop();
             }
             ContentNode::Instruction { operation, .. } => {
@@ -160,13 +202,14 @@ fn scan_nodes_for_segments(
                     horiz,
                     vert,
                     rects,
-                );
+                )?;
             }
             ContentNode::TextBlock { .. } => {
                 // Text blocks do not draw vector grid lines
             }
         }
     }
+    Ok(())
 }
 
 fn process_path_operation(
@@ -177,7 +220,7 @@ fn process_path_operation(
     horiz: &mut Vec<HorizSegment>,
     vert: &mut Vec<VertSegment>,
     rects: &mut Vec<Rect>,
-) {
+) -> PdfResult<()> {
     let ctm = state_stack.current.ctm;
 
     match op.operator.as_str() {
@@ -213,7 +256,7 @@ fn process_path_operation(
                 let (px, py) = ctm.transform_point(x, y);
                 let p2 = Point::new(px, py);
                 if let Some(p1) = *current_point {
-                    evaluate_line_segment(p1, p2, horiz, vert);
+                    evaluate_line_segment(p1, p2, horiz, vert, rects)?;
                 }
                 *current_point = Some(p2);
             }
@@ -222,7 +265,7 @@ fn process_path_operation(
             // Close subpath by connecting to subpath_start
             if let (Some(p1), Some(p2)) = (*current_point, *subpath_start) {
                 if (p1.x - p2.x).abs() > 0.1 || (p1.y - p2.y).abs() > 0.1 {
-                    evaluate_line_segment(p1, p2, horiz, vert);
+                    evaluate_line_segment(p1, p2, horiz, vert, rects)?;
                 }
             }
             *current_point = *subpath_start;
@@ -249,6 +292,7 @@ fn process_path_operation(
 
                 if width >= 6.0 && height <= 3.0 {
                     // Thin horizontal ruled line
+                    ensure_vector_budget(vector_budget(horiz, vert, rects), 1)?;
                     horiz.push(HorizSegment {
                         y: (min_y + max_y) / 2.0,
                         min_x,
@@ -256,6 +300,7 @@ fn process_path_operation(
                     });
                 } else if height >= 6.0 && width <= 3.0 {
                     // Thin vertical ruled line
+                    ensure_vector_budget(vector_budget(horiz, vert, rects), 1)?;
                     vert.push(VertSegment {
                         x: (min_x + max_x) / 2.0,
                         min_y,
@@ -263,6 +308,7 @@ fn process_path_operation(
                     });
                 } else if width >= 8.0 && height >= 6.0 {
                     // Explicit rectangle: add outer borders as segments and store as potential cell
+                    ensure_vector_budget(vector_budget(horiz, vert, rects), 5)?;
                     horiz.push(HorizSegment { y: min_y, min_x, max_x });
                     horiz.push(HorizSegment { y: max_y, min_x, max_x });
                     vert.push(VertSegment { x: min_x, min_y, max_y });
@@ -273,6 +319,7 @@ fn process_path_operation(
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn evaluate_line_segment(
@@ -280,23 +327,27 @@ fn evaluate_line_segment(
     p2: Point,
     horiz: &mut Vec<HorizSegment>,
     vert: &mut Vec<VertSegment>,
-) {
+    rects: &[Rect],
+) -> PdfResult<()> {
     let dx = (p2.x - p1.x).abs();
     let dy = (p2.y - p1.y).abs();
 
     if dy <= 1.5 && dx >= 6.0 {
+        ensure_vector_budget(vector_budget(horiz, vert, rects), 1)?;
         horiz.push(HorizSegment {
             y: (p1.y + p2.y) / 2.0,
             min_x: p1.x.min(p2.x),
             max_x: p1.x.max(p2.x),
         });
     } else if dx <= 1.5 && dy >= 6.0 {
+        ensure_vector_budget(vector_budget(horiz, vert, rects), 1)?;
         vert.push(VertSegment {
             x: (p1.x + p2.x) / 2.0,
             min_y: p1.y.min(p2.y),
             max_y: p1.y.max(p2.y),
         });
     }
+    Ok(())
 }
 
 /// Merges collinear horizontal segments that share roughly the same Y coordinate and overlap or touch.
@@ -356,7 +407,7 @@ fn merge_collinear_vert_segments(segments: &mut Vec<VertSegment>) {
 }
 
 /// Finds lattice cells formed by intersecting horizontal and vertical lines.
-fn find_lattice_cells(horiz: &[HorizSegment], vert: &[VertSegment]) -> Vec<Rect> {
+fn find_lattice_cells(horiz: &[HorizSegment], vert: &[VertSegment]) -> PdfResult<Vec<Rect>> {
     // Extract unique Y coordinates (clustered within 2.5 pt)
     let mut y_levels: Vec<f64> = horiz.iter().map(|h| h.y).collect();
     y_levels.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // Descending: top to bottom
@@ -368,7 +419,14 @@ fn find_lattice_cells(horiz: &[HorizSegment], vert: &[VertSegment]) -> Vec<Rect>
     x_levels = cluster_floats(x_levels, 2.5);
 
     if y_levels.len() < 2 || x_levels.len() < 2 {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+
+    let cell_product = y_levels.len().saturating_mul(x_levels.len());
+    if cell_product > MAX_LATTICE_CELL_PRODUCT {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "table detector refuses a lattice of {cell_product} candidate cells"
+        )));
     }
 
     let mut cells = Vec::new();
@@ -409,7 +467,7 @@ fn find_lattice_cells(horiz: &[HorizSegment], vert: &[VertSegment]) -> Vec<Rect>
         }
     }
 
-    cells
+    Ok(cells)
 }
 
 /// Clusters close floating point numbers into single representative values.
@@ -436,8 +494,13 @@ fn cluster_floats(vals: Vec<f64>, tolerance: f64) -> Vec<f64> {
 }
 
 /// Clusters cell bounding boxes into connected components forming discrete tables.
-fn cluster_cells_into_tables(cells: Vec<Rect>) -> Vec<Vec<Rect>> {
+fn cluster_cells_into_tables(cells: Vec<Rect>) -> PdfResult<Vec<Vec<Rect>>> {
     let n = cells.len();
+    if n > MAX_TABLE_CELLS {
+        return Err(PdfError::SecurityLimitExceeded(format!(
+            "table detector refuses to cluster {n} cells"
+        )));
+    }
     let mut visited = vec![false; n];
     let mut clusters = Vec::new();
 
@@ -476,7 +539,7 @@ fn cluster_cells_into_tables(cells: Vec<Rect>) -> Vec<Vec<Rect>> {
         clusters.push(current_cluster);
     }
 
-    clusters
+    Ok(clusters)
 }
 
 /// Builds a structured `DetectedTable` from a cluster of cell bounding boxes and page paragraphs.

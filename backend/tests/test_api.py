@@ -1324,7 +1324,39 @@ def test_document_pages_overview_and_rotation_endpoints():
     # 5. Check updated overview reflects 90 degrees
     updated_overview_resp = client.get(f"/api/documents/{doc_id}/pages/overview")
     assert updated_overview_resp.status_code == 200
-    assert updated_overview_resp.json()["pages"][0]["rotation"] == 90
+    updated = updated_overview_resp.json()
+    assert updated["pages"][0]["rotation"] == 90
+    assert updated["offset"] == 0
+    assert updated["limit"] == 24
+
+    # 6. A request names its own window. Past the last page the list is empty,
+    # and a limit above the per-request ceiling is clamped.
+    window_resp = client.get(
+        f"/api/documents/{doc_id}/pages/overview",
+        params={"offset": 0, "limit": 1},
+    )
+    assert window_resp.status_code == 200
+    window = window_resp.json()
+    assert window["limit"] == 1
+    assert len(window["pages"]) == 1
+    assert window["total_pages"] == 1
+
+    past_end = client.get(
+        f"/api/documents/{doc_id}/pages/overview",
+        params={"offset": 1, "limit": 24},
+    )
+    assert past_end.status_code == 200
+    assert past_end.json()["pages"] == []
+    assert past_end.json()["total_pages"] == 1
+    assert past_end.json()["offset"] == 1
+
+    clamped = client.get(
+        f"/api/documents/{doc_id}/pages/overview",
+        params={"limit": 1000},
+    )
+    assert clamped.status_code == 200
+    assert clamped.json()["limit"] == 48
+    assert len(clamped.json()["pages"]) == 1
 
 
 def test_document_optimization_and_export_endpoints():
