@@ -33,8 +33,21 @@ impl Default for SecurityLimits {
     }
 }
 
+/// Compressed inputs at or below this size may exceed the ratio until the
+/// output passes [`SMALL_STREAM_OUTPUT_FLOOR`].
+const SMALL_STREAM_BYTES: usize = 1024;
+
+/// Output size at which the ratio applies even to a small compressed input.
+const SMALL_STREAM_OUTPUT_FLOOR: usize = 1024 * 1024;
+
 impl SecurityLimits {
     /// Validates whether a decompressed stream size remains within allowable security bounds.
+    ///
+    /// The absolute ceiling is checked first. The expansion ratio then applies
+    /// to every compressed input larger than 1 KiB. A smaller input may exceed
+    /// the ratio until its output passes 1 MiB, which keeps a short legitimate
+    /// header from being rejected while a 1 KiB input cannot grow toward the
+    /// ceiling. An empty compressed input that still yields output is rejected.
     ///
     /// # Arguments
     /// * `compressed_size` - Size in bytes of the compressed stream source.
@@ -47,15 +60,23 @@ impl SecurityLimits {
             )));
         }
 
-        // Apply ratio check only if compressed size is non-trivial (> 1 KiB) to avoid false positives on tiny headers
-        if compressed_size > 1024 {
-            let ratio = decompressed_size / compressed_size;
-            if ratio > self.max_decompression_ratio {
+        if compressed_size == 0 {
+            if decompressed_size > 0 {
                 return Err(PdfError::SecurityLimitExceeded(format!(
-                    "Decompression expansion ratio ({}x) exceeds maximum allowable safety ratio ({}x)",
-                    ratio, self.max_decompression_ratio
+                    "Decompression expansion ratio is undefined for an empty compressed stream of {decompressed_size} bytes"
                 )));
             }
+            return Ok(());
+        }
+
+        let ratio = decompressed_size / compressed_size;
+        let small_input = compressed_size <= SMALL_STREAM_BYTES;
+        let under_floor = decompressed_size <= SMALL_STREAM_OUTPUT_FLOOR;
+        if ratio > self.max_decompression_ratio && !(small_input && under_floor) {
+            return Err(PdfError::SecurityLimitExceeded(format!(
+                "Decompression expansion ratio ({}x) exceeds maximum allowable safety ratio ({}x)",
+                ratio, self.max_decompression_ratio
+            )));
         }
 
         Ok(())
@@ -82,5 +103,54 @@ impl SecurityLimits {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_stream_may_exceed_the_ratio_under_one_mebibyte() {
+        let limits = SecurityLimits::default();
+        limits.validate_decompression(100, 50 * 1024).expect("50 KiB from 100 bytes");
+        limits
+            .validate_decompression(SMALL_STREAM_BYTES, SMALL_STREAM_OUTPUT_FLOOR)
+            .expect("the floor itself is still accepted");
+    }
+
+    #[test]
+    fn small_stream_above_the_floor_is_rejected() {
+        let limits = SecurityLimits::default();
+        let err = limits
+            .validate_decompression(100, SMALL_STREAM_OUTPUT_FLOOR + 1)
+            .expect_err("a small input cannot expand past the floor");
+        match err {
+            PdfError::SecurityLimitExceeded(msg) => assert!(msg.contains("expansion ratio")),
+            other => panic!("expected a ratio limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_compressed_stream_with_output_is_rejected() {
+        let limits = SecurityLimits::default();
+        limits.validate_decompression(0, 0).expect("empty to empty");
+        let err = limits
+            .validate_decompression(0, 1)
+            .expect_err("empty input cannot yield output");
+        assert!(matches!(err, PdfError::SecurityLimitExceeded(_)));
+    }
+
+    #[test]
+    fn input_above_one_kibibyte_keeps_the_ratio() {
+        let limits = SecurityLimits::default();
+        let compressed = SMALL_STREAM_BYTES + 1;
+        limits
+            .validate_decompression(compressed, compressed * limits.max_decompression_ratio)
+            .expect("the ratio boundary is accepted");
+        let err = limits
+            .validate_decompression(compressed, compressed * (limits.max_decompression_ratio + 1))
+            .expect_err("one step past the ratio is rejected");
+        assert!(matches!(err, PdfError::SecurityLimitExceeded(_)));
     }
 }

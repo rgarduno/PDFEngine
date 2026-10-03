@@ -179,7 +179,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 
 | Defense Vector | Attack Mechanism | Engine Mitigation |
 | :--- | :--- | :--- |
-| **Zip / Decompression Bombs** | Small compressed streams expanding to gigabytes in memory. | Bounded chunk reader enforcing a **100:1 maximum expansion ratio** and a hard ceiling of 256 MiB. Inputs of 1 KiB or less skip the ratio check; the ceiling still applies. PNG image data uses the same ceiling, and a predictor `Columns` of 0 is rejected. |
+| **Zip / Decompression Bombs** | Small compressed streams expanding to gigabytes in memory. | Bounded chunk reader enforcing a **100:1 maximum expansion ratio** and a hard ceiling of 256 MiB. A compressed input of 1 KiB or less may exceed that ratio until the output passes 1 MiB. An empty compressed stream that yields output is rejected. PNG image data uses the same ceiling, and a predictor `Columns` of 0 is rejected. |
 | **Circular Reference Loops** | Malicious indirect objects referencing each other cyclically. | Traversal depth limit (maximum 64 levels) and `HashSet<(u32, u16)>` cycle detection. |
 | **Buffer Overflows & Use-After-Free** | Pointer manipulation bugs in legacy C/C++ parsers. | **100% Safe Rust** codebase. Memory safety guaranteed at compile time without garbage collection pauses. |
 | **Malicious Active Scripts** | Exploits via embedded `/JavaScript` or `/Launch` actions. | Save removes `/JavaScript`, `/JS`, `/Launch`, `/SubmitForm`, `/OpenAction`, and `/AA`. `http` and `https` `/URI` links stay; `javascript`, `vbscript`, `file`, and `data` schemes are removed. |
