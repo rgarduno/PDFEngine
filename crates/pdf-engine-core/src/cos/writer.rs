@@ -156,33 +156,37 @@ impl<W: Write> Writer<W> {
     ) -> io::Result<()> {
         let startxref_offset = self.bytes_written;
 
-        // Group contiguous object numbers into subsections
+        // Object 0 is the free-list head. Later numbers are written in order,
+        // and a hole starts a new subsection. One subsection of `0 N` is only
+        // valid when the in-use numbers are exactly 1, 2, ..., N-1.
         let mut sorted = offsets.to_vec();
-        sorted.sort_by_key(|&(id, _)| id.number);
+        sorted.sort_by_key(|&(id, _)| (id.number, id.generation));
+        sorted.retain(|(id, _)| id.number != 0);
 
         self.write_all(b"xref\n")?;
 
-        if sorted.is_empty() {
-            self.write_all(b"0 1\n0000000000 65535 f \n")?;
-        } else {
-            // First entry: object 0 (free head)
-            let first_num = sorted[0].0.number;
-            if first_num == 1 {
-                self.write_all(format!("0 {}\n", sorted.len() + 1).as_bytes())?;
-                self.write_all(b"0000000000 65535 f \n")?;
-                for (id, offset) in &sorted {
-                    self.write_all(
-                        format!("{:010} {:05} n \n", offset, id.generation).as_bytes(),
-                    )?;
-                }
-            } else {
-                self.write_all(format!("{} {}\n", first_num, sorted.len()).as_bytes())?;
-                for (id, offset) in &sorted {
-                    self.write_all(
-                        format!("{:010} {:05} n \n", offset, id.generation).as_bytes(),
-                    )?;
+        let mut entries: Vec<(u32, u16, usize, bool)> = Vec::with_capacity(sorted.len() + 1);
+        entries.push((0, 65535, 0, false));
+        for (id, offset) in &sorted {
+            entries.push((id.number, id.generation, *offset, true));
+        }
+
+        let mut index = 0;
+        while index < entries.len() {
+            let start = entries[index].0;
+            let mut end = index + 1;
+            while end < entries.len() && entries[end].0 == entries[end - 1].0.saturating_add(1) {
+                end += 1;
+            }
+            self.write_all(format!("{} {}\n", start, end - index).as_bytes())?;
+            for &(_, generation, offset, in_use) in &entries[index..end] {
+                if in_use {
+                    self.write_all(format!("{:010} {:05} n \n", offset, generation).as_bytes())?;
+                } else {
+                    self.write_all(b"0000000000 65535 f \n")?;
                 }
             }
+            index = end;
         }
 
         // Write trailer

@@ -584,6 +584,7 @@ impl PdfDocument {
         // Write all objects present in the objects map sorted by number
         let mut sorted_keys: Vec<ObjectId> = self.objects.keys().copied().collect();
         sorted_keys.sort_by_key(|id| id.number);
+        let highest = sorted_keys.iter().map(|id| id.number).max().unwrap_or(0);
 
         for id in sorted_keys {
             if let Some(obj) = self.objects.get(&id) {
@@ -593,7 +594,15 @@ impl PdfDocument {
         }
 
         let mut trailer = self.xref.trailer.clone();
-        trailer.insert("Size", (offsets.len() + 1) as i64);
+        // A full rewrite emits a classic table. Keys that belonged to the
+        // previous cross-reference stream are not trailer keys anymore.
+        if trailer.get("Type").and_then(|obj| obj.as_name()) == Some("XRef") {
+            trailer.remove("Type");
+        }
+        for key in ["W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm"] {
+            trailer.remove(key);
+        }
+        trailer.insert("Size", i64::from(highest) + 1);
         writer.write_xref_and_trailer(&offsets, &trailer)?;
 
         // A full rewrite moves every offset, so an existing SHA-256 attestation
@@ -657,5 +666,25 @@ mod tests {
         );
         let error = doc.get_object(first).unwrap_err();
         assert!(error.to_string().contains("Circular"));
+    }
+
+    #[test]
+    fn classic_save_roundtrips_a_gap_in_object_numbers() {
+        let mut doc = PdfDocument::empty();
+        let gap_id = ObjectId::new(4);
+        let mut dict = PdfDictionary::new();
+        dict.insert("Type", PdfName::new("Font"));
+        doc.set_object(gap_id, PdfObject::Dictionary(dict));
+
+        let bytes = doc.save_to_vec().expect("save");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("xref\n0 3\n"), "{text}");
+        assert!(text.contains("\n4 1\n"), "{text}");
+        assert!(!text.contains("/Type /XRef"));
+
+        let mut loaded = PdfDocument::load(&bytes).expect("load");
+        let saved = loaded.get_object(gap_id).expect("object 4");
+        assert_eq!(saved.as_dict().and_then(|d| d.get("Type")).and_then(|o| o.as_name()), Some("Font"));
+        assert!(loaded.get_object(ObjectId::new(1)).is_ok());
     }
 }
