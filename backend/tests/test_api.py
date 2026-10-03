@@ -2,6 +2,7 @@
 
 import io
 import os
+import threading
 
 os.environ["PDFENGINE_API_KEYS"] = "pdfengine-test-key-0001,pdfengine-test-key-0002"
 
@@ -10,8 +11,18 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.audit import MAX_AUDIT_EVENTS, clear_events, events_for, record
-from app.auth import DOCUMENT_SESSIONS, _ws_tickets
-from app.main import app
+from app.auth import (
+    DOCUMENT_SESSIONS,
+    _ws_tickets,
+    adopt_subject,
+    authenticate_header,
+    clear_document_locks,
+    document_mutation,
+    document_mutations,
+    reset_subject,
+)
+from app.main import app, get_document_overview, rotate_page_endpoint
+from app.models import RotatePageRequest
 
 client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0001"})
 other_client = TestClient(app, headers={"Authorization": "Bearer pdfengine-test-key-0002"})
@@ -23,10 +34,12 @@ def _clear_document_sessions():
     """Drop leftover sessions so the default cap of 32 does not depend on order."""
     DOCUMENT_SESSIONS.clear()
     _ws_tickets.clear()
+    clear_document_locks()
     clear_events()
     yield
     DOCUMENT_SESSIONS.clear()
     _ws_tickets.clear()
+    clear_document_locks()
     clear_events()
 
 
@@ -1916,6 +1929,156 @@ def test_audit_log_drops_the_oldest_event_and_rejects_free_text():
     assert len(kept) == MAX_AUDIT_EVENTS
     assert kept[0].document_id == "doc-2"
     assert kept[-1].document_id == f"doc-{MAX_AUDIT_EVENTS + 1}"
+
+
+def _subject():
+    subject = authenticate_header("Bearer pdfengine-test-key-0001")
+    assert subject is not None
+    return subject
+
+
+def test_same_document_mutations_wait_and_reads_do_not():
+    """A second edit of one document waits. A read of that document does not."""
+    _, upload = _upload_minimal()
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    subject = _subject()
+    holding = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    outcome: dict = {}
+
+    def holder():
+        token = adopt_subject(subject)
+        try:
+            with document_mutation(doc_id):
+                holding.set()
+                assert release.wait(timeout=3)
+        finally:
+            reset_subject(token)
+
+    def contender():
+        token = adopt_subject(subject)
+        try:
+            outcome["response"] = rotate_page_endpoint(
+                doc_id, 1, RotatePageRequest(degrees=90)
+            )
+        except Exception as exc:
+            outcome["error"] = exc
+        finally:
+            finished.set()
+            reset_subject(token)
+
+    first = threading.Thread(target=holder)
+    second = threading.Thread(target=contender)
+    first.start()
+    assert holding.wait(timeout=2)
+    second.start()
+    assert finished.wait(timeout=0.3) is False
+
+    token = adopt_subject(subject)
+    try:
+        overview = get_document_overview(doc_id)
+    finally:
+        reset_subject(token)
+    assert overview.document_id == doc_id
+    assert overview.total_pages == 1
+    assert finished.is_set() is False
+
+    release.set()
+    assert finished.wait(timeout=3)
+    first.join(timeout=2)
+    second.join(timeout=2)
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert "error" not in outcome
+    assert outcome["response"].new_rotation == 90
+
+
+def test_distinct_documents_mutate_at_the_same_time():
+    """Holding one document does not block a mutation of another."""
+    _, first_upload = _upload_minimal("a.pdf")
+    _, second_upload = _upload_minimal("b.pdf")
+    id_a = first_upload.json()["document_id"]
+    id_b = second_upload.json()["document_id"]
+    subject = _subject()
+    holding = threading.Event()
+    release = threading.Event()
+    entered_b = threading.Event()
+
+    def hold_a():
+        token = adopt_subject(subject)
+        try:
+            with document_mutation(id_a):
+                holding.set()
+                assert release.wait(timeout=3)
+        finally:
+            reset_subject(token)
+
+    def enter_b():
+        token = adopt_subject(subject)
+        try:
+            with document_mutation(id_b):
+                entered_b.set()
+        finally:
+            reset_subject(token)
+
+    holder = threading.Thread(target=hold_a)
+    other = threading.Thread(target=enter_b)
+    holder.start()
+    assert holding.wait(timeout=2)
+    other.start()
+    assert entered_b.wait(timeout=1)
+    release.set()
+    holder.join(timeout=2)
+    other.join(timeout=2)
+    assert holder.is_alive() is False
+    assert other.is_alive() is False
+
+
+def test_merging_locks_documents_in_id_order():
+    """Opposite merge orders take the same lock sequence and both finish."""
+    _, first_upload = _upload_minimal("a.pdf")
+    _, second_upload = _upload_minimal("b.pdf")
+    id_a = first_upload.json()["document_id"]
+    id_b = second_upload.json()["document_id"]
+    subject = _subject()
+    inside = threading.Event()
+    release = threading.Event()
+    names: dict = {}
+
+    def first_order():
+        token = adopt_subject(subject)
+        try:
+            with document_mutations([id_b, id_a]) as sessions:
+                names["first"] = [session["filename"] for session in sessions]
+                inside.set()
+                assert release.wait(timeout=3)
+        finally:
+            reset_subject(token)
+
+    def second_order():
+        token = adopt_subject(subject)
+        try:
+            with document_mutations([id_a, id_b]) as sessions:
+                names["second"] = [session["filename"] for session in sessions]
+        finally:
+            reset_subject(token)
+
+    earlier = threading.Thread(target=first_order)
+    later = threading.Thread(target=second_order)
+    earlier.start()
+    assert inside.wait(timeout=2)
+    later.start()
+    later.join(timeout=0.3)
+    assert later.is_alive()
+    release.set()
+    later.join(timeout=2)
+    earlier.join(timeout=2)
+    assert earlier.is_alive() is False
+    assert later.is_alive() is False
+    assert names["first"] == ["b.pdf", "a.pdf"]
+    assert names["second"] == ["a.pdf", "b.pdf"]
 
 
 

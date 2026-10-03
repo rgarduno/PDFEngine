@@ -4,8 +4,11 @@ High-performance FastAPI service providing document ingestion,
 interactive scene graph layout inspection, and surgical in-place PDF editing.
 """
 
+import asyncio
+import inspect
 import logging
 import os
+from functools import wraps
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -15,9 +18,12 @@ from app.audit import events_for, record_document_action
 from app.auth import (
     AuthMiddleware,
     adopt_subject,
+    begin_document_mutation,
     bind_session,
     consume_ws_ticket,
     current_subject,
+    document_mutation,
+    document_mutations,
     ensure_session_capacity,
     issue_ws_ticket,
     load_session,
@@ -106,6 +112,43 @@ logger = logging.getLogger("pdfengine.api")
 # Shown to clients when the engine raises. The cause is written to the server log.
 _PUBLIC_FAILURE_DETAIL = "The request could not be completed."
 _CORS_ALLOW_METHODS = b"GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD"
+
+
+def serialized_mutation(func):
+    """Serialize calls that mutate the document named by ``doc_id``.
+
+    The lock covers the whole call. Readers keep using ``load_session`` and
+    do not pass through here. Merge locks its sources itself, in id order.
+    """
+    signature = inspect.signature(func)
+
+    def doc_id_of(args, kwargs) -> str:
+        bound = signature.bind_partial(*args, **kwargs)
+        doc_id = bound.arguments.get("doc_id")
+        if not isinstance(doc_id, str) or not doc_id:
+            raise HTTPException(status_code=404, detail="Document session not found.")
+        return doc_id
+
+    if inspect.iscoroutinefunction(func):
+
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            lock = await asyncio.to_thread(
+                begin_document_mutation, doc_id_of(args, kwargs)
+            )
+            try:
+                return await func(*args, **kwargs)
+            finally:
+                lock.release()
+
+        return wrapper
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with document_mutation(doc_id_of(args, kwargs)):
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _public_error(status_code: int, exc: BaseException) -> HTTPException:
@@ -422,6 +465,7 @@ def get_page_rotation_endpoint(doc_id: str, page_idx: int):
     "/api/documents/{doc_id}/pages/{page_idx}/edit/{paragraph_id}",
     response_model=EditParagraphResponse,
 )
+@serialized_mutation
 def edit_paragraph(
     doc_id: str, page_idx: int, paragraph_id: int, request: EditParagraphRequest
 ):
@@ -643,6 +687,7 @@ def get_image_binary(doc_id: str, image_id: int):
 
 
 @app.post("/api/documents/{doc_id}/images/{image_id}/replace")
+@serialized_mutation
 async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)):
     """Surgically replaces an existing image XObject in the PDF with a new JPEG or PNG file."""
     session = load_session(doc_id)
@@ -715,6 +760,7 @@ def get_document_forms(doc_id: str):
 
 
 @app.post("/api/documents/{doc_id}/forms/fill", response_model=FillFormsResponse)
+@serialized_mutation
 def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
     """Fills one or more interactive form fields by name in a batch transaction."""
     session = load_session(doc_id)
@@ -735,6 +781,7 @@ def fill_document_forms(doc_id: str, request: BatchFillFormsRequest):
 
 
 @app.post("/api/documents/{doc_id}/forms/flatten", response_model=FlattenFormsResponse)
+@serialized_mutation
 def flatten_document_forms_endpoint(doc_id: str):
     """Permanently flattens all interactive form fields into page vectors and strips widget annotations."""
     session = load_session(doc_id)
@@ -755,6 +802,7 @@ def flatten_document_forms_endpoint(doc_id: str):
 
 
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/forms", response_model=CreateFormFieldResponse)
+@serialized_mutation
 def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFieldRequest):
     """Creates and places a new interactive AcroForm field on a specific page."""
     session = load_session(doc_id)
@@ -814,6 +862,7 @@ def create_form_field_endpoint(doc_id: str, page_idx: int, request: CreateFormFi
 
 
 @app.delete("/api/documents/{doc_id}/forms/{field_name}", response_model=DeleteFormFieldResponse)
+@serialized_mutation
 def delete_form_field_endpoint(doc_id: str, field_name: str):
     """Deletes an interactive form field from the document by name."""
     session = load_session(doc_id)
@@ -836,6 +885,7 @@ def delete_form_field_endpoint(doc_id: str, field_name: str):
 
 
 @app.put("/api/documents/{doc_id}/forms/{field_name}", response_model=UpdateFormFieldResponse)
+@serialized_mutation
 def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateFormFieldRequest):
     """Updates geometry or properties of an existing form field."""
     session = load_session(doc_id)
@@ -892,6 +942,7 @@ def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateForm
 
 
 @app.post("/api/documents/{doc_id}/pages/{page_idx}/rotate", response_model=RotatePageResponse)
+@serialized_mutation
 def rotate_page_endpoint(doc_id: str, page_idx: int, request: RotatePageRequest):
     """Rotates a specific page by the given degrees (0, 90, 180, 270, or relative offset)."""
     session = load_session(doc_id)
@@ -932,6 +983,7 @@ def _split_part_count(doc, request: SplitDocumentRequest) -> int:
 
 
 @app.post("/api/documents/{doc_id}/split", response_model=SplitDocumentResponse)
+@serialized_mutation
 def split_document_endpoint(doc_id: str, request: SplitDocumentRequest):
     """Extracts specified pages or splits the document into smaller chunks."""
     session = load_session(doc_id)
@@ -992,23 +1044,22 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
     if not request.document_ids:
         raise HTTPException(status_code=400, detail="At least one document ID must be provided.")
 
-    docs_to_merge = []
-    accounted = 0
-    for d_id in request.document_ids:
-        sess = load_session(d_id)
-        docs_to_merge.append(sess["doc"])
-        accounted += int(sess.get("byte_size", 0))
-
     try:
-        ensure_session_capacity(1, accounted)
-        merged_doc = pdf_engine.merge_documents(docs_to_merge)
-        merged_id = bind_session(merged_doc, "merged_document.pdf", accounted)
-        return MergeDocumentsResponse(
-            success=True,
-            merged_document_id=merged_id,
-            filename="merged_document.pdf",
-            page_count=merged_doc.page_count(),
-        )
+        with document_mutations(request.document_ids) as sessions:
+            docs_to_merge = []
+            accounted = 0
+            for sess in sessions:
+                docs_to_merge.append(sess["doc"])
+                accounted += int(sess.get("byte_size", 0))
+            ensure_session_capacity(1, accounted)
+            merged_doc = pdf_engine.merge_documents(docs_to_merge)
+            merged_id = bind_session(merged_doc, "merged_document.pdf", accounted)
+            return MergeDocumentsResponse(
+                success=True,
+                merged_document_id=merged_id,
+                filename="merged_document.pdf",
+                page_count=merged_doc.page_count(),
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -1016,6 +1067,7 @@ def merge_documents_endpoint(request: MergeDocumentsRequest):
 
 
 @app.post("/api/documents/{doc_id}/pages/reorder", response_model=PageOperationResponse)
+@serialized_mutation
 def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
     """Reorders the pages of a document according to a given permutation."""
     session = load_session(doc_id)
@@ -1039,6 +1091,7 @@ def reorder_pages_endpoint(doc_id: str, request: ReorderPagesRequest):
 
 
 @app.post("/api/documents/{doc_id}/pages/delete", response_model=PageOperationResponse)
+@serialized_mutation
 def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
     """Deletes specified pages from a document."""
     session = load_session(doc_id)
@@ -1111,6 +1164,7 @@ def get_page_annotations_endpoint(doc_id: str, page_idx: int):
     "/api/documents/{doc_id}/pages/{page_idx}/annotations/markup",
     response_model=AnnotationActionResponse,
 )
+@serialized_mutation
 def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupRequest):
     """Adds a text markup annotation (Highlight, Underline, StrikeOut) to a page."""
     session = load_session(doc_id)
@@ -1145,6 +1199,7 @@ def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupReque
     "/api/documents/{doc_id}/pages/{page_idx}/annotations/link",
     response_model=AnnotationActionResponse,
 )
+@serialized_mutation
 def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
     """Adds an interactive URI link or internal GoTo link annotation to a page."""
     session = load_session(doc_id)
@@ -1195,6 +1250,7 @@ def add_link_endpoint(doc_id: str, page_idx: int, request: AddLinkRequest):
     "/api/documents/{doc_id}/pages/{page_idx}/annotations/stamp",
     response_model=AnnotationActionResponse,
 )
+@serialized_mutation
 def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
     """Adds a rubber stamp annotation with vector styling and text to a page."""
     session = load_session(doc_id)
@@ -1229,6 +1285,7 @@ def add_stamp_endpoint(doc_id: str, page_idx: int, request: AddStampRequest):
     "/api/documents/{doc_id}/pages/{page_idx}/annotations/{annot_id}",
     response_model=AnnotationActionResponse,
 )
+@serialized_mutation
 def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
     """Deletes an annotation from a page."""
     session = load_session(doc_id)
@@ -1255,6 +1312,7 @@ def delete_annotation_endpoint(doc_id: str, page_idx: int, annot_id: int):
     "/api/documents/{doc_id}/annotations/flatten",
     response_model=FlattenAnnotationsResponse,
 )
+@serialized_mutation
 def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None):
     """Permanently flattens visual annotations (highlights, underlines, stamps) into page content."""
     session = load_session(doc_id)
@@ -1275,6 +1333,7 @@ def flatten_annotations_endpoint(doc_id: str, page_number: Optional[int] = None)
 
 
 @app.post("/api/documents/{doc_id}/pagination", response_model=WatermarkActionResponse)
+@serialized_mutation
 def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
     """Applies dynamic Bates numbering or custom header/footer pagination across document pages."""
     session = load_session(doc_id)
@@ -1308,6 +1367,7 @@ def add_pagination_endpoint(doc_id: str, request: AddPaginationRequest):
 
 
 @app.post("/api/documents/{doc_id}/watermark/text", response_model=WatermarkActionResponse)
+@serialized_mutation
 def add_text_watermark_endpoint(doc_id: str, request: AddTextWatermarkRequest):
     """Applies a semi-transparent rotated text watermark across document pages."""
     session = load_session(doc_id)
@@ -1340,6 +1400,7 @@ def add_text_watermark_endpoint(doc_id: str, request: AddTextWatermarkRequest):
 
 
 @app.post("/api/documents/{doc_id}/watermark/image", response_model=WatermarkActionResponse)
+@serialized_mutation
 async def add_image_watermark_endpoint(
     doc_id: str,
     file: UploadFile = File(...),
@@ -1401,14 +1462,13 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int, tic
     context_token = adopt_subject(subject)
     try:
         try:
-            session = load_session(doc_id)
+            load_session(doc_id)
         except HTTPException:
             await websocket.accept()
             await websocket.close(code=1008, reason="Document session not found")
             return
 
         await websocket.accept()
-        doc = session["doc"]
 
         try:
             while True:
@@ -1421,30 +1481,36 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int, tic
                     continue
 
                 try:
-                    page = doc.get_page(page_idx)
-                    page.edit_paragraph(int(paragraph_id), new_text)
-                    doc.update_page(page)
+                    lock = await asyncio.to_thread(begin_document_mutation, doc_id)
+                    try:
+                        doc = load_session(doc_id)["doc"]
+                        page = doc.get_page(page_idx)
+                        page.edit_paragraph(int(paragraph_id), new_text)
+                        doc.update_page(page)
 
-                    paragraphs_raw = page.get_paragraphs()
-                    updated_para = next((p for p in paragraphs_raw if p.id == paragraph_id), None)
-                    if updated_para:
-                        min_x, min_y, max_x, max_y = updated_para.bbox()
-                        await websocket.send_json({
-                            "status": "ok",
-                            "paragraph_id": paragraph_id,
-                            "line_count": updated_para.line_count,
-                            "text": updated_para.text,
-                            "bbox": {
-                                "min_x": round(min_x, 2),
-                                "min_y": round(min_y, 2),
-                                "max_x": round(max_x, 2),
-                                "max_y": round(max_y, 2),
-                                "width": round(max_x - min_x, 2),
-                                "height": round(max_y - min_y, 2),
-                            },
-                        })
-                    else:
-                        await websocket.send_json({"status": "ok", "paragraph_id": paragraph_id})
+                        paragraphs_raw = page.get_paragraphs()
+                        updated_para = next((p for p in paragraphs_raw if p.id == paragraph_id), None)
+                        if updated_para:
+                            min_x, min_y, max_x, max_y = updated_para.bbox()
+                            payload = {
+                                "status": "ok",
+                                "paragraph_id": paragraph_id,
+                                "line_count": updated_para.line_count,
+                                "text": updated_para.text,
+                                "bbox": {
+                                    "min_x": round(min_x, 2),
+                                    "min_y": round(min_y, 2),
+                                    "max_x": round(max_x, 2),
+                                    "max_y": round(max_y, 2),
+                                    "width": round(max_x - min_x, 2),
+                                    "height": round(max_y - min_y, 2),
+                                },
+                            }
+                        else:
+                            payload = {"status": "ok", "paragraph_id": paragraph_id}
+                    finally:
+                        lock.release()
+                    await websocket.send_json(payload)
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -1460,6 +1526,7 @@ async def websocket_reflow(websocket: WebSocket, doc_id: str, page_idx: int, tic
     "/api/documents/{doc_id}/redact/regions",
     response_model=RedactionActionResponse,
 )
+@serialized_mutation
 def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
     """Irreversibly excises text glyphs and draws opaque blackout boxes on target coordinates."""
     session = load_session(doc_id)
@@ -1509,6 +1576,7 @@ def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
     "/api/documents/{doc_id}/redact/pattern",
     response_model=RedactionActionResponse,
 )
+@serialized_mutation
 def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
     """Scans pages for sensitive PII (Email, Phone, SSN, Credit Card, RFC, CURP) and redacts matches."""
     session = load_session(doc_id)
@@ -1567,6 +1635,7 @@ def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
     "/api/documents/{doc_id}/redact/text",
     response_model=RedactionActionResponse,
 )
+@serialized_mutation
 def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
     """Finds exact string matches across pages, removes them from content streams, and blacks them out."""
     session = load_session(doc_id)
@@ -1623,6 +1692,7 @@ def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
     "/api/documents/{doc_id}/sanitize",
     response_model=SanitizeDocumentResponse,
 )
+@serialized_mutation
 def sanitize_document_endpoint(doc_id: str, request: SanitizeDocumentRequest):
     """Purges sensitive document metadata (/Info dictionary and /Metadata XMP stream)."""
     session = load_session(doc_id)
@@ -1685,6 +1755,7 @@ def get_security_status_endpoint(doc_id: str):
     "/api/documents/{doc_id}/security/encrypt",
     response_model=SecurityActionResponse,
 )
+@serialized_mutation
 def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
     """Encrypts document using AES-128 and password protection."""
     session = load_session(doc_id)
@@ -1727,6 +1798,7 @@ def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
     "/api/documents/{doc_id}/security/decrypt",
     response_model=SecurityActionResponse,
 )
+@serialized_mutation
 def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
     """Decrypts document using the provided password."""
     session = load_session(doc_id)
@@ -1750,6 +1822,7 @@ def decrypt_document_endpoint(doc_id: str, request: DecryptDocumentRequest):
     "/api/documents/{doc_id}/security/sign",
     response_model=SecurityActionResponse,
 )
+@serialized_mutation
 def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
     """Stamps a SHA-256 byte-range integrity attestation. This is not a CMS signature."""
     session = load_session(doc_id)
@@ -1951,6 +2024,7 @@ def export_table_endpoint(
 
 
 @app.post("/api/documents/{doc_id}/optimize", response_model=OptimizeResponse)
+@serialized_mutation
 async def optimize_document_endpoint(
     doc_id: str,
     request: OptimizeRequest,

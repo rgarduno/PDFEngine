@@ -18,6 +18,10 @@ on each successful load. A full table answers 429. Expired rows are dropped on
 the next bind or load. A live session is never evicted to make room, including
 a session that belongs to another tenant. ``byte_size`` is the accounted file
 size used for that budget, not the process RSS.
+
+A mutation holds that document's lock for the whole request. The lock is
+acquired before the session table lock. Merging several documents locks their
+ids in sorted order. A read does not take the lock.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import secrets
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -46,6 +51,8 @@ DEFAULT_MAX_RETAINED_BYTES = 256 * 1024 * 1024
 
 DOCUMENT_SESSIONS: dict[str, dict] = {}
 _sessions_lock = threading.Lock()
+_document_locks: dict[str, threading.Lock] = {}
+_document_locks_guard = threading.Lock()
 
 _current_subject: ContextVar["Subject | None"] = ContextVar("pdfengine_subject", default=None)
 _ws_tickets: dict[str, tuple[str, float]] = {}
@@ -139,8 +146,37 @@ def max_retained_bytes() -> int:
     return _positive_int_env("PDFENGINE_MAX_RETAINED_BYTES", DEFAULT_MAX_RETAINED_BYTES)
 
 
-def _purge_expired_unlocked(now: float | None = None) -> None:
-    """Drop sessions whose ``expires_at`` is in the past. Caller holds the lock."""
+def _document_lock(doc_id: str) -> threading.Lock:
+    """Return the mutation lock for ``doc_id``, creating it if this is the first use."""
+    with _document_locks_guard:
+        lock = _document_locks.get(doc_id)
+        if lock is None:
+            lock = threading.Lock()
+            _document_locks[doc_id] = lock
+        return lock
+
+
+def _drop_document_locks(doc_ids: list[str]) -> None:
+    """Forget mutation locks for sessions that are already gone."""
+    if not doc_ids:
+        return
+    with _document_locks_guard:
+        for doc_id in doc_ids:
+            _document_locks.pop(doc_id, None)
+
+
+def clear_document_locks() -> None:
+    """Drop every mutation lock. Tests use this together with the session table."""
+    with _document_locks_guard:
+        _document_locks.clear()
+
+
+def _purge_expired_unlocked(now: float | None = None) -> list[str]:
+    """Drop sessions whose ``expires_at`` is in the past. Caller holds the lock.
+
+    The returned ids are forgotten from the mutation-lock table only after the
+    session lock is released. This function does not take a document lock.
+    """
     moment = time.time() if now is None else now
     expired = [
         key
@@ -149,6 +185,7 @@ def _purge_expired_unlocked(now: float | None = None) -> None:
     ]
     for key in expired:
         DOCUMENT_SESSIONS.pop(key, None)
+    return expired
 
 
 def _retained_bytes_unlocked() -> int:
@@ -164,12 +201,16 @@ def ensure_session_capacity(additional: int, additional_bytes: int = 0) -> None:
     """
     if additional < 0 or additional_bytes < 0:
         raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
-    with _sessions_lock:
-        _purge_expired_unlocked()
-        if len(DOCUMENT_SESSIONS) + additional > max_sessions():
-            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
-        if _retained_bytes_unlocked() + additional_bytes > max_retained_bytes():
-            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+    expired: list[str] = []
+    try:
+        with _sessions_lock:
+            expired = _purge_expired_unlocked()
+            if len(DOCUMENT_SESSIONS) + additional > max_sessions():
+                raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+            if _retained_bytes_unlocked() + additional_bytes > max_retained_bytes():
+                raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+    finally:
+        _drop_document_locks(expired)
 
 
 def bind_session(doc: object, filename: str, byte_size: int = 0) -> str:
@@ -181,23 +222,32 @@ def bind_session(doc: object, filename: str, byte_size: int = 0) -> str:
     """
     subject = current_subject()
     charged = byte_size if byte_size > 0 else 0
-    with _sessions_lock:
-        _purge_expired_unlocked()
-        if len(DOCUMENT_SESSIONS) + 1 > max_sessions():
-            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
-        if _retained_bytes_unlocked() + charged > max_retained_bytes():
-            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
-        doc_id = str(uuid.uuid4())
-        now = time.time()
-        DOCUMENT_SESSIONS[doc_id] = {
-            "doc": doc,
-            "filename": filename,
-            "byte_size": charged,
-            "subject_id": subject.id,
-            "created_at": now,
-            "expires_at": now + session_ttl_seconds(),
-        }
-        return doc_id
+    doc_id = str(uuid.uuid4())
+    _document_lock(doc_id)
+    expired: list[str] = []
+    published = False
+    try:
+        with _sessions_lock:
+            expired = _purge_expired_unlocked()
+            if len(DOCUMENT_SESSIONS) + 1 > max_sessions():
+                raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+            if _retained_bytes_unlocked() + charged > max_retained_bytes():
+                raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+            now = time.time()
+            DOCUMENT_SESSIONS[doc_id] = {
+                "doc": doc,
+                "filename": filename,
+                "byte_size": charged,
+                "subject_id": subject.id,
+                "created_at": now,
+                "expires_at": now + session_ttl_seconds(),
+            }
+            published = True
+            return doc_id
+    finally:
+        if not published:
+            expired.append(doc_id)
+        _drop_document_locks(expired)
 
 
 def set_session_byte_size(doc_id: str, byte_size: int) -> None:
@@ -209,16 +259,20 @@ def set_session_byte_size(doc_id: str, byte_size: int) -> None:
     """
     subject = current_subject()
     charged = byte_size if byte_size > 0 else 0
-    with _sessions_lock:
-        _purge_expired_unlocked()
-        session = DOCUMENT_SESSIONS.get(doc_id)
-        if session is None or session.get("subject_id") != subject.id:
-            raise HTTPException(status_code=404, detail="Document session not found.")
-        others = _retained_bytes_unlocked() - int(session.get("byte_size", 0))
-        if others + charged > max_retained_bytes():
-            raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
-        session["byte_size"] = charged
-        session["expires_at"] = time.time() + session_ttl_seconds()
+    expired: list[str] = []
+    try:
+        with _sessions_lock:
+            expired = _purge_expired_unlocked()
+            session = DOCUMENT_SESSIONS.get(doc_id)
+            if session is None or session.get("subject_id") != subject.id:
+                raise HTTPException(status_code=404, detail="Document session not found.")
+            others = _retained_bytes_unlocked() - int(session.get("byte_size", 0))
+            if others + charged > max_retained_bytes():
+                raise HTTPException(status_code=429, detail="Document session capacity exceeded.")
+            session["byte_size"] = charged
+            session["expires_at"] = time.time() + session_ttl_seconds()
+    finally:
+        _drop_document_locks(expired)
 
 
 def load_session(doc_id: str) -> dict:
@@ -228,13 +282,64 @@ def load_session(doc_id: str) -> dict:
     first, so an expired id answers the same 404 as a missing id.
     """
     subject = current_subject()
-    with _sessions_lock:
-        _purge_expired_unlocked()
-        session = DOCUMENT_SESSIONS.get(doc_id)
-        if session is None or session.get("subject_id") != subject.id:
-            raise HTTPException(status_code=404, detail="Document session not found.")
-        session["expires_at"] = time.time() + session_ttl_seconds()
-        return session
+    expired: list[str] = []
+    try:
+        with _sessions_lock:
+            expired = _purge_expired_unlocked()
+            session = DOCUMENT_SESSIONS.get(doc_id)
+            if session is None or session.get("subject_id") != subject.id:
+                raise HTTPException(status_code=404, detail="Document session not found.")
+            session["expires_at"] = time.time() + session_ttl_seconds()
+            return session
+    finally:
+        _drop_document_locks(expired)
+
+
+def begin_document_mutation(doc_id: str) -> threading.Lock:
+    """Acquire this document's mutation lock and confirm the session exists.
+
+    The caller releases the returned lock. An async route runs this on a
+    worker thread: acquiring on the event loop would stall every other request
+    for as long as the document stays busy.
+    """
+    lock = _document_lock(doc_id)
+    lock.acquire()
+    try:
+        load_session(doc_id)
+    except BaseException:
+        lock.release()
+        raise
+    return lock
+
+
+@contextmanager
+def document_mutation(doc_id: str):
+    """Load ``doc_id`` while this request is the only mutation of that document.
+
+    The lock is held until the caller finishes, including the time spent
+    rewriting the file. ``load_session`` itself stays available to readers.
+    """
+    lock = begin_document_mutation(doc_id)
+    try:
+        yield load_session(doc_id)
+    finally:
+        lock.release()
+
+
+@contextmanager
+def document_mutations(doc_ids: list[str]):
+    """Load every id while holding each document lock, lowest id first.
+
+    The yielded sessions follow ``doc_ids``. Repeated ids share one lock.
+    """
+    locks = [_document_lock(doc_id) for doc_id in sorted(set(doc_ids))]
+    for lock in locks:
+        lock.acquire()
+    try:
+        yield [load_session(doc_id) for doc_id in doc_ids]
+    finally:
+        for lock in reversed(locks):
+            lock.release()
 
 
 def issue_ws_ticket() -> str:
