@@ -374,6 +374,7 @@ returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.
 | `POST` | `/api/documents/{id}/redact/pattern` | Scan & permanently excise PII patterns (Email, Phone, RFC, CURP, Credit Card Luhn, SSN). |
 | `POST` | `/api/documents/{id}/redact/text` | Search and permanently excise text runs with zero layout shift on non-redacted text. |
 | `POST` | `/api/documents/{id}/sanitize` | Scrub `/Info` dictionary and `/Metadata` XMP streams to prevent information leaks. |
+| `GET` | `/api/audit` | List caller action events (upload, redact, sign, optimize) omitting secrets and file bytes. |
 | `GET` | `/api/documents/{id}/export` | Download finalized modified PDF with bit-for-bit preserved vector graphics. |
 | `WS` | `/ws/documents/{id}/pages/{p}/reflow?ticket=` | Real-time layout reflow. The ticket is consumed on connect. |
 
@@ -429,6 +430,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)
 - [x] **Phase 18: Interactive AcroForm Builder & Form Field Designer (ISO 32000-1 §12.7)** (AcroForm catalog auto-initialization, merged Widget annotations, visual field designer for Text, Checkbox, Choice, and Digital Signature `/Sig`, field deletion and geometry updating, PyO3 bindings, FastAPI CRUD endpoints & Web Studio)
+- [x] **Phase 19: Security Hardening & Vulnerability Remediation** (Bearer identity binding, session TTL & LRU eviction, dynamic SHA-256 byte-range attestation, random AESV2 initialization vectors, active code /JS/Launch action pruning, upload caps, sparse xref streams & cycle guards, predictor & PNG IDAT bounded decompression, safe download headers, table lattice segment budgets, and studio security headers)
 
 ---
 
