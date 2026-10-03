@@ -927,6 +927,25 @@ impl PyPdfDocument {
         self.page_ids.len()
     }
 
+    /// Recognizes single-image pages and appends invisible searchable text.
+    ///
+    /// `language` is a tesseract traineddata name. `None` uses `eng`.
+    /// Returns `(pages_seen, pages_recognized, words_inserted)`.
+    #[pyo3(signature = (language=None))]
+    pub fn add_searchable_text_layer(
+        &mut self,
+        language: Option<String>,
+    ) -> PyResult<(usize, usize, usize)> {
+        let report = pdf_engine_core::add_searchable_text_layer(
+            &mut self.doc,
+            language.as_deref(),
+        )
+        .map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to add searchable text: {}", e))
+        })?;
+        Ok((report.pages_seen, report.pages_recognized, report.words_inserted))
+    }
+
     /// Retrieves a mutable reference to a page by 1-based or 0-based index.
     pub fn get_page(&mut self, index: usize) -> PyResult<PyPage> {
         let zero_idx = if index > 0 && index <= self.active_pages.len() {

@@ -124,6 +124,14 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Bounded Flate expansion: 100:1 max ratio, 256 MiB ceiling (Zip Bomb)   │
 │    - Circular reference detection (HashSet tracking) & recursion cap (64)   │
 │    - Strips /JavaScript, /JS, /Launch, /SubmitForm, /OpenAction, and /AA    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 14. Searchable text over a scanned page                                     │
+│    - A scan paints one image and shows no text operators                    │
+│    - Local tesseract (default eng) supplies word boxes                      │
+│    - Words are not logged and the API returns counts only                   │
+│    - Invisible text uses rendering mode 3 and WinAnsi ToUnicode             │
+│    - The face is standard Courier and is not embedded                       │
+│    - Recognition is not guaranteed. The scan image is unchanged.            │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -189,6 +197,7 @@ PDF is historically one of the most targeted document formats for memory corrupt
 | **Object count and optimizer work** | A cross-reference reserves a slot per object number, an object stream declares a huge `/N`, or compressed objects point at each other. | At most 500,000 objects. Cross-reference streams list only occupied numbers. Object-stream `/N` and `/First` outside the decoded stream are rejected. A compressed-object cycle fails closed. Each object stream holds at most 100 objects, and zlib-best recompression skips streams larger than 1 MiB. |
 | **Optimizer on protected files** | A size rewrite moves every byte offset. A byte-range signature would no longer match, and encryption is not re-applied. | Optimization is refused (409) when the trailer has `/Encrypt`, or when an object is `/Type /Sig` or `/SubFilter /PDFEngine.sha256`. The file is left unchanged. Words drawn in a content stream are not treated as a signature. |
 | **Detached PKCS#7** | A SHA-256 attestation is not a certificate signature. A later full save moves the bytes a PKCS#7 signature covers. | Without a certificate, sign stamps `/SubFilter /PDFEngine.sha256`. With PEM or PKCS#12 it writes `/SubFilter /adbe.pkcs7.detached` (RSA-SHA256 or P-256 ECDSA) and can embed an RFC 3161 token from an HTTPS time-stamping authority. Verification checks the certificate inside the CMS. It does not decide trust and does not claim that a viewer or an authority accepts the file. A download returns the stored bytes while that PKCS#7 signature still verifies. A later full save invalidates the byte range. Export of an attestation still rewrites and reseals it. |
+| **Scanned-page text** | A page that is only an image has no text operators, so search and edit find nothing. Recognition can leak the words it reads. | A page that paints one image and no text can receive invisible text (rendering mode 3) from a local tesseract process. The API returns counts only. Recognized words are not logged. The face is standard Courier and is not embedded. Recognition is not guaranteed, and the scan image is unchanged. |
 | **Browser origin and error text** | Any site can call the API with credentials, and a handler returns the engine's internal error text. | `PDFENGINE_CORS_ORIGINS` lists the exact origins that may call the API. Credentials are attached only for an origin on that list. A wildcard is ignored. Clients receive `The request could not be completed.` and the cause stays in the server log. |
 | **Downloads, links, permissions, and redaction** | A download name is taken from the upload, a link can use any scheme, `/P` is described as access control, and redaction is described as ISO legal redaction. | Export names are `document_edited.pdf` and `document_optimized.pdf`. New links accept only `http` and `https`. `/P` is stored and not enforced. Redaction removes intersecting glyphs, page `/Metadata`, and marked-content `/ActualText`, `/Alt`, and `/E` on the rewritten page. Attachments, the structure tree, and form appearances stay. Document `/Info` and catalog XMP are removed only when metadata scrubbing is requested. |
 
@@ -339,6 +348,17 @@ browser origin.
 Browser WebSockets cannot set `Authorization`. `POST /api/auth/ws-ticket`
 returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.
 
+### Searchable scans
+
+`POST /api/documents/{id}/ocr` recognizes a page that paints exactly one image
+and shows no text. It calls the local `tesseract` binary. The default
+traineddata name is `eng`. `PDFENGINE_TESSERACT` may name an absolute path
+whose file name is `tesseract`. The response is page and word counts.
+Recognized words are not returned and are not written to the log. The new
+text uses rendering mode 3 and a WinAnsi `/ToUnicode` map. The face is the
+standard Courier and is not embedded. Recognition is not guaranteed, and the
+scan image is left unchanged. A page that already shows text is left unchanged.
+
 ### 3. API Endpoints
 
 | Method | Endpoint | Description |
@@ -352,6 +372,7 @@ returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.
 | `GET` | `/api/documents/{id}/pages/{p}/images` | List XObject images on a specific page with CTM bounding boxes and metadata. |
 | `GET` | `/api/documents/{id}/images/{img_id}` | Stream synthesized PNG or native JPEG binary for inspection/preview. |
 | `POST` | `/api/documents/{id}/images/{img_id}/replace` | Surgical in-place image replacement (JPEG/PNG with `/SMask` transparency). |
+| `POST` | `/api/documents/{id}/ocr` | Recognize a single-image page with local tesseract and append invisible text (rendering mode 3). The response is counts only. |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
@@ -434,6 +455,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)
 - [x] **Phase 18: Interactive AcroForm Builder & Form Field Designer (ISO 32000-1 §12.7)** (AcroForm catalog auto-initialization, merged Widget annotations, visual field designer for Text, Checkbox, Choice, and Digital Signature `/Sig`, field deletion and geometry updating, PyO3 bindings, FastAPI CRUD endpoints & Web Studio)
 - [x] **Phase 19: Security Hardening & Vulnerability Remediation** (Bearer identity binding, session TTL & LRU eviction, dynamic SHA-256 byte-range attestation, random AESV2 initialization vectors, active code /JS/Launch action pruning, upload caps, sparse xref streams & cycle guards, predictor & PNG IDAT bounded decompression, safe download headers, table lattice segment budgets, and studio security headers)
+- [x] **Phase 20: Searchable text over scanned pages** (A page that paints one image and no text can receive word boxes from local tesseract. The engine appends rendering mode 3 text and a WinAnsi `/ToUnicode` map. The face is standard Courier and is not embedded. Recognition is not guaranteed and the scan image is unchanged.)
 
 ---
 

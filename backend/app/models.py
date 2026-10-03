@@ -325,6 +325,21 @@ class AddStampRequest(BaseModel):
     date_str: Optional[str] = None
 
 
+class OcrRequest(BaseModel):
+    """Selects the local tesseract traineddata name. Empty uses eng."""
+    language: Optional[str] = None
+
+
+class OcrResponse(BaseModel):
+    """Counts for a searchable-text pass. Recognized words are not included."""
+    success: bool
+    document_id: str
+    pages_seen: int
+    pages_recognized: int
+    words_inserted: int
+    message: str
+
+
 class AnnotationActionResponse(BaseModel):
     """Response returned upon creating or modifying an annotation."""
     success: bool

@@ -101,6 +101,8 @@ from app.models import (
     TableExportResponse,
     OptimizeRequest,
     OptimizeResponse,
+    OcrRequest,
+    OcrResponse,
 )
 
 app = FastAPI(
@@ -551,6 +553,24 @@ _PASSWORD_CAP = 256
 _TSA_URL_CAP = 512
 
 
+_OCR_DETAILS = (
+    "Optical character recognition is unavailable.",
+    "Optical character recognition failed.",
+    "Optical character recognition timed out.",
+    "OCR language was rejected.",
+    "The scanned image exceeds the recognition limit.",
+)
+
+
+def _ocr_failure(exc: BaseException) -> HTTPException:
+    """Maps a recognition failure to a stable sentence. Unknown text stays in the log."""
+    text = str(exc)
+    for sentence in _OCR_DETAILS:
+        if sentence in text:
+            return HTTPException(status_code=400, detail=sentence)
+    return _public_error(400, exc)
+
+
 def _signing_failure(exc: BaseException) -> HTTPException:
     """Maps a signing failure to a stable sentence. Unknown text stays in the log."""
     text = str(exc)
@@ -855,6 +875,38 @@ async def replace_image(doc_id: str, image_id: int, file: UploadFile = File(...)
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/ocr", response_model=OcrResponse)
+@serialized_mutation
+async def add_searchable_text(doc_id: str, request: OcrRequest):
+    """Recognizes a single-image page and appends invisible searchable text.
+
+    The response reports counts. Recognized words are not returned.
+    """
+    if request.language is not None and len(request.language) > 16:
+        raise HTTPException(status_code=400, detail="OCR language was rejected.")
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        pages_seen, pages_recognized, words_inserted = doc.add_searchable_text_layer(
+            request.language
+        )
+        return OcrResponse(
+            success=True,
+            document_id=doc_id,
+            pages_seen=pages_seen,
+            pages_recognized=pages_recognized,
+            words_inserted=words_inserted,
+            message=(
+                f"Searchable text added on {pages_recognized} of {pages_seen} "
+                f"scanned pages ({words_inserted} words)."
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _ocr_failure(exc)
 
 
 @app.get("/api/documents/{doc_id}/forms", response_model=DocumentFormsResponse)

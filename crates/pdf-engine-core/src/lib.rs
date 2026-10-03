@@ -25,6 +25,7 @@ pub mod fonts;
 pub mod forms;
 pub mod images;
 pub mod layout;
+pub mod ocr;
 pub mod ops;
 pub mod redact;
 pub mod security;
@@ -48,6 +49,7 @@ pub use images::{
     create_image_xobject, encode_png, extract_page_images, get_image_binary, parse_jpeg,
     parse_png_header, parse_png_pixels, replace_image_content, ImageInfo, JpegHeader, PngHeader,
 };
+pub use ocr::{add_searchable_text_layer, OcrReport};
 pub use ops::{
     collect_garbage, deduplicate_streams, delete_pages, extract_pages, get_page_rotation,
     merge_documents, merge_pdf_bytes, optimize_document, recompress_streams, reorder_pages,

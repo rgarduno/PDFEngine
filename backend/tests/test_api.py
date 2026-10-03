@@ -4,9 +4,11 @@ import base64
 import io
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
+import zlib
 from pathlib import Path
 
 os.environ["PDFENGINE_API_KEYS"] = "pdfengine-test-key-0001,pdfengine-test-key-0002"
@@ -2433,6 +2435,171 @@ def test_rejected_timestamp_url_does_not_open_a_connection(monkeypatch):
     monkeypatch.setattr(tsa.socket, "create_connection", _connected)
     with pytest.raises(ValueError, match="^Timestamp authority URL was rejected\\.$"):
         tsa.fetch_timestamp("http://127.0.0.1/tsa", b"\x30")
+
+
+def _paeth(left: int, up: int, up_left: int) -> int:
+    estimate = left + up - up_left
+    distance_left = abs(estimate - left)
+    distance_up = abs(estimate - up)
+    distance_up_left = abs(estimate - up_left)
+    if distance_left <= distance_up and distance_left <= distance_up_left:
+        return left
+    if distance_up <= distance_up_left:
+        return up
+    return up_left
+
+
+def _png_rgb_samples(data: bytes) -> tuple[int, int, bytes]:
+    """Decodes an 8-bit RGBA PNG into DeviceRGB samples. Alpha is dropped."""
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise AssertionError("scan fixture is not a PNG")
+    pos = 8
+    width = height = None
+    bit_depth = color_type = interlace = None
+    idat = bytearray()
+    while pos + 8 <= len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width, height, bit_depth, color_type, _compression, _filter, interlace = struct.unpack(
+                ">IIBBBBB", chunk
+            )
+        elif kind == b"IDAT":
+            idat.extend(chunk)
+        elif kind == b"IEND":
+            break
+    if width is None or bit_depth != 8 or color_type != 6 or interlace != 0:
+        raise AssertionError("scan fixture must be 8-bit non-interlaced RGBA")
+    raw = zlib.decompress(bytes(idat))
+    channels = 4
+    stride = width * channels
+    samples = bytearray()
+    previous = bytearray(stride)
+    offset = 0
+    for _row in range(height):
+        filter_kind = raw[offset]
+        offset += 1
+        row = bytearray(raw[offset:offset + stride])
+        offset += stride
+        for index in range(stride):
+            left = row[index - channels] if index >= channels else 0
+            up = previous[index]
+            up_left = previous[index - channels] if index >= channels else 0
+            if filter_kind == 0:
+                predicted = 0
+            elif filter_kind == 1:
+                predicted = left
+            elif filter_kind == 2:
+                predicted = up
+            elif filter_kind == 3:
+                predicted = (left + up) // 2
+            elif filter_kind == 4:
+                predicted = _paeth(left, up, up_left)
+            else:
+                raise AssertionError(f"unsupported PNG filter {filter_kind}")
+            row[index] = (row[index] + predicted) & 255
+        previous = row
+        for index in range(0, stride, 4):
+            samples.extend(row[index:index + 3])
+    return width, height, bytes(samples)
+
+
+def _scan_pdf(pixels: bytes, width: int, height: int) -> bytes:
+    """One-page PDF whose only paint is an uncompressed DeviceRGB image."""
+    content = b"q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] "
+        b"/Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>",
+        f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"endstream",
+        (
+            f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+            f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {len(pixels)} >>\nstream\n"
+        ).encode()
+        + pixels
+        + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode())
+    pdf.extend(f"startxref\n{xref}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_ocr_adds_invisible_text_on_a_scan_and_skips_a_text_page():
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "crates/pdf-engine-core/src/ocr/fixtures/scan-hello.png"
+    )
+    width, height, pixels = _png_rgb_samples(fixture.read_bytes())
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("scan.pdf", io.BytesIO(_scan_pdf(pixels, width, height)), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    rejected = client.post(
+        f"/api/documents/{doc_id}/ocr",
+        json={"language": "eng;id"},
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "OCR language was rejected."
+    assert "HELLO" not in rejected.text
+
+    huge = "language-name-too-long"
+    oversized = client.post(
+        f"/api/documents/{doc_id}/ocr",
+        json={"language": huge},
+    )
+    assert oversized.status_code == 400
+    assert oversized.json()["detail"] == "OCR language was rejected."
+    assert huge not in oversized.text
+
+    recognized = client.post(
+        f"/api/documents/{doc_id}/ocr",
+        json={"language": "eng"},
+    )
+    assert recognized.status_code == 200
+    body = recognized.json()
+    assert body["pages_seen"] == 1
+    assert body["pages_recognized"] == 1
+    assert body["words_inserted"] >= 1
+    assert "HELLO" not in recognized.text
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"(HELLO)" in exported.content
+    assert b"3 Tr" in exported.content
+    assert b"ToUnicode" in exported.content
+
+    again = client.post(f"/api/documents/{doc_id}/ocr", json={})
+    assert again.status_code == 200
+    assert again.json()["pages_seen"] == 0
+    assert again.json()["words_inserted"] == 0
+
+    _text_pdf, text_upload = _upload_minimal("clauses.pdf")
+    assert text_upload.status_code == 200
+    skipped = client.post(
+        f"/api/documents/{text_upload.json()['document_id']}/ocr",
+        json={},
+    )
+    assert skipped.status_code == 200
+    assert skipped.json()["pages_seen"] == 0
+    assert skipped.json()["words_inserted"] == 0
 
 
 
