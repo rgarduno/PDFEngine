@@ -16,7 +16,7 @@ use pdf_engine_core::fonts::FontMetrics;
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
 use pdf_engine_core::stream::{
-    build_ast_from_operations, serialize_ast, ContentAst, ContentStreamTokenizer,
+    build_ast_from_operations, serialize_ast, ContentAst, ContentStreamTokenizer, Operation,
 };
 use pdf_engine_core::watermark::{
     ImageWatermarkConfig, PaginationConfig, PaginationPosition, TextWatermarkConfig,
@@ -787,6 +787,18 @@ pub struct PyPdfDocument {
     active_pages: Vec<PyPage>,
 }
 
+/// Tokenizes the decoded page content.
+///
+/// Operators are read from the inflated stream. Reading the stored bytes of a
+/// Flate stream treats compressed data as operators and can sit on one delimiter.
+fn tokenize_decoded_page(doc: &mut PdfDocument, page_id: ObjectId) -> PyResult<Vec<Operation>> {
+    let decoded = doc
+        .get_page_content_bytes(page_id)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to load stream: {}", e)))?;
+    let mut tokenizer = ContentStreamTokenizer::new(&decoded);
+    Ok(tokenizer.tokenize_all().unwrap_or_default())
+}
+
 impl PyPdfDocument {
     /// Internal factory reconstructing active page scene graphs from a core PdfDocument.
     pub fn from_doc(mut doc: PdfDocument) -> PyResult<Self> {
@@ -809,9 +821,8 @@ impl PyPdfDocument {
                         PyRuntimeError::new_err(format!("Failed to load stream: {}", e))
                     })?;
 
-                    if let PdfObject::Stream(s) = contents_obj {
-                        let mut tokenizer = ContentStreamTokenizer::new(&s.content);
-                        let ops = tokenizer.tokenize_all().unwrap_or_default();
+                    if let PdfObject::Stream(_) = contents_obj {
+                        let ops = tokenize_decoded_page(&mut doc, page_id)?;
                         let ast = build_ast_from_operations(ops);
                         let reconstructor =
                             LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
@@ -857,9 +868,9 @@ impl PyPdfDocument {
                 if let Some(dict) = page_obj.as_dict() {
                     let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
                     let (ast, paragraphs) = if let Some(c_ref) = contents_id {
-                        if let Ok(PdfObject::Stream(s)) = self.doc.get_object(c_ref) {
-                            let mut tokenizer = ContentStreamTokenizer::new(&s.content);
-                            let ops = tokenizer.tokenize_all().unwrap_or_default();
+                        if let Ok(PdfObject::Stream(_)) = self.doc.get_object(c_ref) {
+                            let ops = tokenize_decoded_page(&mut self.doc, page_id)
+                                .unwrap_or_default();
                             let ast = build_ast_from_operations(ops);
                             let reconstructor =
                                 LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());

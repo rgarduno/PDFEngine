@@ -27,6 +27,10 @@ impl<'a> ContentParser<'a> {
     }
 }
 
+/// Nested arrays and dictionaries stop at this depth.
+/// A deeper stream is rejected instead of growing the call stack.
+const MAX_CONTENT_NESTING: usize = 32;
+
 /// Tokenizer specialized for postfix operator identification in content streams.
 pub struct ContentStreamTokenizer<'a> {
     data: &'a [u8],
@@ -63,7 +67,7 @@ impl<'a> ContentStreamTokenizer<'a> {
             if b == b'<' {
                 if self.cursor + 1 < self.data.len() && self.data[self.cursor + 1] == b'<' {
                     self.cursor += 2;
-                    let dict = self.read_inline_dict()?;
+                    let dict = self.read_inline_dict(0)?;
                     operands.push(PdfObject::Dictionary(dict));
                     continue;
                 }
@@ -75,7 +79,7 @@ impl<'a> ContentStreamTokenizer<'a> {
             // 3. Array `[...]`
             if b == b'[' {
                 self.cursor += 1;
-                let arr = self.read_inline_array()?;
+                let arr = self.read_inline_array(0)?;
                 operands.push(PdfObject::Array(arr));
                 continue;
             }
@@ -195,7 +199,12 @@ impl<'a> ContentStreamTokenizer<'a> {
         }
     }
 
-    fn read_inline_array(&mut self) -> PdfResult<Vec<PdfObject>> {
+    fn read_inline_array(&mut self, depth: usize) -> PdfResult<Vec<PdfObject>> {
+        if depth >= MAX_CONTENT_NESTING {
+            return Err(PdfError::ContentStreamError(
+                "Content stream nesting is too deep".to_string(),
+            ));
+        }
         let mut items = Vec::new();
         while self.cursor < self.data.len() {
             self.skip_whitespace_and_comments();
@@ -207,27 +216,31 @@ impl<'a> ContentStreamTokenizer<'a> {
                 break;
             }
 
-            let b = self.data[self.cursor];
-            if b == b'(' {
-                items.push(PdfObject::String(self.read_literal_string()?));
-            } else if b == b'<' {
-                items.push(PdfObject::String(self.read_hex_string()?));
-            } else {
-                let word = self.read_word();
-                if let Ok(i) = std::str::from_utf8(word).unwrap_or("").parse::<i64>() {
-                    items.push(PdfObject::Integer(i));
-                } else if let Ok(r) = std::str::from_utf8(word).unwrap_or("").parse::<f64>() {
-                    items.push(PdfObject::Real(r));
-                }
+            // A delimiter that is not a value must still move the cursor.
+            // `[/` and `[)` used to stay on the same byte and never return.
+            let before = self.cursor;
+            if let Some(value) = self.read_inline_value(depth)? {
+                items.push(value);
+            }
+            if self.cursor == before {
+                self.cursor += 1;
             }
         }
         Ok(items)
     }
 
-    fn read_inline_dict(&mut self) -> PdfResult<crate::cos::object::PdfDictionary> {
+    fn read_inline_dict(&mut self, depth: usize) -> PdfResult<crate::cos::object::PdfDictionary> {
+        if depth >= MAX_CONTENT_NESTING {
+            return Err(PdfError::ContentStreamError(
+                "Content stream nesting is too deep".to_string(),
+            ));
+        }
         let mut dict = crate::cos::object::PdfDictionary::new();
         while self.cursor < self.data.len() {
             self.skip_whitespace_and_comments();
+            if self.cursor >= self.data.len() {
+                break;
+            }
             if self.cursor + 1 < self.data.len() && &self.data[self.cursor..self.cursor + 2] == b">>" {
                 self.cursor += 2;
                 break;
@@ -235,15 +248,56 @@ impl<'a> ContentStreamTokenizer<'a> {
             if self.data[self.cursor] == b'/' {
                 let key = self.read_name()?;
                 self.skip_whitespace_and_comments();
-                let word = self.read_word();
-                if let Ok(i) = std::str::from_utf8(word).unwrap_or("").parse::<i64>() {
-                    dict.insert(key, i);
+                let before = self.cursor;
+                if let Some(value) = self.read_inline_value(depth)? {
+                    dict.insert(key, value);
+                }
+                if self.cursor == before {
+                    self.cursor += 1;
                 }
             } else {
                 self.cursor += 1;
             }
         }
         Ok(dict)
+    }
+
+    /// Reads one inline value. Returns `None` when the next byte is not a value.
+    /// The caller advances if this function leaves the cursor where it was.
+    fn read_inline_value(&mut self, depth: usize) -> PdfResult<Option<PdfObject>> {
+        if self.cursor >= self.data.len() {
+            return Ok(None);
+        }
+        let b = self.data[self.cursor];
+        if b == b'(' {
+            return Ok(Some(PdfObject::String(self.read_literal_string()?)));
+        }
+        if b == b'<' {
+            if self.cursor + 1 < self.data.len() && self.data[self.cursor + 1] == b'<' {
+                self.cursor += 2;
+                return Ok(Some(PdfObject::Dictionary(self.read_inline_dict(depth + 1)?)));
+            }
+            return Ok(Some(PdfObject::String(self.read_hex_string()?)));
+        }
+        if b == b'[' {
+            self.cursor += 1;
+            return Ok(Some(PdfObject::Array(self.read_inline_array(depth + 1)?)));
+        }
+        if b == b'/' {
+            return Ok(Some(PdfObject::Name(self.read_name()?)));
+        }
+        let word = self.read_word();
+        if word.is_empty() {
+            return Ok(None);
+        }
+        let text = std::str::from_utf8(word).unwrap_or("");
+        if let Ok(int_val) = text.parse::<i64>() {
+            return Ok(Some(PdfObject::Integer(int_val)));
+        }
+        if let Ok(real_val) = text.parse::<f64>() {
+            return Ok(Some(PdfObject::Real(real_val)));
+        }
+        Ok(None)
     }
 }
 
@@ -357,6 +411,7 @@ fn serialize_operation(op: &Operation, out: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cos::object::PdfObject;
 
     #[test]
     fn test_content_stream_tokenization_and_ast() {
@@ -386,5 +441,49 @@ mod tests {
         let text = String::from_utf8_lossy(&reserialized);
         assert!(text.contains("(Hello World) Tj"));
         assert!(text.contains("/F1 12 Tf"));
+    }
+
+    #[test]
+    fn inline_array_reads_names_strings_and_numbers() {
+        let stream = b"[/DeviceRGB] CS\n[(Hello) -10 2.5] TJ\n";
+        let mut tokenizer = ContentStreamTokenizer::new(stream);
+        let ops = tokenizer.tokenize_all().expect("inline array");
+
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].operator, "CS");
+        match &ops[0].operands[0] {
+            PdfObject::Array(items) => {
+                assert_eq!(items[0].as_name(), Some("DeviceRGB"));
+            }
+            other => panic!("expected array, found {other:?}"),
+        }
+        assert_eq!(ops[1].operator, "TJ");
+        match &ops[1].operands[0] {
+            PdfObject::Array(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].as_string_bytes(), Some(b"Hello".as_slice()));
+                assert_eq!(items[1].as_i64(), Some(-10));
+                assert_eq!(items[2].as_f64(), Some(2.5));
+            }
+            other => panic!("expected array, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delimiter_inside_an_array_does_not_stick() {
+        let stream = b"[) > { }] TJ\n[/Name] scn\n";
+        let mut tokenizer = ContentStreamTokenizer::new(stream);
+        let ops = tokenizer.tokenize_all().expect("delimiters advance");
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].operator, "TJ");
+        assert_eq!(ops[1].operator, "scn");
+    }
+
+    #[test]
+    fn deeply_nested_arrays_are_rejected() {
+        let stream = vec![b'['; MAX_CONTENT_NESTING + 2];
+        let mut tokenizer = ContentStreamTokenizer::new(&stream);
+        let error = tokenizer.tokenize_all().expect_err("depth cap");
+        assert!(error.to_string().contains("nesting is too deep"));
     }
 }
