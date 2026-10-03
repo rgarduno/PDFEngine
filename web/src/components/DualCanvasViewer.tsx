@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AnnotationElement, DetectedTableItem, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { AnnotationElement, BoundingBox, DetectedTableItem, DrawTool, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
 import { fetchAuthorizedBuffer, getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
 import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, PenTool, RefreshCw, Table, Trash2 } from 'lucide-react';
@@ -32,6 +32,8 @@ interface DualCanvasViewerProps {
   tables?: DetectedTableItem[];
   selectedTableIdx?: number | null;
   onSelectTable?: (idx: number | null) => void;
+  drawTool?: DrawTool | null;
+  onCommitShape?: (kind: DrawTool, points: number[][]) => void;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -64,9 +66,14 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   tables = [],
   selectedTableIdx = null,
   onSelectTable,
+  drawTool = null,
+  onCommitShape,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const dragStart = useRef<number[] | null>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [draft, setDraft] = useState<number[][]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState<string>('');
 
@@ -123,6 +130,74 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
     };
   }, [documentId, pageNumber]);
 
+  useEffect(() => {
+    setDraft([]);
+    dragStart.current = null;
+  }, [drawTool, pageNumber, rotation]);
+
+  const clientToPdf = (event: React.PointerEvent): [number, number] | null => {
+    if (rotation !== 0 || !pageRef.current) return null;
+    const box = pageRef.current.getBoundingClientRect();
+    const x = (event.clientX - box.left) / zoom;
+    const y = PAGE_HEIGHT_PTS - (event.clientY - box.top) / zoom;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+  };
+
+  const onDrawPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drawTool || rotation !== 0) return;
+    const point = clientToPdf(event);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (drawTool === 'Polygon') {
+      setDraft((prev) => [...prev, point]);
+      return;
+    }
+    dragStart.current = point;
+    setDraft([point]);
+  };
+
+  const onDrawPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drawTool || drawTool === 'Polygon' || !dragStart.current) return;
+    const point = clientToPdf(event);
+    if (!point) return;
+    if (drawTool === 'Ink') {
+      setDraft((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && Math.hypot(point[0] - last[0], point[1] - last[1]) < 0.8) return prev;
+        return [...prev, point];
+      });
+      return;
+    }
+    setDraft([dragStart.current, point]);
+  };
+
+  const onDrawPointerUp = () => {
+    if (!drawTool || drawTool === 'Polygon') return;
+    setDraft((current) => {
+      const dragged = drawTool !== 'Ink';
+      const moved = current.length === 2
+        && Math.hypot(current[1][0] - current[0][0], current[1][1] - current[0][1]) >= 2;
+      const ready = (drawTool === 'Ink' && current.length >= 2) || (dragged && moved);
+      if (ready) onCommitShape?.(drawTool, current);
+      dragStart.current = null;
+      return [];
+    });
+  };
+
+  const onDrawDoubleClick = (event: React.MouseEvent) => {
+    if (drawTool !== 'Polygon') return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDraft((current) => {
+      const points = current.slice(0, -1);
+      if (points.length >= 3) onCommitShape?.('Polygon', points);
+      return [];
+    });
+  };
+
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setEditText(val);
@@ -166,6 +241,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
         className="relative flex items-center justify-center transition-all duration-300"
       >
         <div
+          ref={pageRef}
           style={{
             width: `${PAGE_WIDTH_PTS * zoom}px`,
             height: `${PAGE_HEIGHT_PTS * zoom}px`,
@@ -445,6 +521,10 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                   </div>
                 )}
 
+                {['Ink', 'Square', 'Circle', 'Line', 'Polygon'].includes(annot.subtype) && (
+                  <ShapeMark annot={annot} rgbColor={rgbColor} />
+                )}
+
                 {annot.subtype === 'Stamp' && (
                   <div
                     style={{
@@ -564,6 +644,24 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
           );
         })}
 
+        {drawTool && rotation === 0 && (
+          <div
+            className="absolute inset-0 z-40"
+            style={{ touchAction: 'none', cursor: 'crosshair' }}
+            onPointerDown={onDrawPointerDown}
+            onPointerMove={onDrawPointerMove}
+            onPointerUp={onDrawPointerUp}
+            onDoubleClick={onDrawDoubleClick}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <svg viewBox={`0 0 ${PAGE_WIDTH_PTS} ${PAGE_HEIGHT_PTS}`} className="w-full h-full pointer-events-none">
+              <g transform={`translate(0 ${PAGE_HEIGHT_PTS}) scale(1 -1)`}>
+                <DraftShape kind={drawTool} points={draft} />
+              </g>
+            </svg>
+          </div>
+        )}
+
         {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
         {paragraphs.map((p) => {
           const { left, top, width, height } = pdfToScreenCoordinates(p.bbox);
@@ -652,3 +750,89 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
     </div>
   );
 };
+
+function unitRgb(channels: number[] | undefined, fallback: string): string {
+  if (!channels || channels.length < 3) return fallback;
+  return `rgb(${channels.slice(0, 3).map((channel) => Math.round(channel * 255)).join(',')})`;
+}
+
+function ShapeMark({ annot, rgbColor }: { annot: AnnotationElement; rgbColor: string }) {
+  const width = Math.max(annot.bbox.width, 1);
+  const height = Math.max(annot.bbox.height, 1);
+  const fill = unitRgb(annot.fill_color, 'none');
+  const strokeWidth = Math.max(annot.border_width || 1, 0.25);
+  const local = (annot.points || []).map(
+    (point) => `${point[0] - annot.bbox.min_x},${annot.bbox.max_y - point[1]}`
+  );
+  const paint = {
+    stroke: rgbColor,
+    strokeWidth,
+    fill: annot.subtype === 'Ink' || annot.subtype === 'Line' ? 'none' : fill,
+    opacity: annot.opacity,
+  };
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
+      {annot.subtype === 'Square' && (
+        <rect x={0} y={0} width={width} height={height} {...paint} />
+      )}
+      {annot.subtype === 'Circle' && (
+        <ellipse cx={width / 2} cy={height / 2} rx={width / 2} ry={height / 2} {...paint} />
+      )}
+      {annot.subtype === 'Polygon' && local.length >= 3 && <polygon points={local.join(' ')} {...paint} />}
+      {(annot.subtype === 'Ink' || annot.subtype === 'Line') && local.length >= 2 && (
+        <polyline points={local.join(' ')} {...paint} />
+      )}
+      {annot.subtype === 'Line' && annot.line_ending && local.length >= 2 && (
+        <ArrowHead points={annot.points || []} bbox={annot.bbox} color={rgbColor} />
+      )}
+    </svg>
+  );
+}
+
+function ArrowHead({
+  points,
+  bbox,
+  color,
+}: {
+  points: number[][];
+  bbox: BoundingBox;
+  color: string;
+}) {
+  const start = points[points.length - 2];
+  const end = points[points.length - 1];
+  const x1 = start[0] - bbox.min_x;
+  const y1 = bbox.max_y - start[1];
+  const x2 = end[0] - bbox.min_x;
+  const y2 = bbox.max_y - end[1];
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.max(Math.hypot(dx, dy), 0.001);
+  const ux = dx / len;
+  const uy = dy / len;
+  const size = 8;
+  const baseX = x2 - ux * size;
+  const baseY = y2 - uy * size;
+  const px = -uy;
+  const py = ux;
+  const left = `${baseX + px * size * 0.45},${baseY + py * size * 0.45}`;
+  const right = `${baseX - px * size * 0.45},${baseY - py * size * 0.45}`;
+  return <polygon points={`${x2},${y2} ${left} ${right}`} fill={color} />;
+}
+
+function DraftShape({ kind, points }: { kind: DrawTool; points: number[][] }) {
+  if (points.length === 0) return null;
+  const paint = { stroke: '#1d4ed8', strokeWidth: 1.5, fill: 'none' };
+  if ((kind === 'Square' || kind === 'Circle' || kind === 'Line' || kind === 'Arrow') && points.length >= 2) {
+    const [a, b] = points;
+    const x = Math.min(a[0], b[0]);
+    const y = Math.min(a[1], b[1]);
+    const width = Math.abs(b[0] - a[0]);
+    const height = Math.abs(b[1] - a[1]);
+    if (kind === 'Square') return <rect x={x} y={y} width={width} height={height} {...paint} />;
+    if (kind === 'Circle') {
+      return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} {...paint} />;
+    }
+    return <polyline points={points.map((point) => point.join(',')).join(' ')} {...paint} />;
+  }
+  return <polyline points={points.map((point) => point.join(',')).join(' ')} {...paint} />;
+}

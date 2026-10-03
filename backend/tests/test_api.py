@@ -828,6 +828,87 @@ def test_annotations_workflow():
     assert export_resp.content.startswith(b"%PDF-")
 
 
+def test_shape_annotations_round_trip_and_reject_bad_input():
+    """Ink, square, circle, arrow, and polygon survive a reload. Bad input is a stable sentence."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("shape_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    doc_id = upload_resp.json()["document_id"]
+    shapes = [
+        ("Ink", [[72, 100], [90, 140], [120, 110]], None),
+        ("Square", [[100, 200], [180, 260]], [0.9, 0.8, 0.1]),
+        ("Circle", [[200, 300], [280, 360]], [0.2, 0.8, 0.3]),
+        ("Arrow", [[50, 400], [200, 450]], None),
+        ("Polygon", [[300, 100], [360, 100], [340, 160]], [0.8, 0.2, 0.2]),
+    ]
+    for kind, points, fill in shapes:
+        response = client.post(
+            f"/api/documents/{doc_id}/pages/1/annotations/shape",
+            json={
+                "kind": kind,
+                "points": points,
+                "stroke": [0.1, 0.2, 0.9],
+                "fill": fill,
+                "line_width": 2,
+                "opacity": 0.8,
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    listed = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert listed.status_code == 200
+    items = listed.json()["annotations"]
+    subtypes = {item["subtype"] for item in items}
+    assert {"Ink", "Square", "Circle", "Line", "Polygon"} <= subtypes
+    ink = next(item for item in items if item["subtype"] == "Ink")
+    assert len(ink["points"]) == 3
+    square = next(item for item in items if item["subtype"] == "Square")
+    assert square["fill_color"][0] == pytest.approx(0.9, abs=0.01)
+    line = next(item for item in items if item["subtype"] == "Line")
+    assert line["line_ending"] == "OpenArrow"
+    assert line["border_width"] == pytest.approx(2.0, abs=0.01)
+
+    export_resp = client.get(f"/api/documents/{doc_id}/export")
+    assert export_resp.status_code == 200
+    assert b"/InkList" in export_resp.content
+    assert b"/Vertices" in export_resp.content
+    assert b"/LE" in export_resp.content
+
+    rejected = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/shape",
+        json={"kind": "Script", "points": [[1, 1], [2, 2]], "stroke": [0, 0, 0]},
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "Shape kind was rejected."
+    assert "Script" not in rejected.text
+
+    overflow = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/shape",
+        json={
+            "kind": "Line",
+            "points": [[1, 1], [2, 2], [3, 3]],
+            "stroke": [0, 0, 0],
+        },
+    )
+    assert overflow.status_code == 400
+    assert overflow.json()["detail"] == "A shape has too many points."
+
+    color = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/shape",
+        json={
+            "kind": "Square",
+            "points": [[10, 10], [40, 40]],
+            "stroke": [1.4, 0, 0],
+        },
+    )
+    assert color.status_code == 400
+    assert color.json()["detail"] == "Shape color was rejected."
+    assert "1.4" not in color.text
+
+
 def test_pagination_and_watermarks_workflow():
     """Validates dynamic pagination and semitransparent text/image watermark REST endpoints."""
     # 1. Upload Document

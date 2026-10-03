@@ -1,6 +1,7 @@
 import {
   AddLinkPayload,
   AddMarkupPayload,
+  AddShapePayload,
   AddPaginationPayload,
   AddStampPayload,
   AddTextWatermarkPayload,
@@ -662,6 +663,32 @@ export async function addLink(
       message: `Link created locally.`,
     };
   }
+}
+
+export async function addShape(
+  docId: string,
+  pageNumber: number,
+  payload: AddShapePayload
+): Promise<AnnotationActionResponse> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/api/documents/${docId}/pages/${pageNumber}/annotations/shape`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) {
+    let detail = 'Failed to add shape';
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === 'string') detail = body.detail;
+    } catch {
+      /* The response body is not JSON. */
+    }
+    throw new Error(detail);
+  }
+  return await res.json();
 }
 
 export async function addStamp(

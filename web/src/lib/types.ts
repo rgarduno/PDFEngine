@@ -118,7 +118,14 @@ export type AnnotationSubtype =
   | 'StrikeOut'
   | 'Link'
   | 'Stamp'
+  | 'Ink'
+  | 'Square'
+  | 'Circle'
+  | 'Line'
+  | 'Polygon'
   | 'Other';
+
+export type DrawTool = 'Ink' | 'Square' | 'Circle' | 'Line' | 'Arrow' | 'Polygon';
 
 export interface AnnotationElement {
   id: number;
@@ -134,6 +141,10 @@ export interface AnnotationElement {
   link_target_page?: number;
   stamp_type?: string;
   date_str?: string;
+  border_width?: number;
+  fill_color?: number[];
+  points?: number[][];
+  line_ending?: string;
 }
 
 export interface PageAnnotationsResponse {
@@ -162,6 +173,15 @@ export interface AddLinkPayload {
   uri?: string;
   target_page?: number;
   show_border?: boolean;
+}
+
+export interface AddShapePayload {
+  kind: DrawTool;
+  points: number[][];
+  stroke: number[];
+  fill?: number[] | null;
+  line_width: number;
+  opacity: number;
 }
 
 export interface AddStampPayload {

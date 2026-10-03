@@ -8,6 +8,7 @@ import asyncio
 import base64
 import inspect
 import logging
+import math
 import os
 from functools import wraps
 from typing import List, Optional
@@ -43,6 +44,7 @@ from app.models import (
     AddLinkRequest,
     AddMarkupRequest,
     AddPaginationRequest,
+    AddShapeRequest,
     AddStampRequest,
     AddTextWatermarkRequest,
     AnnotationActionResponse,
@@ -560,6 +562,62 @@ _OCR_DETAILS = (
     "OCR language was rejected.",
     "The scanned image exceeds the recognition limit.",
 )
+
+
+_SHAPE_DETAILS = (
+    "Shape point was rejected.",
+    "A shape has too many points.",
+    "A shape needs more points.",
+    "Shape color was rejected.",
+    "Shape line width was rejected.",
+    "Shape kind was rejected.",
+)
+_SHAPE_KINDS = {
+    "Ink": (2, 2000),
+    "Polygon": (3, 200),
+    "Square": (2, 2),
+    "Circle": (2, 2),
+    "Line": (2, 2),
+    "Arrow": (2, 2),
+}
+
+
+def _shape_failure(exc: BaseException) -> HTTPException:
+    """Maps a shape failure to a stable sentence. Unknown text stays in the log."""
+    text = str(exc)
+    for sentence in _SHAPE_DETAILS:
+        if sentence in text:
+            return HTTPException(status_code=400, detail=sentence)
+    return _public_error(400, exc)
+
+
+def _shape_request_error(request: AddShapeRequest) -> Optional[str]:
+    """Checks a shape before the engine runs. The message never echoes the payload."""
+    limits = _SHAPE_KINDS.get(request.kind)
+    if limits is None:
+        return "Shape kind was rejected."
+    low, high = limits
+    if len(request.points) > high:
+        return "A shape has too many points."
+    if len(request.points) < low:
+        return "A shape needs more points."
+    for point in request.points:
+        if len(point) != 2 or any(not math.isfinite(channel) or abs(channel) > 20_000 for channel in point):
+            return "Shape point was rejected."
+    if len(request.stroke) != 3 or any(
+        not math.isfinite(channel) or channel < 0.0 or channel > 1.0 for channel in request.stroke
+    ):
+        return "Shape color was rejected."
+    if request.fill is not None and (
+        len(request.fill) != 3
+        or any(not math.isfinite(channel) or channel < 0.0 or channel > 1.0 for channel in request.fill)
+    ):
+        return "Shape color was rejected."
+    if not math.isfinite(request.line_width) or not 0.25 <= request.line_width <= 24.0:
+        return "Shape line width was rejected."
+    if not math.isfinite(request.opacity) or not 0.05 <= request.opacity <= 1.0:
+        return "Shape color was rejected."
+    return None
 
 
 def _ocr_failure(exc: BaseException) -> HTTPException:
@@ -1330,6 +1388,10 @@ def annot_to_model(a) -> AnnotationModel:
         link_target_page=a.link_target_page,
         stamp_type=a.stamp_type,
         date_str=a.date_str,
+        border_width=a.border_width,
+        fill_color=a.fill_color,
+        points=[[float(x), float(y)] for x, y in (a.points or [])],
+        line_ending=a.line_ending,
     )
 
 
@@ -1389,6 +1451,42 @@ def add_text_markup_endpoint(doc_id: str, page_idx: int, request: AddMarkupReque
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/annotations/shape",
+    response_model=AnnotationActionResponse,
+)
+@serialized_mutation
+def add_shape_endpoint(doc_id: str, page_idx: int, request: AddShapeRequest):
+    """Adds an ink stroke or a vector shape. Arrow is stored as a line ending."""
+    session = load_session(doc_id)
+    rejected = _shape_request_error(request)
+    if rejected is not None:
+        raise HTTPException(status_code=400, detail=rejected)
+
+    doc = session["doc"]
+    try:
+        annot_id = doc.add_shape(
+            page_idx,
+            request.kind,
+            request.points,
+            request.stroke,
+            request.fill,
+            request.line_width,
+            request.opacity,
+        )
+        return AnnotationActionResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            annotation_id=annot_id,
+            message="Shape annotation created successfully.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _shape_failure(exc)
 
 
 @app.post(

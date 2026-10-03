@@ -288,3 +288,139 @@ fn test_flatten_annotations_to_contents() {
     assert!(text.contains("/GS_HL gs"));
     assert!(text.contains("APPROVED"));
 }
+
+fn shape_style(ending: Option<&'static str>, fill: bool) -> ShapeStyle {
+    ShapeStyle {
+        stroke: [0.1, 0.2, 0.9],
+        fill: if fill { Some([0.95, 0.85, 0.2]) } else { None },
+        line_width: 2.0,
+        opacity: 0.8,
+        line_ending: ending,
+    }
+}
+
+fn appearance_text(doc: &mut PdfDocument, annot: &Annotation) -> String {
+    use crate::cos::object::PdfObject;
+    let dict = match doc.get_object(annot.id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        other => panic!("annotation object was {other:?}"),
+    };
+    let appearance = match dict.get("AP").cloned() {
+        Some(PdfObject::Dictionary(dict)) => dict,
+        other => panic!("appearance was {other:?}"),
+    };
+    let normal = appearance.get("N").and_then(|item| item.as_reference()).unwrap();
+    match doc.get_object(normal).unwrap() {
+        PdfObject::Stream(stream) => String::from_utf8_lossy(&stream.content).into_owned(),
+        other => panic!("appearance stream was {other:?}"),
+    }
+}
+
+#[test]
+fn ink_and_vector_shapes_round_trip_and_reject_bad_input() {
+    let pdf_bytes = create_test_pdf_two_pages();
+    let mut doc = PdfDocument::load(&pdf_bytes).unwrap();
+
+    add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Ink,
+        &[[72.0, 100.0], [90.0, 140.0], [120.0, 110.0]],
+        shape_style(None, false),
+    )
+    .unwrap();
+    add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Square,
+        &[[100.0, 200.0], [180.0, 260.0]],
+        shape_style(None, true),
+    )
+    .unwrap();
+    add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Circle,
+        &[[200.0, 300.0], [280.0, 360.0]],
+        shape_style(None, true),
+    )
+    .unwrap();
+    add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Line,
+        &[[50.0, 400.0], [200.0, 450.0]],
+        shape_style(Some("OpenArrow"), false),
+    )
+    .unwrap();
+    add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Polygon,
+        &[[300.0, 100.0], [360.0, 100.0], [340.0, 160.0]],
+        shape_style(None, true),
+    )
+    .unwrap();
+
+    let marks = extract_page_annotations(&mut doc, 0).unwrap();
+    assert_eq!(marks.len(), 5);
+    let ink = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Ink).unwrap();
+    assert_eq!(ink.points.len(), 3);
+    assert!((ink.points[0][0] - 72.0).abs() < 0.01);
+    assert!((ink.border_width - 2.0).abs() < 0.01);
+    let square = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Square).unwrap();
+    assert_eq!(square.fill_color, Some([0.95, 0.85, 0.2]));
+    let circle = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Circle).unwrap();
+    let line = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Line).unwrap();
+    assert_eq!(line.line_ending.as_deref(), Some("OpenArrow"));
+    assert_eq!(line.points.len(), 2);
+    let polygon = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Polygon).unwrap();
+    assert_eq!(polygon.points.len(), 3);
+
+    let square_paint = appearance_text(&mut doc, square);
+    assert!(square_paint.contains(" re\n"), "{square_paint}");
+    let circle_paint = appearance_text(&mut doc, circle);
+    assert!(circle_paint.contains(" c\n"), "{circle_paint}");
+    let line_paint = appearance_text(&mut doc, line);
+    assert!(line_paint.contains(" f\n"), "{line_paint}");
+    let ink_paint = appearance_text(&mut doc, ink);
+    assert!(ink_paint.contains("\nS\n"), "{ink_paint}");
+    let polygon_paint = appearance_text(&mut doc, polygon);
+    assert!(polygon_paint.contains("h\nB\n"), "{polygon_paint}");
+
+    let saved = doc.save_to_vec().unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    assert!(text.contains("/InkList"));
+    assert!(text.contains("/BS"));
+    assert!(text.contains("/IC"));
+    assert!(text.contains("/LE"));
+    assert!(text.contains("/Vertices"));
+
+    let mut reloaded = PdfDocument::load(&saved).unwrap();
+    let again = extract_page_annotations(&mut reloaded, 0).unwrap();
+    assert!(again.iter().any(|mark| mark.subtype == AnnotationSubtype::Ink && mark.points.len() == 3));
+    assert!(again.iter().any(|mark| {
+        mark.subtype == AnnotationSubtype::Line && mark.line_ending.as_deref() == Some("OpenArrow")
+    }));
+
+    let short = add_shape(&mut doc, 0, ShapeKind::Ink, &[[10.0, 10.0]], shape_style(None, false));
+    assert!(short.unwrap_err().to_string().contains("A shape needs more points."));
+    let mut bad = shape_style(None, false);
+    bad.stroke = [1.2, 0.0, 0.0];
+    let color = add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Line,
+        &[[10.0, 10.0], [40.0, 40.0]],
+        bad,
+    );
+    assert!(color.unwrap_err().to_string().contains("Shape color was rejected."));
+    let missing = add_shape(
+        &mut doc,
+        9,
+        ShapeKind::Square,
+        &[[10.0, 10.0], [40.0, 40.0]],
+        shape_style(None, false),
+    );
+    assert!(matches!(missing, Err(crate::error::PdfError::InvalidPageNumber { .. })));
+}

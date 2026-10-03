@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use std::fs;
 
 use pdf_engine_core::annots::{
-    AnnotationSubtype, LinkAction, StampType,
+    AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType,
 };
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
 use pdf_engine_core::editor::SurgicalEditor;
@@ -206,6 +206,14 @@ pub struct PyAnnotation {
     pub stamp_type: Option<String>,
     #[pyo3(get)]
     pub date_str: Option<String>,
+    #[pyo3(get)]
+    pub border_width: f64,
+    #[pyo3(get)]
+    pub fill_color: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub points: Vec<(f64, f64)>,
+    #[pyo3(get)]
+    pub line_ending: Option<String>,
 }
 
 #[pymethods]
@@ -252,6 +260,10 @@ impl PyAnnotation {
             link_target_page,
             stamp_type,
             date_str: a.date_str,
+            border_width: a.border_width,
+            fill_color: a.fill_color.map(|color| color.to_vec()),
+            points: a.points.iter().map(|point| (point[0], point[1])).collect(),
+            line_ending: a.line_ending,
         }
     }
 }
@@ -1447,6 +1459,74 @@ impl PyPdfDocument {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to add stamp: {}", e)))?;
 
+        Ok(annot_id.number)
+    }
+
+    /// Adds an ink stroke or a vector shape. `Arrow` is a line with an open arrow.
+    #[pyo3(signature = (page_index, kind, points, stroke, fill=None, line_width=1.5, opacity=1.0))]
+    pub fn add_shape(
+        &mut self,
+        page_index: usize,
+        kind: &str,
+        points: Vec<Vec<f64>>,
+        stroke: Vec<f64>,
+        fill: Option<Vec<f64>>,
+        line_width: f64,
+        opacity: f64,
+    ) -> PyResult<u32> {
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let (shape_kind, ending) = match kind {
+            "Arrow" => (ShapeKind::Line, Some("OpenArrow")),
+            other => (
+                ShapeKind::from_name(other).ok_or_else(|| {
+                    PyRuntimeError::new_err("Failed to add shape: Shape kind was rejected.")
+                })?,
+                None,
+            ),
+        };
+        let stroke = if stroke.len() >= 3 {
+            [stroke[0], stroke[1], stroke[2]]
+        } else {
+            return Err(PyRuntimeError::new_err(
+                "Failed to add shape: Shape color was rejected.",
+            ));
+        };
+        let fill = match fill {
+            Some(channels) if channels.len() >= 3 => Some([channels[0], channels[1], channels[2]]),
+            Some(_) => {
+                return Err(PyRuntimeError::new_err(
+                    "Failed to add shape: Shape color was rejected.",
+                ));
+            }
+            None => None,
+        };
+        let mut stored = Vec::with_capacity(points.len());
+        for point in &points {
+            if point.len() < 2 || !point[0].is_finite() || !point[1].is_finite() {
+                return Err(PyRuntimeError::new_err(
+                    "Failed to add shape: Shape point was rejected.",
+                ));
+            }
+            stored.push([point[0], point[1]]);
+        }
+        let annot_id = pdf_engine_core::annots::add_shape(
+            &mut self.doc,
+            zero_idx,
+            shape_kind,
+            &stored,
+            ShapeStyle {
+                stroke,
+                fill,
+                line_width,
+                opacity,
+                line_ending: ending,
+            },
+        )
+        .map_err(|error| PyRuntimeError::new_err(format!("Failed to add shape: {error}")))?;
         Ok(annot_id.number)
     }
 

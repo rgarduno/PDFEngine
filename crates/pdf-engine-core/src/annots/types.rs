@@ -16,6 +16,16 @@ pub enum AnnotationSubtype {
     Link,
     /// Rubber stamp annotation (`/Stamp`).
     Stamp,
+    /// Freehand stroke (`/Ink`).
+    Ink,
+    /// Rectangle (`/Square`).
+    Square,
+    /// Ellipse (`/Circle`).
+    Circle,
+    /// Straight line, optionally with an arrow ending (`/Line`).
+    Line,
+    /// Closed polygon (`/Polygon`).
+    Polygon,
     /// Other unhandled or custom annotation subtype.
     Other,
 }
@@ -29,6 +39,11 @@ impl AnnotationSubtype {
             AnnotationSubtype::StrikeOut => "StrikeOut",
             AnnotationSubtype::Link => "Link",
             AnnotationSubtype::Stamp => "Stamp",
+            AnnotationSubtype::Ink => "Ink",
+            AnnotationSubtype::Square => "Square",
+            AnnotationSubtype::Circle => "Circle",
+            AnnotationSubtype::Line => "Line",
+            AnnotationSubtype::Polygon => "Polygon",
             AnnotationSubtype::Other => "Unknown",
         }
     }
@@ -41,6 +56,11 @@ impl AnnotationSubtype {
             "StrikeOut" => AnnotationSubtype::StrikeOut,
             "Link" => AnnotationSubtype::Link,
             "Stamp" => AnnotationSubtype::Stamp,
+            "Ink" => AnnotationSubtype::Ink,
+            "Square" => AnnotationSubtype::Square,
+            "Circle" => AnnotationSubtype::Circle,
+            "Line" => AnnotationSubtype::Line,
+            "Polygon" => AnnotationSubtype::Polygon,
             _ => AnnotationSubtype::Other,
         }
     }
@@ -133,4 +153,12 @@ pub struct Annotation {
     pub stamp_type: Option<StampType>,
     /// Optional date stamp string.
     pub date_str: Option<String>,
+    /// Border width from `/BS /W`. Defaults to 1 when the dictionary omits it.
+    pub border_width: f64,
+    /// Interior color `/IC` for square, circle, and polygon marks.
+    pub fill_color: Option<[f64; 3]>,
+    /// Stroke vertices in user space (`/InkList`, `/L`, or `/Vertices`).
+    pub points: Vec<[f64; 2]>,
+    /// Line ending name at the second point, such as `OpenArrow`.
+    pub line_ending: Option<String>,
 }

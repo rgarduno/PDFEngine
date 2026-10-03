@@ -119,6 +119,11 @@ pub fn extract_page_annotations(
             (None, None)
         };
 
+        let border_width = border_width_of(&annot_dict);
+        let fill_color = rgb_array(annot_dict.get("IC"));
+        let points = shape_points(subtype, &annot_dict);
+        let line_ending = line_ending_of(&annot_dict);
+
         result.push(Annotation {
             id: annot_id,
             page_index,
@@ -131,6 +136,10 @@ pub fn extract_page_annotations(
             link_action,
             stamp_type,
             date_str,
+            border_width,
+            fill_color,
+            points,
+            line_ending,
         });
     }
 
@@ -147,6 +156,69 @@ pub fn extract_all_annotations(doc: &mut PdfDocument) -> PdfResult<Vec<Annotatio
         all.append(&mut page_annots);
     }
     Ok(all)
+}
+
+fn rgb_array(obj: Option<&PdfObject>) -> Option<[f64; 3]> {
+    match obj {
+        Some(PdfObject::Array(values)) if values.len() >= 3 => Some([
+            values[0].as_f64().unwrap_or(0.0),
+            values[1].as_f64().unwrap_or(0.0),
+            values[2].as_f64().unwrap_or(0.0),
+        ]),
+        _ => None,
+    }
+}
+
+fn border_width_of(dict: &PdfDictionary) -> f64 {
+    let Some(style) = dict.get("BS") else {
+        return 1.0;
+    };
+    let style = match style {
+        PdfObject::Dictionary(inner) => inner,
+        _ => return 1.0,
+    };
+    style.get("W").and_then(|width| width.as_f64()).unwrap_or(1.0)
+}
+
+fn pair_list(obj: &PdfObject) -> Vec<[f64; 2]> {
+    let PdfObject::Array(values) = obj else {
+        return Vec::new();
+    };
+    let mut points = Vec::new();
+    let mut index = 0;
+    while index + 1 < values.len() {
+        let x = values[index].as_f64().unwrap_or(0.0);
+        let y = values[index + 1].as_f64().unwrap_or(0.0);
+        points.push([x, y]);
+        index += 2;
+    }
+    points
+}
+
+fn shape_points(subtype: AnnotationSubtype, dict: &PdfDictionary) -> Vec<[f64; 2]> {
+    match subtype {
+        AnnotationSubtype::Ink => {
+            let Some(PdfObject::Array(strokes)) = dict.get("InkList") else {
+                return Vec::new();
+            };
+            strokes.first().map(pair_list).unwrap_or_default()
+        }
+        AnnotationSubtype::Line => dict.get("L").map(pair_list).unwrap_or_default(),
+        AnnotationSubtype::Polygon => dict.get("Vertices").map(pair_list).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn line_ending_of(dict: &PdfDictionary) -> Option<String> {
+    let PdfObject::Array(values) = dict.get("LE")? else {
+        return None;
+    };
+    let name = values.last().and_then(|item| item.as_name())?;
+    if name == "None" {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 /// Resolves link actions from an annotation dictionary.

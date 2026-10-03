@@ -280,6 +280,10 @@ class AnnotationModel(BaseModel):
     link_target_page: Optional[int] = None
     stamp_type: Optional[str] = None
     date_str: Optional[str] = None
+    border_width: float = 1.0
+    fill_color: Optional[List[float]] = None
+    points: List[List[float]] = []
+    line_ending: Optional[str] = None
 
 
 class PageAnnotationsResponse(BaseModel):
@@ -311,6 +315,16 @@ class AddLinkRequest(BaseModel):
     uri: Optional[str] = None
     target_page: Optional[int] = None
     show_border: bool = False
+
+
+class AddShapeRequest(BaseModel):
+    """Ink stroke or vector shape. Arrow is a line with an open arrow ending."""
+    kind: str
+    points: List[List[float]]
+    stroke: List[float]
+    fill: Optional[List[float]] = None
+    line_width: float = 1.5
+    opacity: float = 1.0
 
 
 class AddStampRequest(BaseModel):

@@ -132,6 +132,12 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Invisible text uses rendering mode 3 and WinAnsi ToUnicode             │
 │    - The face is standard Courier and is not embedded                       │
 │    - Recognition is not guaranteed. The scan image is unchanged.            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 15. Ink strokes and vector shapes                                           │
+│    - /Ink, /Square, /Circle, /Line (open arrow), and /Polygon               │
+│    - Stroke color, /BS /W, opacity, and optional fill on closed shapes      │
+│    - Each mark stores a normal appearance stream                            │
+│    - Flatten still burns only highlight, underline, strikeout, and stamp    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -359,6 +365,16 @@ text uses rendering mode 3 and a WinAnsi `/ToUnicode` map. The face is the
 standard Courier and is not embedded. Recognition is not guaranteed, and the
 scan image is left unchanged. A page that already shows text is left unchanged.
 
+### Ink and vector shapes
+
+`POST /api/documents/{id}/pages/{p}/annotations/shape` adds one mark. The
+`kind` is `Ink`, `Square`, `Circle`, `Line`, `Arrow`, or `Polygon`. `Arrow`
+is stored as `/Subtype /Line` with `/LE [/None /OpenArrow]`. Ink keeps one
+`/InkList` stroke. A polygon keeps `/Vertices`. Square, circle, and polygon
+may set `/IC`. Every mark stores `/BS /W`, `/C`, `/CA`, and a normal
+appearance stream. Flattening still burns only highlight, underline,
+strikeout, and stamp marks. The new marks stay annotations.
+
 ### 3. API Endpoints
 
 | Method | Endpoint | Description |
@@ -389,6 +405,7 @@ scan image is left unchanged. A page that already shows text is left unchanged.
 | `POST` | `/api/documents/{id}/pages/{p}/annotations/markup` | Add Highlight, Underline, or StrikeOut annotation with custom color & opacity. |
 | `POST` | `/api/documents/{id}/pages/{p}/annotations/link` | Add interactive clickable Web URI or GoTo page destination. |
 | `POST` | `/api/documents/{id}/pages/{p}/annotations/stamp` | Add vector rubber stamp with dual borders and custom rubrics. |
+| `POST` | `/api/documents/{id}/pages/{p}/annotations/shape` | Add an ink stroke, rectangle, ellipse, line, arrow, or polygon. |
 | `DELETE` | `/api/documents/{id}/pages/{p}/annotations/{aid}` | Remove annotation from document tree. |
 | `POST` | `/api/documents/{id}/annotations/flatten` | Burn visual annotations into permanent page vector graphics. |
 | `POST` | `/api/documents/{id}/pagination` | Apply dynamic Bates numbering & headers/footers with `{page}` and `{total}`. |
@@ -456,6 +473,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 18: Interactive AcroForm Builder & Form Field Designer (ISO 32000-1 §12.7)** (AcroForm catalog auto-initialization, merged Widget annotations, visual field designer for Text, Checkbox, Choice, and Digital Signature `/Sig`, field deletion and geometry updating, PyO3 bindings, FastAPI CRUD endpoints & Web Studio)
 - [x] **Phase 19: Security Hardening & Vulnerability Remediation** (Bearer identity binding, session TTL & LRU eviction, dynamic SHA-256 byte-range attestation, random AESV2 initialization vectors, active code /JS/Launch action pruning, upload caps, sparse xref streams & cycle guards, predictor & PNG IDAT bounded decompression, safe download headers, table lattice segment budgets, and studio security headers)
 - [x] **Phase 20: Searchable text over scanned pages** (A page that paints one image and no text can receive word boxes from local tesseract. The engine appends rendering mode 3 text and a WinAnsi `/ToUnicode` map. The face is standard Courier and is not embedded. Recognition is not guaranteed and the scan image is unchanged.)
+- [x] **Phase 21: Ink and vector shapes** (The studio draws `/Ink`, `/Square`, `/Circle`, `/Line` with an open arrow, and `/Polygon`, with stroke color, border width, opacity, and optional fill. Each mark has an appearance stream. Flattening does not burn these marks.)
 
 ---
 

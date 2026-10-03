@@ -21,10 +21,15 @@ import {
   Award,
   ChevronLeft,
   ChevronRight,
+  Circle,
+  Minus,
   PanelLeft,
+  PenLine,
+  Pentagon,
+  Square,
   Zap,
 } from 'lucide-react';
-import { TextAlignment } from '@/lib/types';
+import { DrawTool, TextAlignment } from '@/lib/types';
 
 interface ToolbarProps {
   filename: string;
@@ -52,6 +57,19 @@ interface ToolbarProps {
   showThumbnails?: boolean;
   onToggleThumbnails?: () => void;
   onOptimizeClick?: () => void;
+  drawTool?: DrawTool | null;
+  onDrawToolChange?: (tool: DrawTool | null) => void;
+  strokeColor?: string;
+  onStrokeColorChange?: (value: string) => void;
+  fillColor?: string;
+  fillEnabled?: boolean;
+  onFillColorChange?: (value: string) => void;
+  onFillEnabledChange?: (enabled: boolean) => void;
+  shapeLineWidth?: number;
+  onShapeLineWidthChange?: (value: number) => void;
+  shapeOpacity?: number;
+  onShapeOpacityChange?: (value: number) => void;
+  drawingEnabled?: boolean;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -80,6 +98,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   showThumbnails = true,
   onToggleThumbnails,
   onOptimizeClick,
+  drawTool = null,
+  onDrawToolChange,
+  strokeColor = '#1d4ed8',
+  onStrokeColorChange,
+  fillColor = '#fde68a',
+  fillEnabled = false,
+  onFillColorChange,
+  onFillEnabledChange,
+  shapeLineWidth = 1.5,
+  onShapeLineWidthChange,
+  shapeOpacity = 1,
+  onShapeOpacityChange,
+  drawingEnabled = true,
 }) => {
   const [pageInputValue, setPageInputValue] = useState<string>(String(pageNumber));
 
@@ -88,7 +119,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   }, [pageNumber]);
 
   return (
-    <header className="h-16 border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md px-4 flex items-center justify-between select-none z-30 sticky top-0">
+    <header className="border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md select-none z-30 sticky top-0">
+      <div className="h-16 px-4 flex items-center justify-between">
       {/* Left: Document Info & Page Navigator */}
       <div className="flex items-center gap-3 min-w-0">
         {onToggleThumbnails && (
@@ -369,6 +401,143 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <span>{isExporting ? 'Compiling PDF...' : 'Export Lossless PDF'}</span>
         </button>
       </div>
+      </div>
+      {onDrawToolChange && (
+        <DrawStrip
+          drawTool={drawTool}
+          onDrawToolChange={onDrawToolChange}
+          strokeColor={strokeColor}
+          onStrokeColorChange={onStrokeColorChange}
+          fillColor={fillColor}
+          fillEnabled={fillEnabled}
+          onFillColorChange={onFillColorChange}
+          onFillEnabledChange={onFillEnabledChange}
+          shapeLineWidth={shapeLineWidth}
+          onShapeLineWidthChange={onShapeLineWidthChange}
+          shapeOpacity={shapeOpacity}
+          onShapeOpacityChange={onShapeOpacityChange}
+          drawingEnabled={drawingEnabled}
+        />
+      )}
     </header>
   );
 };
+
+const DRAW_TOOLS: { id: DrawTool; label: string; icon: React.ReactNode }[] = [
+  { id: 'Ink', label: 'Tinta', icon: <PenLine size={14} /> },
+  { id: 'Square', label: 'Rectángulo', icon: <Square size={14} /> },
+  { id: 'Circle', label: 'Elipse', icon: <Circle size={14} /> },
+  { id: 'Line', label: 'Línea', icon: <Minus size={14} /> },
+  { id: 'Arrow', label: 'Flecha', icon: <Minus size={14} className="rotate-[-30deg]" /> },
+  { id: 'Polygon', label: 'Polígono', icon: <Pentagon size={14} /> },
+];
+
+function DrawStrip({
+  drawTool,
+  onDrawToolChange,
+  strokeColor,
+  onStrokeColorChange,
+  fillColor,
+  fillEnabled,
+  onFillColorChange,
+  onFillEnabledChange,
+  shapeLineWidth,
+  onShapeLineWidthChange,
+  shapeOpacity,
+  onShapeOpacityChange,
+  drawingEnabled,
+}: {
+  drawTool: DrawTool | null;
+  onDrawToolChange: (tool: DrawTool | null) => void;
+  strokeColor: string;
+  onStrokeColorChange?: (value: string) => void;
+  fillColor: string;
+  fillEnabled: boolean;
+  onFillColorChange?: (value: string) => void;
+  onFillEnabledChange?: (enabled: boolean) => void;
+  shapeLineWidth: number;
+  onShapeLineWidthChange?: (value: number) => void;
+  shapeOpacity: number;
+  onShapeOpacityChange?: (value: number) => void;
+  drawingEnabled: boolean;
+}) {
+  return (
+    <div className="px-4 py-1.5 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center gap-2 text-xs">
+      {DRAW_TOOLS.map((tool) => {
+        const active = drawTool === tool.id;
+        return (
+          <button
+            key={tool.id}
+            type="button"
+            disabled={!drawingEnabled}
+            title={drawingEnabled ? tool.label : 'Gira la página a 0° para dibujar'}
+            onClick={() => onDrawToolChange(active ? null : tool.id)}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md border cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+              active
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 border-neutral-300 dark:border-neutral-700'
+            }`}
+          >
+            {tool.icon}
+            <span>{tool.label}</span>
+          </button>
+        );
+      })}
+      <label className="flex items-center gap-1 text-neutral-600 dark:text-neutral-300">
+        Trazo
+        <input
+          type="color"
+          aria-label="Color de trazo"
+          value={strokeColor}
+          onChange={(event) => onStrokeColorChange?.(event.target.value)}
+          className="h-6 w-8 cursor-pointer bg-transparent"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-neutral-600 dark:text-neutral-300">
+        <input
+          type="checkbox"
+          checked={fillEnabled}
+          onChange={(event) => onFillEnabledChange?.(event.target.checked)}
+        />
+        Relleno
+        <input
+          type="color"
+          aria-label="Color de relleno"
+          value={fillColor}
+          disabled={!fillEnabled}
+          onChange={(event) => onFillColorChange?.(event.target.value)}
+          className="h-6 w-8 cursor-pointer bg-transparent disabled:opacity-40"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-neutral-600 dark:text-neutral-300">
+        Grosor
+        <input
+          type="number"
+          aria-label="Grosor de línea"
+          min={0.25}
+          max={24}
+          step={0.25}
+          value={shapeLineWidth}
+          onChange={(event) => onShapeLineWidthChange?.(Number(event.target.value))}
+          className="w-16 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-neutral-600 dark:text-neutral-300">
+        Opacidad
+        <input
+          type="range"
+          aria-label="Opacidad"
+          min={0.05}
+          max={1}
+          step={0.05}
+          value={shapeOpacity}
+          onChange={(event) => onShapeOpacityChange?.(Number(event.target.value))}
+        />
+        <span className="w-8 font-mono">{Math.round(shapeOpacity * 100)}</span>
+      </label>
+      {drawTool === 'Polygon' && (
+        <span className="text-neutral-500">Doble clic para cerrar el polígono.</span>
+      )}
+    </div>
+  );
+}

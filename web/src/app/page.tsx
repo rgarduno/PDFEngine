@@ -1,6 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+function cssColorToUnit(hex: string): number[] {
+  const value = hex.replace('#', '');
+  const parsed = Number.parseInt(value, 16);
+  if (!Number.isFinite(parsed) || value.length < 6) return [0, 0, 0];
+  return [((parsed >> 16) & 255) / 255, ((parsed >> 8) & 255) / 255, (parsed & 255) / 255];
+}
 import { Toolbar } from '@/components/Toolbar';
 import { DualCanvasViewer } from '@/components/DualCanvasViewer';
 import { Sidebar } from '@/components/Sidebar';
@@ -33,6 +40,7 @@ import {
   getPageAnnotations,
   addMarkup,
   addLink,
+  addShape,
   addStamp,
   deleteAnnotation,
   flattenAnnotations,
@@ -59,6 +67,7 @@ import {
   AddPaginationPayload,
   AddTextWatermarkPayload,
   AnnotationElement,
+  DrawTool,
   DocumentSession,
   FormFieldElement,
   ImageElement,
@@ -99,6 +108,12 @@ export default function Home() {
   const [selectedTableIdx, setSelectedTableIdx] = useState<number | null>(null);
   const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState<boolean>(false);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
+  const [drawTool, setDrawTool] = useState<DrawTool | null>(null);
+  const [strokeColor, setStrokeColor] = useState('#1d4ed8');
+  const [fillColor, setFillColor] = useState('#fde68a');
+  const [fillEnabled, setFillEnabled] = useState(false);
+  const [shapeLineWidth, setShapeLineWidth] = useState(1.5);
+  const [shapeOpacity, setShapeOpacity] = useState(1);
   const [pageOverviews, setPageOverviews] = useState<PageOverviewItem[]>([
     {
       page_number: 1,
@@ -719,6 +734,28 @@ export default function Home() {
     }
   };
 
+  const handleCommitShape = async (kind: DrawTool, points: number[][]) => {
+    const stroke = cssColorToUnit(strokeColor);
+    const fill = fillEnabled ? cssColorToUnit(fillColor) : null;
+    const width = Math.min(24, Math.max(0.25, shapeLineWidth || 1.5));
+    const opacity = Math.min(1, Math.max(0.05, shapeOpacity || 1));
+    try {
+      const res = await addShape(session.document_id, currentPage, {
+        kind,
+        points,
+        stroke,
+        fill,
+        line_width: width,
+        opacity,
+      });
+      const pageAnnots = await getPageAnnotations(session.document_id, currentPage);
+      setAnnotations(pageAnnots.annotations);
+      setSelectedAnnotationId(res.annotation_id);
+    } catch (err) {
+      console.error('Failed to add shape annotation:', err);
+    }
+  };
+
   const handleDeleteAnnotation = async (annotId: number) => {
     setAnnotations((prev) => prev.filter((a) => a.id !== annotId));
     if (selectedAnnotationId === annotId) {
@@ -1119,6 +1156,19 @@ export default function Home() {
         showThumbnails={showThumbnails}
         onToggleThumbnails={() => setShowThumbnails((prev) => !prev)}
         onOptimizeClick={() => setIsOptimizeModalOpen(true)}
+        drawTool={drawTool}
+        onDrawToolChange={setDrawTool}
+        strokeColor={strokeColor}
+        onStrokeColorChange={setStrokeColor}
+        fillColor={fillColor}
+        fillEnabled={fillEnabled}
+        onFillColorChange={setFillColor}
+        onFillEnabledChange={setFillEnabled}
+        shapeLineWidth={shapeLineWidth}
+        onShapeLineWidthChange={setShapeLineWidth}
+        shapeOpacity={shapeOpacity}
+        onShapeOpacityChange={setShapeOpacity}
+        drawingEnabled={pageRotation === 0}
       />
 
       {/* Main Studio View: Left Thumbnail Drawer + Dual-Layer Canvas + SceneGraph Sidebar */}
@@ -1213,6 +1263,8 @@ export default function Home() {
               setSelectedAnnotationId(null);
             }
           }}
+          drawTool={pageRotation === 0 ? drawTool : null}
+          onCommitShape={handleCommitShape}
         />
 
         <Sidebar
