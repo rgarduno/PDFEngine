@@ -1288,6 +1288,23 @@ def test_table_detection_and_export_workflow():
     assert "attachment; filename=" in dl_resp.headers.get("Content-Disposition", "")
     assert b"Item,Price" in dl_resp.content
 
+    # 7. HTML export stays a JSON string, and the file download is plain text.
+    html_resp = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=html")
+    assert html_resp.status_code == 200
+    assert html_resp.headers["content-type"].startswith("application/json")
+    assert "<table" in html_resp.json()["content"]
+    assert "<script" not in html_resp.json()["content"].lower()
+
+    html_dl = client.get(
+        f"/api/documents/{doc_id}/pages/1/tables/0/export?format=html&download=true"
+    )
+    assert html_dl.status_code == 200
+    assert html_dl.headers["content-type"].startswith("text/plain")
+    assert html_dl.headers["x-content-type-options"] == "nosniff"
+    assert html_dl.headers["content-disposition"] == 'attachment; filename="table_p1_0.html"'
+    assert b"<table" in html_dl.content
+    assert b"<script" not in html_dl.content.lower()
+
 
 def test_document_pages_overview_and_rotation_endpoints():
     pdf_bytes = create_minimal_pdf_bytes()

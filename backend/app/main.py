@@ -1873,7 +1873,11 @@ def export_table_endpoint(
     format: str = "csv",
     download: bool = False,
 ):
-    """Exports a detected table into the specified format (csv, json, markdown, html)."""
+    """Exports a detected table as csv, json, markdown, or escaped html text.
+
+    An html download is an attachment of plain text. The studio does not
+    parse that body as a document.
+    """
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -1890,7 +1894,7 @@ def export_table_endpoint(
                 "json": "application/json",
                 "markdown": "text/markdown; charset=utf-8",
                 "md": "text/markdown; charset=utf-8",
-                "html": "text/html; charset=utf-8",
+                "html": "text/plain; charset=utf-8",
             }
             media_type = media_types.get(format.lower(), "text/plain; charset=utf-8")
             extensions = {"csv": "csv", "json": "json", "markdown": "md", "md": "md", "html": "html"}
@@ -1899,7 +1903,10 @@ def export_table_endpoint(
             return Response(
                 content=content,
                 media_type=media_type,
-                headers={"Content-Disposition": _content_disposition("attachment", filename)},
+                headers={
+                    "Content-Disposition": _content_disposition("attachment", filename),
+                    "X-Content-Type-Options": "nosniff",
+                },
             )
 
         return TableExportResponse(

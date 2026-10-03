@@ -77,6 +77,31 @@ fn test_markdown_and_html_export() {
 }
 
 #[test]
+fn test_html_export_escapes_every_markup_character() {
+    let mut table = DetectedTable {
+        table_idx: 0,
+        page_number: 1,
+        bbox: Rect::new(50.0, 500.0, 200.0, 560.0),
+        row_count: 1,
+        col_count: 1,
+        cells: vec![TableCell::new(
+            0,
+            0,
+            Rect::new(50.0, 500.0, 200.0, 560.0),
+            "a&b<c>d\"e'f",
+        )],
+        headers: Vec::new(),
+        rows: Vec::new(),
+    };
+    table.rebuild_matrix();
+
+    let html = export_to_html(&table);
+    assert!(html.contains("a&amp;b&lt;c&gt;d&quot;e&#39;f"));
+    assert!(!html.contains("a&b<c>"));
+    assert!(!html.contains("<script"));
+}
+
+#[test]
 fn test_json_export_structure() {
     let mut table = DetectedTable {
         table_idx: 1,
