@@ -584,4 +584,15 @@ class OptimizeResponse(BaseModel):
     message: str
 
 
+class AuditEventResponse(BaseModel):
+    """One entry from the caller's action log.
+
+    The log names the action, the document, and the time. It does not carry
+    file bytes, the upload name, a password, or a bearer token.
+    """
+    action: str
+    document_id: str
+    at: str
+
+
 

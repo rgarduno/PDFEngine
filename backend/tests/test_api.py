@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.audit import MAX_AUDIT_EVENTS, clear_events, events_for, record
 from app.auth import DOCUMENT_SESSIONS, _ws_tickets
 from app.main import app
 
@@ -22,9 +23,11 @@ def _clear_document_sessions():
     """Drop leftover sessions so the default cap of 32 does not depend on order."""
     DOCUMENT_SESSIONS.clear()
     _ws_tickets.clear()
+    clear_events()
     yield
     DOCUMENT_SESSIONS.clear()
     _ws_tickets.clear()
+    clear_events()
 
 
 def _upload_minimal(name: str = "sample.pdf"):
@@ -1837,6 +1840,83 @@ def test_link_endpoint_accepts_only_web_schemes():
         listed_ok.json()["annotations"][0]["link_uri"]
         == "HTTPS://example.com/terms#javascript:example"
     )
+
+
+def test_audit_log_records_upload_redact_optimize_and_sign_without_secrets():
+    """The action log names who did the work and omits file contents and credentials."""
+    rejected = client.post(
+        "/api/documents/upload",
+        files={"file": ("notes.pdf", b"not-a-pdf", "application/pdf")},
+    )
+    assert rejected.status_code == 400
+    assert client.get("/api/audit").json() == []
+
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("contract.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    redacted = client.post(
+        f"/api/documents/{doc_id}/redact/text",
+        json={"query": "Contract", "overlay_text": "hidden-query"},
+    )
+    assert redacted.status_code == 200
+
+    optimized = client.post(f"/api/documents/{doc_id}/optimize", json={})
+    assert optimized.status_code == 200
+
+    signed = client.post(
+        f"/api/documents/{doc_id}/security/sign",
+        json={
+            "signer_name": "Ana Ruiz",
+            "reason": "Archivo",
+            "location": "CDMX",
+            "page_number": 1,
+            "contact_info": "ana@example.com",
+        },
+    )
+    assert signed.status_code == 200
+
+    refused = client.post(f"/api/documents/{doc_id}/optimize", json={})
+    assert refused.status_code == 409
+
+    audit = client.get("/api/audit")
+    assert audit.status_code == 200
+    rows = audit.json()
+    assert [row["action"] for row in rows] == ["upload", "redact", "optimize", "sign"]
+    for row in rows:
+        assert set(row) == {"action", "document_id", "at"}
+        assert row["document_id"] == doc_id
+        assert len(row["at"]) == 20 and row["at"].endswith("Z")
+    body = audit.text
+    assert "Contract" not in body
+    assert "hidden-query" not in body
+    assert "contract.pdf" not in body
+    assert "pdfengine-test-key" not in body
+    assert "ana@example.com" not in body
+    assert pdf_bytes[:8].decode("latin-1") not in body
+
+    assert other_client.get("/api/audit").json() == []
+    assert anonymous.get("/api/audit").status_code == 401
+
+
+def test_audit_log_drops_the_oldest_event_and_rejects_free_text():
+    """A full buffer forgets the oldest row and never stores an arbitrary note."""
+    assert record("upload\npassword=secret", "a" * 32, "doc-1") is False
+    assert record("upload", "subject with spaces", "doc-1") is False
+    assert record("upload", "a" * 32, "../doc") is False
+    assert events_for("a" * 32) == []
+
+    for index in range(MAX_AUDIT_EVENTS + 2):
+        assert record("upload", "b" * 32, f"doc-{index}") is True
+    kept = events_for("b" * 32)
+    assert len(kept) == MAX_AUDIT_EVENTS
+    assert kept[0].document_id == "doc-2"
+    assert kept[-1].document_id == f"doc-{MAX_AUDIT_EVENTS + 1}"
+
 
 
 

@@ -11,11 +11,13 @@ from typing import List, Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
+from app.audit import events_for, record_document_action
 from app.auth import (
     AuthMiddleware,
     adopt_subject,
     bind_session,
     consume_ws_ticket,
+    current_subject,
     ensure_session_capacity,
     issue_ws_ticket,
     load_session,
@@ -37,6 +39,7 @@ from app.models import (
     AddTextWatermarkRequest,
     AnnotationActionResponse,
     AnnotationModel,
+    AuditEventResponse,
     BatchFillFormsRequest,
     BoundingBox,
     CreateFormFieldRequest,
@@ -212,6 +215,24 @@ def health_check():
     }
 
 
+@app.get("/api/audit", response_model=List[AuditEventResponse])
+def list_audit_events():
+    """Returns the caller's action log.
+
+    Each row is an upload, redaction, signature attestation, or optimization.
+    Rows belonging to another subject are not included.
+    """
+    subject = current_subject()
+    return [
+        AuditEventResponse(
+            action=event.action,
+            document_id=event.document_id,
+            at=event.at,
+        )
+        for event in events_for(subject.id)
+    ]
+
+
 @app.post("/api/auth/ws-ticket")
 def create_ws_ticket():
     """Exchange the caller's bearer token for a single-use WebSocket ticket."""
@@ -268,6 +289,7 @@ async def upload_document(file: UploadFile = File(...)):
 
     page_count = doc.page_count()
     doc_id = bind_session(doc, file.filename, len(content))
+    record_document_action("upload", doc_id)
 
     return DocumentUploadResponse(
         document_id=doc_id,
@@ -1466,6 +1488,7 @@ def redact_regions_endpoint(doc_id: str, request: RedactRegionsRequest):
             pruned_annotations_count=summary.pruned_annotations_count,
             applied_rects=[list(r) for r in summary.applied_rects],
         )
+        record_document_action("redact", doc_id)
 
         return RedactionActionResponse(
             success=True,
@@ -1523,6 +1546,7 @@ def redact_pattern_endpoint(doc_id: str, request: RedactPatternRequest):
         tot_glyphs = sum(s.purged_glyphs_count for s in summaries)
         tot_boxes = sum(s.blackout_boxes_count for s in summaries)
         tot_annots = sum(s.pruned_annotations_count for s in summaries)
+        record_document_action("redact", doc_id)
 
         return RedactionActionResponse(
             success=True,
@@ -1578,6 +1602,7 @@ def redact_text_endpoint(doc_id: str, request: RedactTextRequest):
         tot_glyphs = sum(s.purged_glyphs_count for s in summaries)
         tot_boxes = sum(s.blackout_boxes_count for s in summaries)
         tot_annots = sum(s.pruned_annotations_count for s in summaries)
+        record_document_action("redact", doc_id)
 
         return RedactionActionResponse(
             success=True,
@@ -1753,6 +1778,7 @@ def sign_document_endpoint(doc_id: str, request: SignDocumentRequest):
             rect=list(sig.rect),
             page_number=sig.page_number,
         )
+        record_document_action("sign", doc_id)
         return SecurityActionResponse(
             success=True,
             document_id=doc_id,
@@ -1951,6 +1977,7 @@ async def optimize_document_endpoint(
         session["optimized_bytes"] = opt_bytes
         session["original_size"] = stats.original_size
         session["optimized_size"] = stats.optimized_size
+        record_document_action("optimize", doc_id)
 
         return OptimizeResponse(
             success=True,
