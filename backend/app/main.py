@@ -105,6 +105,8 @@ from app.models import (
     OptimizeResponse,
     OcrRequest,
     OcrResponse,
+    PdfARequest,
+    PdfAResponse,
 )
 
 app = FastAPI(
@@ -620,6 +622,33 @@ def _shape_request_error(request: AddShapeRequest) -> Optional[str]:
     return None
 
 
+_PDFA_DETAILS = (
+    "An encrypted document cannot be archived.",
+    "A composite font cannot be embedded for archive.",
+    "A custom font encoding cannot be archived.",
+    "An annotation has no appearance.",
+    "Archive part was rejected.",
+    "The document is not an archive after conversion.",
+)
+_PDFA_PARTS = {"1b": "Archived as PDF/A-1b.", "2b": "Archived as PDF/A-2b."}
+
+
+def _pdfa_part(part: str) -> str:
+    """Accepts `1b` or `2b`. Any other token is refused without being echoed."""
+    if part not in _PDFA_PARTS:
+        raise HTTPException(status_code=400, detail="Archive part was rejected.")
+    return part
+
+
+def _pdfa_failure(exc: BaseException) -> HTTPException:
+    """Maps an archive failure to a stable sentence. Unknown text stays in the log."""
+    text = str(exc)
+    for sentence in _PDFA_DETAILS:
+        if sentence in text:
+            return HTTPException(status_code=400, detail=sentence)
+    return _public_error(400, exc)
+
+
 def _ocr_failure(exc: BaseException) -> HTTPException:
     """Maps a recognition failure to a stable sentence. Unknown text stays in the log."""
     text = str(exc)
@@ -965,6 +994,54 @@ async def add_searchable_text(doc_id: str, request: OcrRequest):
         raise
     except Exception as exc:
         raise _ocr_failure(exc)
+
+
+@app.post("/api/documents/{doc_id}/pdfa", response_model=PdfAResponse)
+@serialized_mutation
+async def convert_document_pdfa(doc_id: str, request: PdfARequest):
+    """Rewrites the session document as PDF/A-1b or PDF/A-2b.
+
+    The engine's structural check is not a veraPDF certificate.
+    """
+    part = _pdfa_part(request.part)
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        doc.to_pdfa(part)
+        return PdfAResponse(
+            success=True,
+            document_id=doc_id,
+            part=part,
+            conformance="B",
+            issues=[],
+            message=_PDFA_PARTS[part],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _pdfa_failure(exc)
+
+
+@app.get("/api/documents/{doc_id}/pdfa", response_model=PdfAResponse)
+def inspect_document_pdfa(doc_id: str, part: str = "1b"):
+    """Reports archive issues for one part. The document is not rewritten."""
+    part = _pdfa_part(part)
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        issues = list(doc.pdfa_issues(part))
+        return PdfAResponse(
+            success=not issues,
+            document_id=doc_id,
+            part=part,
+            conformance="B",
+            issues=issues,
+            message="Archive structure was checked.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _pdfa_failure(exc)
 
 
 @app.get("/api/documents/{doc_id}/forms", response_model=DocumentFormsResponse)

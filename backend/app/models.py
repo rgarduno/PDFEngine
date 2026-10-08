@@ -354,6 +354,21 @@ class OcrResponse(BaseModel):
     message: str
 
 
+class PdfARequest(BaseModel):
+    """Archive part. Only `1b` and `2b` are accepted."""
+    part: str
+
+
+class PdfAResponse(BaseModel):
+    """Archive conversion or structural check. Issues are stable sentences."""
+    success: bool
+    document_id: str
+    part: str
+    conformance: str
+    issues: List[str]
+    message: str
+
+
 class AnnotationActionResponse(BaseModel):
     """Response returned upon creating or modifying an annotation."""
     success: bool

@@ -138,6 +138,14 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 │    - Stroke color, /BS /W, opacity, and optional fill on closed shapes      │
 │    - Each mark stores a normal appearance stream                            │
 │    - Flatten still burns only highlight, underline, strikeout, and stamp    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 16. PDF/A-1b and PDF/A-2b archive conversion                                │
+│    - Unembedded simple fonts become an original bitmap face                 │
+│    - Present widths stay. Courier defaults to 600. Encodings become WinAnsi │
+│    - Part 1 forces opacity to 1 and removes transparency groups             │
+│    - Attachments and disallowed annotations are removed                     │
+│    - Catalog XMP and an original RGB output intent are written              │
+│    - This is not veraPDF, Acrobat preflight, or a court acceptance          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -375,6 +383,28 @@ may set `/IC`. Every mark stores `/BS /W`, `/C`, `/CA`, and a normal
 appearance stream. Flattening still burns only highlight, underline,
 strikeout, and stamp marks. The new marks stay annotations.
 
+### PDF/A-1b and PDF/A-2b
+
+`POST /api/documents/{id}/pdfa` with `part` set to `1b` or `2b` rewrites the
+session. `GET /api/documents/{id}/pdfa?part=1b` reports issues and does not
+convert. An unembedded simple font, including the Courier face written by
+searchable text, is replaced by an original bitmap TrueType face. The
+appearance of those runs changes. Widths already stored on the font are kept.
+Courier widths default to 600. An unembedded StandardEncoding is rewritten as
+WinAnsi. A font that already carries a program stays. A composite font without
+a program is rejected. A custom encoding is rejected. PDF/A-1 forces opacity
+to 1 and removes soft masks and transparency groups. PDF/A-2 keeps
+transparency. Attachments, optional content, and Sound, Movie, RichMedia,
+Screen, FileAttachment, and TrapNet annotations are removed. Catalog XMP is
+replaced by the pdfaid packet. The ICC profile is an original RGB monitor
+profile, not a licensed vendor profile. An annotation without `/AP` is
+rejected rather than given a blank appearance. A link receives a border
+appearance. Highlight, underline, strikeout, and stamp marks should be
+flattened first when they have no appearance. Shape marks already have one.
+Text operators that name a missing font resource are left as-is. This is the
+engine's own structural check. It is not a veraPDF certificate, an Acrobat
+preflight, or an acceptance by a court.
+
 ### 3. API Endpoints
 
 | Method | Endpoint | Description |
@@ -389,6 +419,8 @@ strikeout, and stamp marks. The new marks stay annotations.
 | `GET` | `/api/documents/{id}/images/{img_id}` | Stream synthesized PNG or native JPEG binary for inspection/preview. |
 | `POST` | `/api/documents/{id}/images/{img_id}/replace` | Surgical in-place image replacement (JPEG/PNG with `/SMask` transparency). |
 | `POST` | `/api/documents/{id}/ocr` | Recognize a single-image page with local tesseract and append invisible text (rendering mode 3). The response is counts only. |
+| `POST` | `/api/documents/{id}/pdfa` | Rewrite the session as PDF/A-1b or PDF/A-2b. The body part is `1b` or `2b`. |
+| `GET` | `/api/documents/{id}/pdfa` | Report archive issues for `part=1b` or `part=2b` without converting. |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
@@ -474,6 +506,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 19: Security Hardening & Vulnerability Remediation** (Bearer identity binding, session TTL & LRU eviction, dynamic SHA-256 byte-range attestation, random AESV2 initialization vectors, active code /JS/Launch action pruning, upload caps, sparse xref streams & cycle guards, predictor & PNG IDAT bounded decompression, safe download headers, table lattice segment budgets, and studio security headers)
 - [x] **Phase 20: Searchable text over scanned pages** (A page that paints one image and no text can receive word boxes from local tesseract. The engine appends rendering mode 3 text and a WinAnsi `/ToUnicode` map. The face is standard Courier and is not embedded. Recognition is not guaranteed and the scan image is unchanged.)
 - [x] **Phase 21: Ink and vector shapes** (The studio draws `/Ink`, `/Square`, `/Circle`, `/Line` with an open arrow, and `/Polygon`, with stroke color, border width, opacity, and optional fill. Each mark has an appearance stream. Flattening does not burn these marks.)
+- [x] **Phase 22: PDF/A-1b and PDF/A-2b** (The engine checks structure, embeds an original bitmap face for unembedded simple fonts, writes an RGB ICC output intent and pdfaid XMP, and removes features that part forbids. This is not a veraPDF certificate, an Acrobat preflight, or an acceptance by a court.)
 
 ---
 

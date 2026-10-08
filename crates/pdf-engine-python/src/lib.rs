@@ -958,6 +958,34 @@ impl PyPdfDocument {
         Ok((report.pages_seen, report.pages_recognized, report.words_inserted))
     }
 
+    /// Rewrites the document as PDF/A-1b (`1b`) or PDF/A-2b (`2b`).
+    ///
+    /// The document changes only when the rewritten copy has no remaining
+    /// structural issues. This is the engine's own check. It is not a
+    /// veraPDF certificate, an Acrobat preflight, or a court acceptance.
+    pub fn to_pdfa(&mut self, part: &str) -> PyResult<()> {
+        let Some(level) = pdf_engine_core::PdfALevel::parse(part) else {
+            return Err(PyRuntimeError::new_err(
+                "Failed to archive: Archive part was rejected.",
+            ));
+        };
+        pdf_engine_core::convert_to_pdfa(&mut self.doc, level).map_err(|error| {
+            PyRuntimeError::new_err(format!("Failed to archive: {error}"))
+        })
+    }
+
+    /// Reports archive issues for `1b` or `2b` without rewriting the document.
+    pub fn pdfa_issues(&mut self, part: &str) -> PyResult<Vec<String>> {
+        let Some(level) = pdf_engine_core::PdfALevel::parse(part) else {
+            return Err(PyRuntimeError::new_err(
+                "Failed to archive: Archive part was rejected.",
+            ));
+        };
+        pdf_engine_core::validate_pdfa(&mut self.doc, level).map_err(|error| {
+            PyRuntimeError::new_err(format!("Failed to archive: {error}"))
+        })
+    }
+
     /// Retrieves a mutable reference to a page by 1-based or 0-based index.
     pub fn get_page(&mut self, index: usize) -> PyResult<PyPage> {
         let zero_idx = if index > 0 && index <= self.active_pages.len() {

@@ -39,6 +39,12 @@ pub struct PdfDocument {
     pub objects: BTreeMap<ObjectId, PdfObject>,
     /// Security limits active for this document.
     pub limits: SecurityLimits,
+    /// Header version emitted by [`Self::save_to_vec`].
+    ///
+    /// Parsing always stores `1.7`. PDF/A-1b conversion sets `1.4` on the
+    /// document it is about to save; the bytes, not this field, are what a
+    /// later load can prove.
+    pub write_version: String,
 }
 
 impl PdfDocument {
@@ -76,6 +82,7 @@ impl PdfDocument {
             xref,
             objects: BTreeMap::new(),
             limits,
+            write_version: "1.7".to_string(),
         })
     }
 
@@ -100,6 +107,7 @@ impl PdfDocument {
             xref: XRefTable::new(),
             objects: BTreeMap::new(),
             limits: SecurityLimits::default(),
+            write_version: "1.7".to_string(),
         };
 
         let catalog_id = ObjectId::new(1);
@@ -558,7 +566,7 @@ impl PdfDocument {
         let mut out = Vec::new();
         let mut writer = Writer::new(&mut out);
 
-        writer.write_header("1.7")?;
+        writer.write_header(&self.write_version)?;
 
         let mut offsets = Vec::new();
 

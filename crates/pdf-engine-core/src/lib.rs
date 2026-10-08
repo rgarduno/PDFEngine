@@ -27,6 +27,7 @@ pub mod images;
 pub mod layout;
 pub mod ocr;
 pub mod ops;
+pub mod pdfa;
 pub mod redact;
 pub mod security;
 pub mod stream;
@@ -50,6 +51,7 @@ pub use images::{
     parse_png_header, parse_png_pixels, replace_image_content, ImageInfo, JpegHeader, PngHeader,
 };
 pub use ocr::{add_searchable_text_layer, OcrReport};
+pub use pdfa::{convert_to_pdfa, validate_pdfa, PdfALevel};
 pub use ops::{
     collect_garbage, deduplicate_streams, delete_pages, extract_pages, get_page_rotation,
     merge_documents, merge_pdf_bytes, optimize_document, recompress_streams, reorder_pages,

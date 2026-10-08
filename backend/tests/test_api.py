@@ -2683,6 +2683,59 @@ def test_ocr_adds_invisible_text_on_a_scan_and_skips_a_text_page():
     assert skipped.json()["words_inserted"] == 0
 
 
+def test_pdfa_archives_a_minimal_document_and_rejects_a_bad_part():
+    _pdf, upload = _upload_minimal("archive.pdf")
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    bad = client.post(
+        f"/api/documents/{doc_id}/pdfa",
+        json={"part": "nope-value"},
+    )
+    assert bad.status_code == 400
+    assert bad.json()["detail"] == "Archive part was rejected."
+    assert "nope-value" not in bad.text
+
+    archived = client.post(
+        f"/api/documents/{doc_id}/pdfa",
+        json={"part": "1b"},
+    )
+    assert archived.status_code == 200
+    body = archived.json()
+    assert body["success"] is True
+    assert body["part"] == "1b"
+    assert body["conformance"] == "B"
+    assert body["issues"] == []
+    assert body["message"] == "Archived as PDF/A-1b."
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"%PDF-1.4" in exported.content
+    assert b"pdfaid:part" in exported.content
+    assert b"GTS_PDFA1" in exported.content
+    assert b"acsp" in exported.content
+    assert b"/ID" in exported.content
+
+    checked = client.get(f"/api/documents/{doc_id}/pdfa", params={"part": "1b"})
+    assert checked.status_code == 200
+    assert checked.json()["issues"] == []
+
+    _second, second_upload = _upload_minimal("archive-2.pdf")
+    assert second_upload.status_code == 200
+    second_id = second_upload.json()["document_id"]
+    part_two = client.post(
+        f"/api/documents/{second_id}/pdfa",
+        json={"part": "2b"},
+    )
+    assert part_two.status_code == 200
+    assert part_two.json()["message"] == "Archived as PDF/A-2b."
+    assert part_two.json()["part"] == "2b"
+    second_export = client.get(f"/api/documents/{second_id}/export")
+    assert second_export.status_code == 200
+    assert b"%PDF-1.7" in second_export.content
+    assert b">2</pdfaid:part>" in second_export.content
+
+
 
 
 
