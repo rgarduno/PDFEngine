@@ -17,7 +17,3 @@ manifest-path = "crates/pdf-engine-python/Cargo.toml"
 module-name = "pdf_engine"
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-pythonpath = ["backend"]
-testpaths = ["backend/tests"]
-

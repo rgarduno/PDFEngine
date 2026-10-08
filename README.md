@@ -25,6 +25,18 @@ PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Sy
 
 ---
 
+## PDFEngine Ecosystem
+
+PDFEngine is decoupled into three dedicated repositories for maximum stability, security, and independent release cycles:
+
+| Repository | Role | Tech Stack | Status |
+| :--- | :--- | :--- | :--- |
+| [**PDFEngine**](https://github.com/rgarduno/PDFEngine) *(This Repo)* | High-performance core engine & Python extension module | Rust (ISO 32000-1) + PyO3 | Production-ready |
+| [**PDFAPI**](https://github.com/rgarduno/PDFAPI) | Commercial multi-tenant REST & WebSocket service | Python 3.13 + FastAPI + Pydantic v2 | Production-ready |
+| [**PDFWeb**](https://github.com/rgarduno/PDFWeb) | Interactive Dual-Canvas Web Studio | Next.js 16 (App Router) + React 19 + Tailwind CSS | Production-ready |
+
+---
+
 ## Architectural Overview
 
 ```
@@ -502,34 +514,25 @@ preflight, or an acceptance by a court.
 
 ---
 
-## Interactive Web Studio (Next.js 16 + React 19)
+## Dedicated Service & Web Repositories
 
-PDFEngine includes a modern, high-precision web studio inside `web/` with a dual-layer canvas architecture:
+PDFEngine powers a complete enterprise solution distributed across dedicated repositories:
 
-* **Dual-Layer Canvas Viewport**: Renders the document canvas with accurate page points and overlays interactive paragraph bounding boxes.
-* **Layer 1.5 Image Overlays & Replacement**: Visual inspection of XObject images with floating action buttons for instant in-place PNG/JPEG swapping.
-* **Layer 1.8 Interactive AcroForms & Flattening**: In-situ filling for text inputs, checkboxes, and select dropdowns, coupled with single-click surgical document flattening.
-* **Layer 1.9 Visual Annotations & Interactive Links**: Real-time rendering of highlights, underlines, strikeouts, clickable links, and rotated rubber stamps.
-* **Layer 1.10 Glyph excision and PII scan**: Removes intersecting glyphs from the page content stream, draws a blackout, and can prune intersecting annotations. Document `/Info` and catalog XMP are removed only when scrubbing is requested. Attachments, the structure tree, and form appearances stay. This is not an ISO legal redaction.
-* **Document Assembly & Orientation Inspector**: Rotate pages (-90°, +90°, 180°), split documents into single-page chunks, merge external PDFs, and delete pages with live canvas viewport synchronization.
-* **Dynamic Foliado & Bates Numbering**: Configurable headers and footers with `{page}` and `{total}` template evaluation, 6-way spatial placement, and cover page bypass.
-* **Semi-transparent Text & Image Watermarks**: Rotated diagonal text watermarks and company logos with opacity controls and foreground/background depth placement.
-* **Dynamic @font-face Registration**: Fetches embedded TrueType font binaries directly from the PDF via the engine and registers them in the browser runtime for pixel-identical typography.
-* **In-Situ Typographic Editor**: Double-click any paragraph to edit directly in place with true-to-life baseline alignment and leading.
-* **Live WebSocket Reflow**: Bidirectional communication with the Rust engine recalculates line wraps and bounding box expansions with zero visual lag.
-* **Non-Destructive History**: Full undo/redo stack (`Cmd+Z` / `Cmd+Shift+Z`) and instant lossless PDF download.
+- **[PDFWeb](https://github.com/rgarduno/PDFWeb)**: Interactive Next.js 16 Web Studio with the Pixel-Perfect Dual-Canvas architecture, in-situ paragraph editor, live WebSocket reflow, and comprehensive sidebar tooling.
+- **[PDFAPI](https://github.com/rgarduno/PDFAPI)**: Commercial FastAPI backend providing multi-tenant cryptographic isolation, serialized document locking, and high-performance endpoints.
 
-### Running the Web Studio
+### Building & Installing the Native Engine
 
 ```bash
-cd web
-npm install
-npm run dev
+# Build Rust crates
+cargo build --release
+
+# Run Rust unit and integration test suite
+cargo test -p pdf-engine-core
+
+# Build & install Python native extension wheel via Maturin
+maturin develop --manifest-path crates/pdf-engine-python/Cargo.toml
 ```
-
-Open [http://localhost:3000](http://localhost:3000) to start editing.
-
-The inspector tab **OCR** sends searchable text and a PDF/A-1b or PDF/A-2b check or conversion to the API on port 8000. Start that process with `PDFENGINE_CORS_ORIGINS=http://localhost:3000` and the same token as `NEXT_PUBLIC_PDFENGINE_API_KEY` in `web/.env.local`. Searchable text calls a local `tesseract` binary. An empty language uses `eng`. The answer is counts, the scan image stays, and recognition is not guaranteed. **Revisar** checks structure and does not rewrite the file. **Convertir** rewrites it. That check is not veraPDF, Acrobat preflight, or a legal acceptance.
 
 ---
 
