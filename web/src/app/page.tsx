@@ -25,6 +25,7 @@ import {
   replaceImage,
   editParagraph,
   downloadAuthorized,
+  fetchAuthorizedBuffer,
   getExportUrl,
   connectReflowWebSocket,
   getDocumentForms,
@@ -131,6 +132,24 @@ export default function Home() {
     },
   ]);
   const [overviewOffset, setOverviewOffset] = useState(0);
+  const [showDualCanvas, setShowDualCanvas] = useState<boolean>(true);
+  const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
+
+  const reloadPdfBuffer = useCallback(async (docId: string) => {
+    if (!docId || docId.startsWith('local-') || docId.startsWith('demo-')) return;
+    try {
+      const buf = await fetchAuthorizedBuffer(getExportUrl(docId));
+      setPdfBuffer(buf);
+    } catch (e) {
+      console.warn('Could not reload PDF buffer for dual-canvas:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session?.document_id) {
+      void reloadPdfBuffer(session.document_id);
+    }
+  }, [session?.document_id, reloadPdfBuffer]);
 
   const refreshOverviewWindow = async (docId: string, offset: number) => {
     const overview = await getDocumentOverview(docId, offset, DOCUMENT_OVERVIEW_WINDOW);
@@ -327,6 +346,8 @@ export default function Home() {
     if (!file) return;
 
     try {
+      const fileBuffer = await file.arrayBuffer();
+      setPdfBuffer(fileBuffer);
       const newSession = await uploadPdf(file);
       setImages([]);
       setSession(newSession);
@@ -1179,6 +1200,8 @@ export default function Home() {
         showThumbnails={showThumbnails}
         onToggleThumbnails={() => setShowThumbnails((prev) => !prev)}
         onOptimizeClick={() => setIsOptimizeModalOpen(true)}
+        showDualCanvas={showDualCanvas}
+        onToggleDualCanvas={() => setShowDualCanvas((prev) => !prev)}
         drawTool={drawTool}
         onDrawToolChange={setDrawTool}
         strokeColor={strokeColor}
@@ -1288,6 +1311,8 @@ export default function Home() {
           }}
           drawTool={pageRotation === 0 ? drawTool : null}
           onCommitShape={handleCommitShape}
+          pdfBuffer={pdfBuffer}
+          showDualCanvas={showDualCanvas}
         />
 
         <Sidebar

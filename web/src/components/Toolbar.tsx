@@ -28,6 +28,7 @@ import {
   Pentagon,
   Square,
   Zap,
+  Layers,
 } from 'lucide-react';
 import { DrawTool, TextAlignment } from '@/lib/types';
 
@@ -70,6 +71,8 @@ interface ToolbarProps {
   shapeOpacity?: number;
   onShapeOpacityChange?: (value: number) => void;
   drawingEnabled?: boolean;
+  showDualCanvas?: boolean;
+  onToggleDualCanvas?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -111,6 +114,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   shapeOpacity = 1,
   onShapeOpacityChange,
   drawingEnabled = true,
+  showDualCanvas = true,
+  onToggleDualCanvas,
 }) => {
   const [pageInputValue, setPageInputValue] = useState<string>(String(pageNumber));
 
@@ -376,6 +381,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Upload size={14} />
           <span>Upload PDF</span>
         </button>
+
+        {onToggleDualCanvas && (
+          <button
+            onClick={onToggleDualCanvas}
+            title={showDualCanvas ? 'Desactivar Fondo PDF.js (Modo Sólo DOM)' : 'Activar Fondo Pixel-Perfect (PDF.js Dual-Canvas)'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+              showDualCanvas
+                ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+                : 'border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
+            }`}
+          >
+            <Layers size={14} className={showDualCanvas ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500'} />
+            <span className="hidden md:inline">Dual Canvas</span>
+          </button>
+        )}
 
         {onOptimizeClick && (
           <button

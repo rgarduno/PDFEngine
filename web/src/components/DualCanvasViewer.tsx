@@ -2,8 +2,9 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { AnnotationElement, BoundingBox, DetectedTableItem, DrawTool, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
-import { fetchAuthorizedBuffer, getPageFonts, getFontBinaryUrl, getImageBinaryUrl } from '@/lib/api';
+import { fetchAuthorizedBuffer, getPageFonts, getFontBinaryUrl, getImageBinaryUrl, getExportUrl } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
+import { PdfPageRenderer } from '@/lib/pdfRenderer';
 import { Award, Check, Edit3, ExternalLink, FileText, Highlighter, ImageIcon, Layers, Move, PenTool, RefreshCw, Table, Trash2 } from 'lucide-react';
 
 interface DualCanvasViewerProps {
@@ -34,6 +35,8 @@ interface DualCanvasViewerProps {
   onSelectTable?: (idx: number | null) => void;
   drawTool?: DrawTool | null;
   onCommitShape?: (kind: DrawTool, points: number[][]) => void;
+  pdfBuffer?: ArrayBuffer | null;
+  showDualCanvas?: boolean;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -68,14 +71,93 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   onSelectTable,
   drawTool = null,
   onCommitShape,
+  pdfBuffer = null,
+  showDualCanvas = true,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rendererRef = useRef<PdfPageRenderer | null>(null);
   const dragStart = useRef<number[] | null>(null);
   const activeTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState<number[][]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState<string>('');
+  const [internalBuffer, setInternalBuffer] = useState<ArrayBuffer | null>(null);
+  const [isRenderingPdf, setIsRenderingPdf] = useState<boolean>(false);
+
+  // Initialize and dispose PDF.js renderer
+  useEffect(() => {
+    rendererRef.current = new PdfPageRenderer();
+    return () => {
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
+    };
+  }, []);
+
+  // Sync or fetch PDF buffer
+  useEffect(() => {
+    if (pdfBuffer) {
+      setInternalBuffer(pdfBuffer);
+      return;
+    }
+    if (documentId && !documentId.startsWith('local-') && !documentId.startsWith('demo-')) {
+      let isMounted = true;
+      fetchAuthorizedBuffer(getExportUrl(documentId))
+        .then((buf) => {
+          if (isMounted) setInternalBuffer(buf);
+        })
+        .catch((err) => {
+          console.warn('Could not load PDF buffer for dual-canvas background:', err);
+        });
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [pdfBuffer, documentId]);
+
+  // Render PDF.js canvas background
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const renderer = rendererRef.current;
+    const data = internalBuffer || pdfBuffer;
+
+    if (!showDualCanvas || !canvas || !renderer || !data) {
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      setIsRenderingPdf(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsRenderingPdf(true);
+
+    renderer
+      .renderPage({
+        canvas,
+        pdfData: data,
+        pageNumber,
+        zoom,
+        rotation,
+        targetWidthPts: PAGE_WIDTH_PTS,
+        targetHeightPts: PAGE_HEIGHT_PTS,
+      })
+      .then(() => {
+        if (!isCancelled) setIsRenderingPdf(false);
+      })
+      .catch((err) => {
+        if (!isCancelled) {
+          setIsRenderingPdf(false);
+          console.debug('PDF.js background render event:', err);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [internalBuffer, pdfBuffer, pageNumber, zoom, rotation, showDualCanvas]);
 
   const isRotated90or270 = rotation === 90 || rotation === 270;
   const containerWidth = (isRotated90or270 ? PAGE_HEIGHT_PTS : PAGE_WIDTH_PTS) * zoom;
@@ -250,6 +332,26 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
           }}
           className="relative bg-white dark:bg-neutral-900 shadow-2xl rounded-sm transition-all duration-300 border border-neutral-300 dark:border-neutral-800 select-none overflow-hidden"
         >
+        {/* Layer 0: Real Pixel-Perfect PDF.js Raster Canvas Backdrop */}
+        {showDualCanvas && (
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 pointer-events-none transition-opacity duration-300 z-0"
+            style={{
+              width: `${PAGE_WIDTH_PTS * zoom}px`,
+              height: `${PAGE_HEIGHT_PTS * zoom}px`,
+            }}
+          />
+        )}
+
+        {/* Layer 0.5: Dual-Canvas Status Badge */}
+        {showDualCanvas && (
+          <div className="absolute bottom-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/60 text-white/90 backdrop-blur-xs select-none pointer-events-none z-30">
+            <Layers size={10} className={isRenderingPdf ? 'text-amber-400 animate-spin' : 'text-emerald-400'} />
+            <span>{isRenderingPdf ? 'Renderizando PDF...' : 'Fondo Pixel-Perfect'}</span>
+          </div>
+        )}
+
         {/* Layer 1: High-fidelity Vector Background & Guidelines */}
         <div className="absolute inset-0 pointer-events-none opacity-40">
           {/* Subtle margin guide lines (0.75 in / 54 pt) */}
@@ -691,7 +793,11 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
               }}
               className={`absolute transition-all group cursor-text ${
                 isSelected
-                  ? 'ring-2 ring-blue-500 bg-blue-50/20 dark:bg-blue-900/10 z-20'
+                  ? 'ring-2 ring-blue-500 bg-white/95 dark:bg-neutral-900/95 z-20 shadow-md'
+                  : isEditing
+                  ? 'ring-2 ring-blue-500 bg-white dark:bg-neutral-900 z-20 shadow-lg'
+                  : showDualCanvas
+                  ? 'hover:ring-1 hover:ring-blue-300/80 hover:bg-blue-50/15 z-10'
                   : 'hover:ring-1 hover:ring-blue-300/80 hover:bg-neutral-50/40 dark:hover:bg-neutral-800/30 z-10'
               }`}
             >
@@ -729,7 +835,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                     fontWeight: p.font_weight ?? 400,
                     fontStyle: p.font_style || 'normal',
                   }}
-                  className={`w-full h-full resize-none p-1 bg-white/95 dark:bg-neutral-900/95 text-neutral-900 dark:text-neutral-100 outline-none border-none ${alignClass} focus:ring-0`}
+                  className={`w-full h-full resize-none p-1 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 outline-none border-none ${alignClass} focus:ring-0`}
                 />
               ) : (
                 /* Rendered Text with precise typography */
@@ -741,7 +847,11 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                     fontWeight: p.font_weight ?? 400,
                     fontStyle: p.font_style || 'normal',
                   }}
-                  className={`w-full h-full p-1 whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 ${alignClass}`}
+                  className={`w-full h-full p-1 whitespace-pre-wrap break-words ${
+                    showDualCanvas && !isSelected
+                      ? 'text-transparent selection:bg-blue-500/30 selection:text-neutral-900'
+                      : 'text-neutral-800 dark:text-neutral-200'
+                  } ${alignClass}`}
                 >
                   {p.text}
                 </div>
