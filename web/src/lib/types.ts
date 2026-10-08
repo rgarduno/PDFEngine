@@ -539,3 +539,21 @@ export interface SystemCapabilities {
   pkcs7_supported: boolean;
   concurrency_locks: boolean;
 }
+
+export interface DocumentMetadata {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string;
+  creator?: string;
+  producer?: string;
+  creation_date?: string;
+  mod_date?: string;
+}
+
+export interface DocumentMetadataResponse {
+  success: boolean;
+  document_id: string;
+  metadata: DocumentMetadata;
+}
+

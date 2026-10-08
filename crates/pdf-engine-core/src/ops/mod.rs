@@ -5,6 +5,7 @@
 
 pub mod cloner;
 pub mod merge;
+pub mod metadata;
 pub mod optimize;
 pub mod reorder;
 pub mod rotation;
@@ -12,6 +13,10 @@ pub mod split;
 
 pub use cloner::ObjectCloner;
 pub use merge::{merge_documents, merge_pdf_bytes};
+pub use metadata::{
+    current_timestamps, extract_metadata, format_utc_timestamps, iso_to_pdf_date, pdf_date_to_iso,
+    update_metadata, DocumentMetadata,
+};
 pub use optimize::{
     collect_garbage, deduplicate_streams, optimize_document, recompress_streams,
     save_optimized_to_vec, OptimizationOptions, OptimizationStats,

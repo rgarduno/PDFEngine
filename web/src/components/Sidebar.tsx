@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AnnotationElement, AuditEventItem, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
-import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl, getAuditEvents } from '@/lib/api';
+import { AnnotationElement, AuditEventItem, DocumentMetadata, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
+import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl, getAuditEvents, getDocumentMetadata, updateDocumentMetadata } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
 import {
   ShieldCheck,
@@ -43,6 +43,7 @@ import {
   Info,
   PenTool,
   History,
+  Tag,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -170,11 +171,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateFormField,
   onDeleteFormField,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr' | 'audit'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr' | 'audit' | 'metadata'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
+
+  // Metadata state (/Info & XMP)
+  const [metadata, setMetadata] = useState<DocumentMetadata>({});
+  const [loadingMetadata, setLoadingMetadata] = useState<boolean>(false);
+  const [savingMetadata, setSavingMetadata] = useState<boolean>(false);
+  const [metadataFeedback, setMetadataFeedback] = useState<string | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+
+  const loadMetadata = async () => {
+    if (!documentId) return;
+    try {
+      setLoadingMetadata(true);
+      setMetadataError(null);
+      const res = await getDocumentMetadata(documentId);
+      setMetadata(res.metadata || {});
+    } catch (err: unknown) {
+      console.error('Failed to load document metadata:', err);
+      setMetadataError((err as Error).message || 'No se pudieron cargar los metadatos.');
+    } finally {
+      setLoadingMetadata(false);
+    }
+  };
+
+  const handleSaveMetadata = async () => {
+    if (!documentId) return;
+    try {
+      setSavingMetadata(true);
+      setMetadataFeedback(null);
+      setMetadataError(null);
+      const res = await updateDocumentMetadata(documentId, metadata);
+      setMetadata(res.metadata || {});
+      setMetadataFeedback('Metadatos sincronizados con éxito (/Info y XMP).');
+      setTimeout(() => setMetadataFeedback(null), 4000);
+    } catch (err: unknown) {
+      console.error('Failed to update metadata:', err);
+      setMetadataError((err as Error).message || 'Error guardando metadatos.');
+    } finally {
+      setSavingMetadata(false);
+    }
+  };
 
   // Audit log state
   const [auditEvents, setAuditEvents] = useState<AuditEventItem[]>([]);
@@ -198,8 +239,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (activeTab === 'audit') {
       void loadAuditLogs();
+    } else if (activeTab === 'metadata') {
+      void loadMetadata();
     }
-  }, [activeTab]);
+  }, [activeTab, documentId]);
 
   const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
   const [pagPosition, setPagPosition] = useState<'top_left' | 'top_center' | 'top_right' | 'bottom_left' | 'bottom_center' | 'bottom_right'>('bottom_center');
@@ -489,7 +532,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-6 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-7 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
@@ -561,6 +604,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Stamp size={10} />
             <span>Folio</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('metadata')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'metadata'
+                ? 'bg-teal-600 text-white font-semibold shadow-xs'
+                : 'text-teal-600 hover:text-teal-700 dark:hover:text-teal-400'
+            }`}
+            title="Editor y Sincronizador de Metadatos Documentales (/Info & XMP)"
+          >
+            <Tag size={10} />
+            <span>Meta</span>
           </button>
           <button
             onClick={() => setActiveTab('redact')}
@@ -3124,6 +3179,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300'
                       : evt.action === 'optimize'
                       ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                      : evt.action === 'metadata_updated'
+                      ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300'
                       : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-300';
                   return (
                     <div
@@ -3147,6 +3204,165 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'metadata' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <div>
+                <div className="text-[11px] font-semibold text-neutral-400 uppercase">
+                  Metadatos Documentales
+                </div>
+                <p className="text-[10px] text-neutral-500">
+                  Sincronización bidireccional entre /Info y XMP (ISO 32000-1).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadMetadata()}
+                disabled={loadingMetadata}
+                className="p-1.5 rounded bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-300 transition-colors cursor-pointer"
+                title="Recargar metadatos"
+              >
+                <RefreshCw size={12} className={loadingMetadata ? "animate-spin" : ""} />
+              </button>
+            </div>
+
+            {metadataFeedback && (
+              <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 rounded-lg text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="shrink-0 text-emerald-600" />
+                <span>{metadataFeedback}</span>
+              </div>
+            )}
+
+            {metadataError && (
+              <div className="p-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-lg text-rose-600 dark:text-rose-400 text-xs">
+                {metadataError}
+              </div>
+            )}
+
+            {loadingMetadata ? (
+              <div className="p-6 text-center text-xs text-neutral-400 flex flex-col items-center gap-2">
+                <RefreshCw size={18} className="animate-spin text-teal-600" />
+                <span>Cargando metadatos del documento...</span>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                    Título (/Title & dc:title)
+                  </label>
+                  <input
+                    type="text"
+                    value={metadata.title || ''}
+                    onChange={(e) => setMetadata({ ...metadata, title: e.target.value })}
+                    placeholder="Sin título especificado"
+                    className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                    Autor (/Author & dc:creator)
+                  </label>
+                  <input
+                    type="text"
+                    value={metadata.author || ''}
+                    onChange={(e) => setMetadata({ ...metadata, author: e.target.value })}
+                    placeholder="Autor o entidad emisora"
+                    className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                    Asunto / Descripción (/Subject & dc:description)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={metadata.subject || ''}
+                    onChange={(e) => setMetadata({ ...metadata, subject: e.target.value })}
+                    placeholder="Tema o descripción del documento"
+                    className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500 resize-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                    Palabras Clave (/Keywords & pdf:Keywords)
+                  </label>
+                  <input
+                    type="text"
+                    value={metadata.keywords || ''}
+                    onChange={(e) => setMetadata({ ...metadata, keywords: e.target.value })}
+                    placeholder="palabra1, palabra2, etiquetas"
+                    className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                      Creador (/Creator)
+                    </label>
+                    <input
+                      type="text"
+                      value={metadata.creator || ''}
+                      onChange={(e) => setMetadata({ ...metadata, creator: e.target.value })}
+                      placeholder="App creadora"
+                      className="w-full text-xs px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">
+                      Productor (/Producer)
+                    </label>
+                    <input
+                      type="text"
+                      value={metadata.producer || ''}
+                      onChange={(e) => setMetadata({ ...metadata, producer: e.target.value })}
+                      placeholder="Motor PDF"
+                      className="w-full text-xs px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/40 space-y-1 text-[11px]">
+                  <div className="flex justify-between items-center text-neutral-500">
+                    <span>Creación:</span>
+                    <span className="font-mono text-[10px] text-neutral-700 dark:text-neutral-300 truncate max-w-[150px]">
+                      {metadata.creation_date || 'No registrada'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-neutral-500">
+                    <span>Modificación:</span>
+                    <span className="font-mono text-[10px] text-neutral-700 dark:text-neutral-300 truncate max-w-[150px]">
+                      {metadata.mod_date || 'No registrada'}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveMetadata}
+                  disabled={savingMetadata}
+                  className="w-full py-2 px-3 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+                >
+                  {savingMetadata ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Sincronizando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileCheck size={13} />
+                      <span>Guardar y Sincronizar Metadatos</span>
+                    </>
+                  )}
+                </button>
               </div>
             )}
           </div>

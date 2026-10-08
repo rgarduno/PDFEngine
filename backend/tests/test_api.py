@@ -2785,6 +2785,77 @@ def test_system_capabilities_endpoint():
         assert isinstance(data["ocr_languages"], list)
 
 
+def test_document_metadata_get_and_update():
+    _, upload_res = _upload_minimal("metadata_doc.pdf")
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Anonymous access is rejected
+    locked_get = anonymous.get(f"/api/documents/{doc_id}/metadata")
+    assert locked_get.status_code == 401
+
+    locked_put = anonymous.put(
+        f"/api/documents/{doc_id}/metadata",
+        json={"title": "Unauthorized"},
+    )
+    assert locked_put.status_code == 401
+
+    # 2. Get initial metadata
+    res = client.get(f"/api/documents/{doc_id}/metadata")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["document_id"] == doc_id
+    assert "metadata" in data
+
+    # 3. Update metadata
+    update_payload = {
+        "title": "Reporte Trimestral 2026",
+        "author": "Contraloría General",
+        "subject": "Auditoría Interna",
+        "keywords": "auditoría, finanzas, control",
+        "creator": "PDFEngine Studio",
+        "producer": "PDFEngine Core 1.0",
+    }
+    put_res = client.put(f"/api/documents/{doc_id}/metadata", json=update_payload)
+    assert put_res.status_code == 200
+    put_data = put_res.json()
+    assert put_data["success"] is True
+    meta = put_data["metadata"]
+    assert meta["title"] == "Reporte Trimestral 2026"
+    assert meta["author"] == "Contraloría General"
+    assert meta["subject"] == "Auditoría Interna"
+    assert meta["keywords"] == "auditoría, finanzas, control"
+    assert meta["creator"] == "PDFEngine Studio"
+    assert meta["producer"] == "PDFEngine Core 1.0"
+    assert meta["creation_date"] is not None
+    assert meta["mod_date"] is not None
+
+    # 4. Verify get returns updated metadata
+    get_res = client.get(f"/api/documents/{doc_id}/metadata")
+    assert get_res.status_code == 200
+    refetched = get_res.json()["metadata"]
+    assert refetched["title"] == "Reporte Trimestral 2026"
+    assert refetched["author"] == "Contraloría General"
+
+    # 5. Check audit action
+    audit_res = client.get("/api/audit")
+    assert audit_res.status_code == 200
+    events = audit_res.json()
+    assert any(e["action"] == "metadata_updated" and e["document_id"] == doc_id for e in events)
+
+    # 6. Verify export retains metadata
+    exp_res = client.get(f"/api/documents/{doc_id}/export")
+    assert exp_res.status_code == 200
+    import pdf_engine
+    reloaded = pdf_engine.Document.from_bytes(exp_res.content)
+    reloaded_meta = reloaded.get_metadata()
+    assert reloaded_meta["title"] == "Reporte Trimestral 2026"
+    assert reloaded_meta["author"] == "Contraloría General"
+    assert reloaded_meta["subject"] == "Auditoría Interna"
+
+
+
 
 
 

@@ -656,6 +656,16 @@ impl PdfDocument {
     ) -> PdfResult<(Vec<u8>, crate::ops::OptimizationStats)> {
         crate::ops::save_optimized_to_vec(self, options)
     }
+
+    /// Extracts document metadata combining `/Info` and `/Root /Metadata` (XMP).
+    pub fn get_metadata(&mut self) -> PdfResult<crate::ops::metadata::DocumentMetadata> {
+        crate::ops::metadata::extract_metadata(self)
+    }
+
+    /// Updates document metadata and synchronizes `/Info` and `/Root /Metadata` (XMP).
+    pub fn set_metadata(&mut self, meta: &crate::ops::metadata::DocumentMetadata) -> PdfResult<()> {
+        crate::ops::metadata::update_metadata(self, meta)
+    }
 }
 
 #[cfg(test)]

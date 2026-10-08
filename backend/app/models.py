@@ -667,5 +667,32 @@ class SystemCapabilitiesResponse(BaseModel):
     concurrency_locks: bool = Field(default=True, description="Per-document concurrency serialization active")
 
 
+class DocumentMetadataModel(BaseModel):
+    """Document metadata properties synchronized between /Info and XMP."""
+    title: Optional[str] = Field(default=None, description="Document title (/Title, dc:title)")
+    author: Optional[str] = Field(default=None, description="Primary author (/Author, dc:creator)")
+    subject: Optional[str] = Field(default=None, description="Subject or description (/Subject, dc:description)")
+    keywords: Optional[str] = Field(default=None, description="Keywords (/Keywords, pdf:Keywords)")
+    creator: Optional[str] = Field(default=None, description="Creating application (/Creator, xmp:CreatorTool)")
+    producer: Optional[str] = Field(default=None, description="PDF producer (/Producer, pdf:Producer)")
+    creation_date: Optional[str] = Field(default=None, description="Creation timestamp in ISO-8601 or PDF format")
+    mod_date: Optional[str] = Field(default=None, description="Modification timestamp in ISO-8601 or PDF format")
 
 
+class DocumentMetadataResponse(BaseModel):
+    """Response containing synchronized document metadata."""
+    success: bool = True
+    document_id: str
+    metadata: DocumentMetadataModel
+
+
+class UpdateDocumentMetadataRequest(BaseModel):
+    """Payload to update document metadata across /Info and XMP."""
+    title: Optional[str] = None
+    author: Optional[str] = None
+    subject: Optional[str] = None
+    keywords: Optional[str] = None
+    creator: Optional[str] = None
+    producer: Optional[str] = None
+    creation_date: Optional[str] = None
+    mod_date: Optional[str] = None

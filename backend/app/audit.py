@@ -19,7 +19,7 @@ from app.auth import current_subject
 
 MAX_AUDIT_EVENTS = 4096
 _MAX_ID_LENGTH = 64
-_ACTIONS = frozenset({"upload", "redact", "sign", "optimize"})
+_ACTIONS = frozenset({"upload", "redact", "sign", "optimize", "metadata_updated"})
 
 logger = logging.getLogger("pdfengine.audit")
 

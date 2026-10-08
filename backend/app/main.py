@@ -109,6 +109,9 @@ from app.models import (
     PdfARequest,
     PdfAResponse,
     SystemCapabilitiesResponse,
+    DocumentMetadataModel,
+    DocumentMetadataResponse,
+    UpdateDocumentMetadataRequest,
 )
 
 app = FastAPI(
@@ -2611,6 +2614,58 @@ async def optimize_document_endpoint(
         if refusal is not None:
             raise refusal
         raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/metadata",
+    response_model=DocumentMetadataResponse,
+)
+def get_document_metadata_endpoint(doc_id: str):
+    """Retrieves document metadata synchronized across /Info and XMP."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raw_meta = doc.get_metadata()
+        meta = DocumentMetadataModel(**raw_meta)
+        return DocumentMetadataResponse(
+            success=True,
+            document_id=doc_id,
+            metadata=meta,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.put(
+    "/api/documents/{doc_id}/metadata",
+    response_model=DocumentMetadataResponse,
+)
+@serialized_mutation
+def update_document_metadata_endpoint(
+    doc_id: str,
+    request: UpdateDocumentMetadataRequest,
+):
+    """Updates and synchronizes document metadata across /Info and XMP stream."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        payload = request.model_dump(exclude_unset=True)
+        doc.set_metadata(payload)
+        record_document_action("metadata_updated", doc_id)
+        raw_meta = doc.get_metadata()
+        meta = DocumentMetadataModel(**raw_meta)
+        return DocumentMetadataResponse(
+            success=True,
+            document_id=doc_id,
+            metadata=meta,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
 
 
 

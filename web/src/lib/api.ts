@@ -45,6 +45,8 @@ import {
   UpdateFormFieldPayload,
   AuditEventItem,
   SystemCapabilities,
+  DocumentMetadata,
+  DocumentMetadataResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1369,6 +1371,32 @@ export async function getSystemCapabilities(): Promise<SystemCapabilities> {
   }
   return await res.json();
 }
+
+export async function getDocumentMetadata(docId: string): Promise<DocumentMetadataResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/metadata`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to fetch document metadata' }));
+    throw new Error(err.detail || 'Failed to fetch document metadata');
+  }
+  return await res.json();
+}
+
+export async function updateDocumentMetadata(
+  docId: string,
+  payload: Partial<DocumentMetadata>
+): Promise<DocumentMetadataResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/metadata`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update document metadata' }));
+    throw new Error(err.detail || 'Failed to update document metadata');
+  }
+  return await res.json();
+}
+
 
 
 

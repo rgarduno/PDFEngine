@@ -2281,6 +2281,61 @@ impl PyPdfDocument {
         Ok(())
     }
 
+    /// Returns document metadata as a dictionary (/Info and XMP synchronized).
+    pub fn get_metadata<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let meta = self
+            .doc
+            .get_metadata()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract metadata: {}", e)))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("title", meta.title)?;
+        dict.set_item("author", meta.author)?;
+        dict.set_item("subject", meta.subject)?;
+        dict.set_item("keywords", meta.keywords)?;
+        dict.set_item("creator", meta.creator)?;
+        dict.set_item("producer", meta.producer)?;
+        dict.set_item("creation_date", meta.creation_date)?;
+        dict.set_item("mod_date", meta.mod_date)?;
+        Ok(dict)
+    }
+
+    /// Updates and synchronizes document metadata across /Info and XMP stream.
+    pub fn set_metadata(&mut self, data: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
+        let current = self.doc.get_metadata().unwrap_or_default();
+        let resolve_field = |key: &str, current_val: Option<String>| -> PyResult<Option<String>> {
+            if data.contains(key)? {
+                match data.get_item(key)? {
+                    Some(val) => {
+                        if val.is_none() {
+                            Ok(None)
+                        } else {
+                            Ok(val.extract::<String>().ok())
+                        }
+                    }
+                    None => Ok(None),
+                }
+            } else {
+                Ok(current_val)
+            }
+        };
+
+        let meta = pdf_engine_core::ops::DocumentMetadata {
+            title: resolve_field("title", current.title)?,
+            author: resolve_field("author", current.author)?,
+            subject: resolve_field("subject", current.subject)?,
+            keywords: resolve_field("keywords", current.keywords)?,
+            creator: resolve_field("creator", current.creator)?,
+            producer: resolve_field("producer", current.producer)?,
+            creation_date: resolve_field("creation_date", current.creation_date)?,
+            mod_date: resolve_field("mod_date", current.mod_date)?,
+        };
+
+        self.doc
+            .set_metadata(&meta)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to update metadata: {}", e)))?;
+        Ok(())
+    }
+
     /// Serializes the modified PDF document to an in-memory byte vector.
     pub fn save_to_bytes(&mut self) -> PyResult<Vec<u8>> {
         self.doc

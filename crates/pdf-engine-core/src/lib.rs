@@ -87,10 +87,11 @@ pub use layout::{
 };
 pub use ocr::{add_searchable_text_layer, OcrReport};
 pub use ops::{
-    collect_garbage, deduplicate_streams, delete_pages, extract_pages, get_page_rotation,
-    merge_documents, merge_pdf_bytes, optimize_document, recompress_streams, reorder_pages,
-    rotate_all_pages, rotate_page, save_optimized_to_vec, set_page_rotation, split_by_ranges,
-    split_document, ObjectCloner, OptimizationOptions, OptimizationStats,
+    collect_garbage, deduplicate_streams, delete_pages, extract_metadata, extract_pages,
+    get_page_rotation, merge_documents, merge_pdf_bytes, optimize_document, recompress_streams,
+    reorder_pages, rotate_all_pages, rotate_page, save_optimized_to_vec, set_page_rotation,
+    split_by_ranges, split_document, update_metadata, DocumentMetadata, ObjectCloner,
+    OptimizationOptions, OptimizationStats,
 };
 pub use pdfa::{convert_to_pdfa, validate_pdfa, PdfALevel};
 pub use redact::{
