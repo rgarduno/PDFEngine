@@ -14,6 +14,7 @@ from functools import wraps
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import Response
 
 from app.audit import events_for, record_document_action
@@ -114,6 +115,51 @@ app = FastAPI(
     description="High-performance, lossless PDF parsing and surgical editing service",
     version="0.1.0",
 )
+
+_BEARER_SCHEME = "HTTPBearer"
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
+
+
+def _openapi_schema() -> dict:
+    """Publish the bearer scheme Swagger's Authorize button sends.
+
+    Health stays open. A WebSocket operation, when the schema includes one,
+    stays open here because the socket authenticates with a one-time ticket
+    rather than this header. Every other operation requires the scheme.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    components = schema.setdefault("components", {})
+    schemes = components.setdefault("securitySchemes", {})
+    schemes[_BEARER_SCHEME] = {
+        "type": "http",
+        "scheme": "bearer",
+        "description": (
+            "One token from PDFENGINE_API_KEYS. "
+            "Paste the token only. The client adds the Bearer scheme."
+        ),
+    }
+    for path, item in schema.get("paths", {}).items():
+        if not isinstance(item, dict):
+            continue
+        for method, operation in item.items():
+            if method not in _HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            if (path == "/api/health" and method == "get") or path.startswith("/ws/"):
+                operation.pop("security", None)
+                continue
+            operation["security"] = [{_BEARER_SCHEME: []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi_schema
 
 logger = logging.getLogger("pdfengine.api")
 

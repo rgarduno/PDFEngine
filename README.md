@@ -341,11 +341,14 @@ PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 
 ### Authentication
 
-Every route except `GET /api/health` requires `Authorization: Bearer <token>`.
-Set `PDFENGINE_API_KEYS` to a comma-separated list of tokens. Each token must
-be at least 16 characters. The process stores a SHA-256 subject id with the
-document, and a document id can be read only by the subject that created it.
-A missing document and a document owned by another subject both answer 404.
+Every HTTP route except `GET /api/health` and the documentation pages
+(`/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect`) requires
+`Authorization: Bearer <token>`. Set `PDFENGINE_API_KEYS` to a comma-separated
+list of tokens. Each token must be at least 16 characters. A shorter token is
+ignored. The process stores a SHA-256 subject id with the document, and a
+document id can be read only by the subject that created it. A missing
+document and a document owned by another subject both answer 404. Swagger
+sends the same `PDFENGINE_API_KEYS` value the operator exported.
 
 The local studio sends `NEXT_PUBLIC_PDFENGINE_API_KEY` on each request.
 Next.js inlines that value into the browser bundle, so it is visible to anyone
@@ -361,6 +364,51 @@ browser origin.
 
 Browser WebSockets cannot set `Authorization`. `POST /api/auth/ws-ticket`
 returns a single-use ticket, valid for 60 seconds, passed as `?ticket=`.
+
+### Swagger
+
+Open `http://localhost:8000/docs` after the API process is running. That page,
+`/redoc`, and `/openapi.json` load without a token. Click Authorize and paste
+one token from `PDFENGINE_API_KEYS`. Do not type the word Bearer. Swagger adds
+the scheme and sends `Authorization: Bearer <token>` on every operation except
+health.
+
+The local studio reads `NEXT_PUBLIC_PDFENGINE_API_KEY` from `web/.env.local`.
+That file is gitignored. On this machine the value is
+`local-dev-secret-key-12345`. Start the API with the same string when the
+studio and Swagger should share one tenant:
+
+```bash
+export PDFENGINE_API_KEYS="local-dev-secret-key-12345"
+export PDFENGINE_CORS_ORIGINS="http://localhost:3000"
+PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+That string is a local development token. Do not use it on a host other
+people can reach. A shared deployment keeps the long random token from the
+section above and does not publish it in the browser bundle.
+
+The operations on that page are the rows in the table below. Use them in this
+order:
+
+1. `GET /api/health` answers before Authorize.
+2. `POST /api/documents/upload` takes a PDF file. Copy `document_id`. That
+   value is `{id}` in the other rows.
+3. Path segment `{p}` is a page number starting at 1.
+4. Reads use that id: scene graph, fonts, images, forms, annotations,
+   `GET /api/documents/{id}/pdfa`, `GET /api/audit`, and export.
+5. Writes use the same id. OCR needs a local `tesseract` binary and returns
+   counts only. PDF/A `part` is `1b` or `2b`. A shape `kind` is `Ink`,
+   `Square`, `Circle`, `Line`, `Arrow`, or `Polygon`. Sign without a
+   certificate writes the SHA-256 attestation.
+6. `POST /api/documents/merge` needs two ids from two uploads.
+7. `POST /api/auth/ws-ticket` returns a single-use ticket. The socket is
+   `/ws/documents/{id}/pages/{p}/reflow?ticket=`. Swagger UI does not open
+   that socket.
+8. `GET /api/documents/{id}/export` downloads the PDF.
+
+Each remaining row is one operation on the same page. The request body is the
+schema shown on that operation.
 
 ### Searchable scans
 
@@ -507,6 +555,7 @@ Open [http://localhost:3000](http://localhost:3000) to start editing.
 - [x] **Phase 20: Searchable text over scanned pages** (A page that paints one image and no text can receive word boxes from local tesseract. The engine appends rendering mode 3 text and a WinAnsi `/ToUnicode` map. The face is standard Courier and is not embedded. Recognition is not guaranteed and the scan image is unchanged.)
 - [x] **Phase 21: Ink and vector shapes** (The studio draws `/Ink`, `/Square`, `/Circle`, `/Line` with an open arrow, and `/Polygon`, with stroke color, border width, opacity, and optional fill. Each mark has an appearance stream. Flattening does not burn these marks.)
 - [x] **Phase 22: PDF/A-1b and PDF/A-2b** (The engine checks structure, embeds an original bitmap face for unembedded simple fonts, writes an RGB ICC output intent and pdfaid XMP, and removes features that part forbids. This is not a veraPDF certificate, an Acrobat preflight, or an acceptance by a court.)
+- [x] **Phase 23: OpenAPI bearer scheme** (Swagger UI at `/docs` loads without a token. Authorize sends one `PDFENGINE_API_KEYS` value as a bearer token. Health stays public. The WebSocket still uses a one-time ticket.)
 
 ---
 

@@ -1,7 +1,9 @@
 """Bearer identity and document-session ownership for the commercial API.
 
-Every route except ``GET /api/health`` requires an ``Authorization: Bearer``
-token listed in the ``PDFENGINE_API_KEYS`` environment variable. Each distinct
+Every HTTP route except ``GET /api/health`` and the documentation pages
+(``/docs``, ``/redoc``, ``/openapi.json``, and ``/docs/oauth2-redirect``)
+requires an ``Authorization: Bearer`` token listed in the
+``PDFENGINE_API_KEYS`` environment variable. Each distinct
 token is one tenant. The session store records only a SHA-256 subject id, so
 the raw token is never kept next to the PDF.
 
@@ -42,6 +44,17 @@ from fastapi.responses import JSONResponse
 
 
 MIN_TOKEN_LENGTH = 16
+# Documentation pages stay public so a browser can load Swagger and then send
+# the bearer token. These are exact paths. A prefix would also open lookalikes.
+PUBLIC_HTTP_PATHS = frozenset(
+    {
+        "/api/health",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+        "/openapi.json",
+    }
+)
 WS_TICKET_TTL_SECONDS = 60
 MAX_WS_TICKETS = 1024
 DEFAULT_MAX_UPLOAD_BYTES = 32 * 1024 * 1024
@@ -401,7 +414,7 @@ class AuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if path == "/api/health" or scope.get("method") == "OPTIONS":
+        if path in PUBLIC_HTTP_PATHS or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
 

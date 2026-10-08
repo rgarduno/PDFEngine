@@ -2736,6 +2736,38 @@ def test_pdfa_archives_a_minimal_document_and_rejects_a_bad_part():
     assert b">2</pdfaid:part>" in second_export.content
 
 
+def test_openapi_advertises_bearer_and_docs_pages_stay_public():
+    """Swagger can load, then Authorize sends the configured API token."""
+    for path in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
+        opened = anonymous.get(path)
+        assert opened.status_code == 200, path
+
+    schema = anonymous.get("/openapi.json").json()
+    scheme = schema["components"]["securitySchemes"]["HTTPBearer"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "local-dev-secret-key" not in anonymous.get("/openapi.json").text
+
+    methods = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
+    seen_upload = False
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            if method not in methods:
+                continue
+            security = operation.get("security")
+            if (path == "/api/health" and method == "get") or path.startswith("/ws/"):
+                assert security in (None, [])
+                continue
+            assert security == [{"HTTPBearer": []}]
+            if path == "/api/documents/upload" and method == "post":
+                seen_upload = True
+    assert seen_upload is True
+
+    locked = anonymous.get("/api/audit")
+    assert locked.status_code == 401
+    assert locked.json()["detail"] == "Authentication required."
+
+
 
 
 
