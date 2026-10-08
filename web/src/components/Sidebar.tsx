@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
-import { AnnotationElement, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
-import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl } from '@/lib/api';
+import React, { useState, useEffect } from 'react';
+import { AnnotationElement, AuditEventItem, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
+import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl, getAuditEvents } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
 import {
   ShieldCheck,
@@ -42,6 +42,7 @@ import {
   FileArchive,
   Info,
   PenTool,
+  History,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -169,11 +170,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateFormField,
   onDeleteFormField,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr' | 'audit'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
+
+  // Audit log state
+  const [auditEvents, setAuditEvents] = useState<AuditEventItem[]>([]);
+  const [isLoadingAudit, setIsLoadingAudit] = useState<boolean>(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  const loadAuditLogs = async () => {
+    try {
+      setIsLoadingAudit(true);
+      setAuditError(null);
+      const events = await getAuditEvents();
+      setAuditEvents(events);
+    } catch (err) {
+      console.error('Failed to load audit events:', err);
+      setAuditError('No se pudo cargar la pista de auditoría.');
+    } finally {
+      setIsLoadingAudit(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'audit') {
+      void loadAuditLogs();
+    }
+  }, [activeTab]);
 
   const [pagFormat, setPagFormat] = useState<string>('Página {page} de {total}');
   const [pagPosition, setPagPosition] = useState<'top_left' | 'top_center' | 'top_right' | 'bottom_left' | 'bottom_center' | 'bottom_right'>('bottom_center');
@@ -236,6 +262,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [sigReason, setSigReason] = useState<string>('Aprobación y Certificación Legal');
   const [sigLocation, setSigLocation] = useState<string>('Ciudad de México, MX');
   const [sigPage, setSigPage] = useState<number>(pageNumber || 1);
+  const [sigFormat, setSigFormat] = useState<'attestation' | 'pkcs12' | 'pem'>('attestation');
+  const [sigPkcs12Base64, setSigPkcs12Base64] = useState<string>('');
+  const [sigPkcs12Filename, setSigPkcs12Filename] = useState<string>('');
+  const [sigPkcs12Password, setSigPkcs12Password] = useState<string>('');
+  const [sigCertPem, setSigCertPem] = useState<string>('');
+  const [sigKeyPem, setSigKeyPem] = useState<string>('');
+  const [sigTsaUrl, setSigTsaUrl] = useState<string>('');
+  const [showAdvancedCrypto, setShowAdvancedCrypto] = useState<boolean>(false);
 
   // AcroForm Builder & Designer State
   const [showFormBuilder, setShowFormBuilder] = useState<boolean>(false);
@@ -455,7 +489,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="mt-3 grid grid-cols-5 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
+        <div className="mt-3 grid grid-cols-6 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
             className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
@@ -587,6 +621,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <FileCheck size={10} />
             <span>OCR</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'audit'
+                ? 'bg-indigo-600 text-white font-semibold shadow-xs'
+                : 'text-indigo-600 hover:text-indigo-700 dark:hover:text-indigo-400'
+            }`}
+            title="Pista de Auditoría (/api/audit)"
+          >
+            <History size={10} />
+            <span>Audit</span>
           </button>
         </div>
       </div>
@@ -2202,12 +2248,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
                   <FileCheck size={13} className="text-blue-500" />
-                  <span>Atestación SHA-256</span>
+                  <span>Firma Digital & Atestación</span>
                 </div>
-                <span className="text-[10px] text-neutral-400 font-mono">ByteRange</span>
+                <span className="text-[10px] text-neutral-400 font-mono">
+                  {sigFormat === 'attestation' ? 'ByteRange SHA-256' : 'PKCS#7 Detached'}
+                </span>
               </div>
 
               <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase">
+                    Tipo de Firma
+                  </label>
+                  <select
+                    value={sigFormat}
+                    onChange={(e) => {
+                      const val = e.target.value as 'attestation' | 'pkcs12' | 'pem';
+                      setSigFormat(val);
+                    }}
+                    className="w-full mt-0.5 px-2 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200"
+                  >
+                    <option value="attestation">Atestación SHA-256 (sin certificado)</option>
+                    <option value="pkcs12">Certificado PKCS#12 / PFX (.p12 / .pfx)</option>
+                    <option value="pem">Certificado y Llave Privada PEM (X.509)</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="text-[10px] font-medium text-neutral-500 uppercase">
                     Nombre del Firmante / Entidad
@@ -2259,6 +2325,97 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     />
                   </div>
                 </div>
+
+                {sigFormat === 'pkcs12' && (
+                  <div className="p-2.5 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/40 rounded-lg space-y-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-neutral-600 dark:text-neutral-400 block mb-1">
+                        Archivo de Certificado (.p12 / .pfx)
+                      </label>
+                      <input
+                        type="file"
+                        accept=".p12,.pfx"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setSigPkcs12Filename(file.name);
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const result = reader.result as string;
+                            const b64 = result.includes(',') ? result.split(',')[1] : result;
+                            setSigPkcs12Base64(b64);
+                          };
+                          reader.readAsDataURL(file);
+                        }}
+                        className="text-[11px] text-neutral-600 dark:text-neutral-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-blue-600 file:text-white"
+                      />
+                      {sigPkcs12Filename && (
+                        <div className="mt-1 text-[9px] text-blue-600 dark:text-blue-400 font-mono">
+                          {sigPkcs12Filename} cargado ({Math.round(sigPkcs12Base64.length * 0.75)} bytes)
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-neutral-600 dark:text-neutral-400 block">
+                        Contraseña del Certificado
+                      </label>
+                      <input
+                        type="password"
+                        value={sigPkcs12Password}
+                        onChange={(e) => setSigPkcs12Password(e.target.value)}
+                        placeholder="Contraseña del archivo .p12"
+                        className="w-full mt-0.5 px-2 py-1 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {sigFormat === 'pem' && (
+                  <div className="p-2.5 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/40 rounded-lg space-y-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-neutral-600 dark:text-neutral-400 block">
+                        Certificado PEM (X.509)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={sigCertPem}
+                        onChange={(e) => setSigCertPem(e.target.value)}
+                        placeholder="-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----"
+                        className="w-full mt-0.5 p-1.5 text-[10px] font-mono bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-neutral-600 dark:text-neutral-400 block">
+                        Clave Privada PEM (PKCS#8 / PKCS#1)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={sigKeyPem}
+                        onChange={(e) => setSigKeyPem(e.target.value)}
+                        placeholder="-----BEGIN PRIVATE KEY----- ... -----END PRIVATE KEY-----"
+                        className="w-full mt-0.5 p-1.5 text-[10px] font-mono bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* TSA Time-Stamp Authority (RFC 3161) */}
+                <div className="pt-1">
+                  <label className="text-[10px] font-medium text-neutral-500 uppercase flex items-center justify-between">
+                    <span>Servidor de Sellado de Tiempo TSA (RFC 3161)</span>
+                    <span className="text-[9px] text-neutral-400 lowercase">opcional</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={sigTsaUrl}
+                    onChange={(e) => setSigTsaUrl(e.target.value)}
+                    placeholder="https://freetsa.org/tsr o https://timestamp.digicert.com"
+                    className="w-full mt-0.5 px-2 py-1 text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400"
+                  />
+                  <p className="text-[9px] text-neutral-400 mt-0.5">
+                    Genera una marca de tiempo criptográfica inmutable sobre el valor de la firma.
+                  </p>
+                </div>
               </div>
 
               <button
@@ -2268,18 +2425,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     alert('Ingrese el nombre del firmante.');
                     return;
                   }
-                  onSignDocument?.({
+                  const payload: SignDocumentPayload = {
                     signer_name: sigName.trim(),
                     reason: sigReason.trim(),
                     location: sigLocation.trim(),
                     page_number: sigPage,
                     rect: [72.0, 72.0, 272.0, 142.0],
-                  });
+                  };
+                  if (sigFormat === 'pkcs12' && sigPkcs12Base64) {
+                    payload.pkcs12_base64 = sigPkcs12Base64;
+                    payload.pkcs12_password = sigPkcs12Password;
+                  } else if (sigFormat === 'pem' && sigCertPem.trim() && sigKeyPem.trim()) {
+                    payload.certificate_pem = sigCertPem.trim();
+                    payload.private_key_pem = sigKeyPem.trim();
+                  }
+                  if (sigTsaUrl.trim()) {
+                    payload.tsa_url = sigTsaUrl.trim();
+                  }
+                  onSignDocument?.(payload);
                 }}
                 className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 size={13} />
-                <span>Estampar atestación SHA-256</span>
+                <span>
+                  {sigFormat === 'attestation'
+                    ? 'Estampar atestación SHA-256'
+                    : 'Estampar Firma PKCS#7 (adbe.pkcs7.detached)'}
+                </span>
               </button>
             </div>
 
@@ -2903,6 +3075,78 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     ))}
                   </ul>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'audit' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <div>
+                <div className="text-[11px] font-semibold text-neutral-400 uppercase">
+                  Pista de Auditoría ({auditEvents.length})
+                </div>
+                <p className="text-[10px] text-neutral-500">
+                  Eventos inmutables de seguridad y operaciones del documento.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadAuditLogs()}
+                disabled={isLoadingAudit}
+                className="p-1.5 rounded bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-300 transition-colors cursor-pointer"
+                title="Actualizar eventos"
+              >
+                <RefreshCw size={12} className={isLoadingAudit ? "animate-spin" : ""} />
+              </button>
+            </div>
+
+            {auditError && (
+              <div className="p-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-lg text-rose-600 dark:text-rose-400 text-xs">
+                {auditError}
+              </div>
+            )}
+
+            {auditEvents.length === 0 && !isLoadingAudit ? (
+              <div className="p-4 border border-dashed border-neutral-200 dark:border-neutral-800 rounded-lg text-center text-xs text-neutral-400">
+                No hay eventos de auditoría registrados para este tenant.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
+                {auditEvents.map((evt, idx) => {
+                  const actionColor =
+                    evt.action === 'upload'
+                      ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300'
+                      : evt.action === 'redact'
+                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-300'
+                      : evt.action === 'sign'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300'
+                      : evt.action === 'optimize'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                      : 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-300';
+                  return (
+                    <div
+                      key={idx}
+                      className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded uppercase tracking-wider font-mono ${actionColor}`}>
+                          {evt.action}
+                        </span>
+                        <span className="text-[10px] text-neutral-400 font-mono">
+                          {new Date(evt.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-500 font-mono truncate" title={evt.document_id}>
+                        Doc: {evt.document_id}
+                      </div>
+                      <div className="text-[9px] text-neutral-400">
+                        {new Date(evt.at).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

@@ -2768,6 +2768,24 @@ def test_openapi_advertises_bearer_and_docs_pages_stay_public():
     assert locked.json()["detail"] == "Authentication required."
 
 
+def test_system_capabilities_endpoint():
+    locked = anonymous.get("/api/system/capabilities")
+    assert locked.status_code == 401
+
+    res = client.get("/api/system/capabilities")
+    assert res.status_code == 200
+    data = res.json()
+    assert "tesseract_available" in data
+    assert "ocr_languages" in data
+    assert data["pdfa_supported"] is True
+    assert data["pkcs7_supported"] is True
+    assert data["concurrency_locks"] is True
+    if data["tesseract_available"]:
+        assert data["tesseract_path"] is not None
+        assert isinstance(data["ocr_languages"], list)
+
+
+
 
 
 

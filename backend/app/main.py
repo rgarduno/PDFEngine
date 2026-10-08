@@ -108,6 +108,7 @@ from app.models import (
     OcrResponse,
     PdfARequest,
     PdfAResponse,
+    SystemCapabilitiesResponse,
 )
 
 app = FastAPI(
@@ -310,6 +311,58 @@ def health_check():
         "engine_loaded": pdf_engine is not None,
         "version": "0.1.0",
     }
+
+
+def _detect_tesseract() -> tuple[Optional[str], bool, List[str]]:
+    import shutil
+    import subprocess
+    candidates = []
+    configured = os.environ.get("PDFENGINE_TESSERACT")
+    if configured:
+        candidates.append(configured)
+    candidates.extend([
+        "/opt/homebrew/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/usr/bin/tesseract",
+    ])
+    which_bin = shutil.which("tesseract")
+    if which_bin:
+        candidates.append(which_bin)
+
+    for cand in candidates:
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            langs: List[str] = []
+            try:
+                proc = subprocess.run(
+                    [cand, "--list-langs"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        cleaned = line.strip()
+                        if cleaned and not cleaned.lower().startswith("list of"):
+                            langs.append(cleaned)
+            except Exception:
+                pass
+            return cand, True, langs
+    return None, False, []
+
+
+@app.get("/api/system/capabilities", response_model=SystemCapabilitiesResponse)
+def system_capabilities():
+    """Returns detected system capabilities, OCR runtime status, and format support."""
+    tess_path, tess_available, langs = _detect_tesseract()
+    return SystemCapabilitiesResponse(
+        tesseract_available=tess_available,
+        tesseract_path=tess_path,
+        ocr_languages=langs,
+        pdfa_supported=True,
+        pkcs7_supported=True,
+        concurrency_locks=True,
+    )
+
 
 
 @app.get("/api/audit", response_model=List[AuditEventResponse])

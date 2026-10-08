@@ -657,4 +657,15 @@ class AuditEventResponse(BaseModel):
     at: str
 
 
+class SystemCapabilitiesResponse(BaseModel):
+    """System capabilities, runtime tools, and format support."""
+    tesseract_available: bool = Field(description="True if local tesseract binary was located")
+    tesseract_path: Optional[str] = Field(default=None, description="Absolute path to the tesseract executable")
+    ocr_languages: List[str] = Field(default_factory=list, description="Available tesseract language models")
+    pdfa_supported: bool = Field(default=True, description="PDF/A-1b and PDF/A-2b conversion support")
+    pkcs7_supported: bool = Field(default=True, description="Detached PKCS#7 & RFC 3161 support")
+    concurrency_locks: bool = Field(default=True, description="Per-document concurrency serialization active")
+
+
+
 

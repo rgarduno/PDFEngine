@@ -43,6 +43,8 @@ import {
   CreateFormFieldResponse,
   DeleteFormFieldResponse,
   UpdateFormFieldPayload,
+  AuditEventItem,
+  SystemCapabilities,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1349,6 +1351,25 @@ export async function updateFormField(
   }
   return await res.json();
 }
+
+export async function getAuditEvents(): Promise<AuditEventItem[]> {
+  const res = await apiFetch(`${API_BASE_URL}/api/audit`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to fetch audit events' }));
+    throw new Error(err.detail || 'Failed to fetch audit events');
+  }
+  return await res.json();
+}
+
+export async function getSystemCapabilities(): Promise<SystemCapabilities> {
+  const res = await apiFetch(`${API_BASE_URL}/api/system/capabilities`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to fetch capabilities' }));
+    throw new Error(err.detail || 'Failed to fetch capabilities');
+  }
+  return await res.json();
+}
+
 
 
 

@@ -458,6 +458,7 @@ preflight, or an acceptance by a court.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/health` | Health check and native engine availability. Public. |
+| `GET` | `/api/system/capabilities` | Inspect runtime tool availability (Tesseract, OCR languages, format capabilities). |
 | `POST` | `/api/auth/ws-ticket` | Exchange the bearer token for a single-use WebSocket ticket. |
 | `POST` | `/api/documents/upload` | Ingest PDF, validate ISO structure, and return session token. |
 | `GET` | `/api/documents/{id}/pages/{p}/scenegraph` | Retrieve semantic layout (paragraphs, bounding boxes, alignments). |

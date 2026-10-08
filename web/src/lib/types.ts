@@ -336,6 +336,12 @@ export interface SignDocumentPayload {
   page_number?: number;
   rect?: number[];
   contact_info?: string;
+  certificate_pem?: string;
+  private_key_pem?: string;
+  chain_pem?: string;
+  pkcs12_base64?: string;
+  pkcs12_password?: string;
+  tsa_url?: string;
 }
 
 export interface SignatureItem {
@@ -517,4 +523,19 @@ export interface UpdateFormFieldPayload {
   is_read_only?: boolean;
   is_required?: boolean;
   is_multiline?: boolean;
+}
+
+export interface AuditEventItem {
+  action: string;
+  document_id: string;
+  at: string;
+}
+
+export interface SystemCapabilities {
+  tesseract_available: boolean;
+  tesseract_path?: string | null;
+  ocr_languages: string[];
+  pdfa_supported: boolean;
+  pkcs7_supported: boolean;
+  concurrency_locks: boolean;
 }
