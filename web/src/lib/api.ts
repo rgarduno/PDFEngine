@@ -47,6 +47,7 @@ import {
   SystemCapabilities,
   DocumentMetadata,
   DocumentMetadataResponse,
+  CompareDocumentsResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1396,6 +1397,35 @@ export async function updateDocumentMetadata(
   }
   return await res.json();
 }
+
+export async function compareDocuments(
+  baseDocId: string,
+  targetDocId: string,
+  options: {
+    ignore_case?: boolean;
+    similarity_threshold?: number;
+    compare_images?: boolean;
+    compare_metadata?: boolean;
+  } = {}
+): Promise<CompareDocumentsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${baseDocId}/compare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      target_doc_id: targetDocId,
+      ignore_case: options.ignore_case ?? false,
+      similarity_threshold: options.similarity_threshold ?? 0.35,
+      compare_images: options.compare_images ?? true,
+      compare_metadata: options.compare_metadata ?? true,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to compare documents' }));
+    throw new Error(err.detail || 'Failed to compare documents');
+  }
+  return await res.json();
+}
+
 
 
 

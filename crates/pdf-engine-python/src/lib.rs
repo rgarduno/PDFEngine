@@ -2282,7 +2282,10 @@ impl PyPdfDocument {
     }
 
     /// Returns document metadata as a dictionary (/Info and XMP synchronized).
-    pub fn get_metadata<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    pub fn get_metadata<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let meta = self
             .doc
             .get_metadata()
@@ -2405,6 +2408,41 @@ impl PyPdfDocument {
         })?;
         Ok((bytes, PyOptimizationStats::from_core(stats)))
     }
+
+    /// Compares this PDF document (as base) against a target document revision.
+    ///
+    /// Returns a structured comparison report dictionary with summary counts,
+    /// metadata discrepancies, and per-page textual and image differences.
+    #[pyo3(signature = (
+        target,
+        ignore_case = false,
+        similarity_threshold = 0.35,
+        compare_images = true,
+        compare_metadata = true
+    ))]
+    pub fn compare<'py>(
+        &mut self,
+        py: Python<'py>,
+        target: &mut PyPdfDocument,
+        ignore_case: bool,
+        similarity_threshold: f64,
+        compare_images: bool,
+        compare_metadata: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = pdf_engine_core::ops::DiffOptions {
+            ignore_whitespace: true,
+            ignore_case,
+            similarity_threshold,
+            compare_images,
+            compare_metadata,
+        };
+        let report =
+            pdf_engine_core::ops::compare_documents(&mut self.doc, &mut target.doc, &options)
+                .map_err(|e| PyRuntimeError::new_err(format!("Comparison failed: {}", e)))?;
+        let json_str = report.to_json();
+        let json_mod = py.import("json")?;
+        json_mod.call_method1("loads", (json_str,))
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -2424,6 +2462,35 @@ pub fn merge_pdf_bytes(pdf_buffers: Vec<Vec<u8>>) -> PyResult<Vec<u8>> {
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge PDF bytes: {}", e)))
 }
 
+/// Compares two PDF documents and returns a structured comparison report dictionary.
+#[pyfunction]
+#[pyo3(signature = (
+    base,
+    target,
+    ignore_case = false,
+    similarity_threshold = 0.35,
+    compare_images = true,
+    compare_metadata = true
+))]
+pub fn compare_documents<'py>(
+    py: Python<'py>,
+    base: &mut PyPdfDocument,
+    target: &mut PyPdfDocument,
+    ignore_case: bool,
+    similarity_threshold: f64,
+    compare_images: bool,
+    compare_metadata: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    base.compare(
+        py,
+        target,
+        ignore_case,
+        similarity_threshold,
+        compare_images,
+        compare_metadata,
+    )
+}
+
 /// The native Python module entrypoint for `pdf_engine`.
 #[pymodule]
 fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2439,6 +2506,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTableCell>()?;
     m.add_class::<PyDetectedTable>()?;
     m.add_class::<PyOptimizationStats>()?;
+    m.add_function(wrap_pyfunction!(compare_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
     Ok(())

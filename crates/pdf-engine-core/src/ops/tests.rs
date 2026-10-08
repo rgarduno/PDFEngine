@@ -233,3 +233,137 @@ fn test_reorder_and_delete_pages() {
     let mut reloaded = PdfDocument::load(&saved).unwrap();
     assert_eq!(reloaded.get_pages().unwrap().len(), 3);
 }
+
+#[test]
+fn test_diff_word_level_lcs() {
+    use crate::ops::diff::compute_word_diffs;
+    let words_a = vec![
+        "El".to_string(),
+        "contrato".to_string(),
+        "vence".to_string(),
+        "en".to_string(),
+        "2024".to_string(),
+    ];
+    let words_b = vec![
+        "El".to_string(),
+        "contrato".to_string(),
+        "vence".to_string(),
+        "en".to_string(),
+        "2025".to_string(),
+    ];
+
+    let (diffs, sim) = compute_word_diffs(&words_a, &words_b, false);
+    assert!(sim > 0.7);
+    assert_eq!(diffs.len(), 6); // El, contrato, vence, en, 2024 (del), 2025 (add)
+
+    use crate::ops::diff::DiffKind;
+    assert_eq!(diffs[0].kind, DiffKind::Unchanged);
+    assert_eq!(diffs[4].kind, DiffKind::Deleted);
+    assert_eq!(diffs[4].text, "2024");
+    assert_eq!(diffs[5].kind, DiffKind::Added);
+    assert_eq!(diffs[5].text, "2025");
+}
+
+#[test]
+fn test_compare_documents_identical() {
+    use crate::ops::diff::{compare_documents, DiffOptions};
+
+    let bytes = create_test_multipage_pdf(&["Linea 1 de prueba", "Segunda pagina"]);
+    let mut doc_a = PdfDocument::load(&bytes).expect("Failed to load PDF A");
+    let mut doc_b = PdfDocument::load(&bytes).expect("Failed to load PDF B");
+
+    let report = compare_documents(&mut doc_a, &mut doc_b, &DiffOptions::default())
+        .expect("Failed to compare");
+    assert!(report.is_identical);
+    assert_eq!(report.summary.base_page_count, 2);
+    assert_eq!(report.summary.target_page_count, 2);
+    assert_eq!(report.summary.text_additions, 0);
+    assert_eq!(report.summary.text_deletions, 0);
+    assert_eq!(report.summary.text_modifications, 0);
+    assert_eq!(report.summary.total_pages_with_changes, 0);
+}
+
+#[test]
+fn test_compare_documents_text_modifications() {
+    use crate::ops::diff::{compare_documents, DiffKind, DiffOptions};
+
+    let bytes_a = create_test_multipage_pdf(&["Contrato de Servicios 2024"]);
+    let bytes_b = create_test_multipage_pdf(&["Contrato de Servicios 2025"]);
+
+    let mut doc_a = PdfDocument::load(&bytes_a).expect("Failed to load PDF A");
+    let mut doc_b = PdfDocument::load(&bytes_b).expect("Failed to load PDF B");
+
+    let report = compare_documents(&mut doc_a, &mut doc_b, &DiffOptions::default())
+        .expect("Failed to compare");
+    assert!(!report.is_identical);
+    assert_eq!(report.summary.text_modifications, 1);
+    assert_eq!(report.summary.total_pages_with_changes, 1);
+
+    let page_diff = &report.pages[0];
+    assert_eq!(page_diff.kind, DiffKind::Modified);
+    assert_eq!(page_diff.text_diffs.len(), 1);
+    let item = &page_diff.text_diffs[0];
+    assert_eq!(item.kind, DiffKind::Modified);
+    assert_eq!(
+        item.base_text.as_deref(),
+        Some("Contrato de Servicios 2024")
+    );
+    assert_eq!(
+        item.target_text.as_deref(),
+        Some("Contrato de Servicios 2025")
+    );
+
+    // Check JSON serialization
+    let json = report.to_json();
+    assert!(json.contains("\"is_identical\":false"));
+    assert!(json.contains("\"text_modifications\":1"));
+    assert!(json.contains("Contrato de Servicios 2024"));
+    assert!(json.contains("Contrato de Servicios 2025"));
+}
+
+#[test]
+fn test_compare_documents_page_count_discrepancy() {
+    use crate::ops::diff::{compare_documents, DiffKind, DiffOptions};
+
+    let bytes_a = create_test_multipage_pdf(&["Unica pagina"]);
+    let bytes_b = create_test_multipage_pdf(&["Unica pagina", "Nueva pagina anadida"]);
+
+    let mut doc_a = PdfDocument::load(&bytes_a).expect("Failed to load PDF A");
+    let mut doc_b = PdfDocument::load(&bytes_b).expect("Failed to load PDF B");
+
+    let report = compare_documents(&mut doc_a, &mut doc_b, &DiffOptions::default())
+        .expect("Failed to compare");
+    assert!(!report.is_identical);
+    assert_eq!(report.summary.base_page_count, 1);
+    assert_eq!(report.summary.target_page_count, 2);
+    assert_eq!(report.summary.text_additions, 1);
+
+    assert_eq!(report.pages.len(), 2);
+    assert_eq!(report.pages[0].kind, DiffKind::Unchanged);
+    assert_eq!(report.pages[1].kind, DiffKind::Added);
+}
+
+#[test]
+fn test_compare_documents_metadata_diff() {
+    use crate::ops::diff::{compare_documents, DiffOptions};
+    use crate::ops::metadata::{update_metadata, DocumentMetadata};
+
+    let bytes_a = create_test_multipage_pdf(&["Texto"]);
+    let bytes_b = create_test_multipage_pdf(&["Texto"]);
+
+    let mut doc_a = PdfDocument::load(&bytes_a).expect("Failed to load PDF A");
+    let mut doc_b = PdfDocument::load(&bytes_b).expect("Failed to load PDF B");
+
+    let meta_b = DocumentMetadata {
+        title: Some("Titulo Modificado".to_string()),
+        author: Some("Autor Revision".to_string()),
+        ..Default::default()
+    };
+    update_metadata(&mut doc_b, &meta_b).expect("Failed to update metadata");
+
+    let report = compare_documents(&mut doc_a, &mut doc_b, &DiffOptions::default())
+        .expect("Failed to compare");
+    assert!(!report.is_identical);
+    assert!(report.summary.metadata_changes >= 1);
+    assert!(report.metadata_diffs.iter().any(|m| m.field == "title"));
+}

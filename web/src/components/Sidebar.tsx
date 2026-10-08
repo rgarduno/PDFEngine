@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AnnotationElement, AuditEventItem, DocumentMetadata, FormFieldElement, ImageElement, Paragraph } from '@/lib/types';
-import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl, getAuditEvents, getDocumentMetadata, updateDocumentMetadata } from '@/lib/api';
+import { AnnotationElement, AuditEventItem, CompareDocumentsResponse, DocumentMetadata, FormFieldElement, ImageElement, Paragraph, TextDiffItem } from '@/lib/types';
+import { downloadAuthorized, getImageBinaryUrl, optimizeDocument, getOptimizedExportUrl, getAuditEvents, getDocumentMetadata, updateDocumentMetadata, compareDocuments, uploadPdf } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
 import {
   ShieldCheck,
@@ -44,6 +44,9 @@ import {
   PenTool,
   History,
   Tag,
+  GitCompare,
+  AlertCircle,
+  Upload,
 } from 'lucide-react';
 import {
   AddPaginationPayload,
@@ -115,6 +118,8 @@ interface SidebarProps {
   onConvertPdfA?: (part: '1b' | '2b') => Promise<PdfAResponse>;
   onCreateFormField?: (payload: CreateFormFieldPayload) => Promise<void>;
   onDeleteFormField?: (fieldName: string) => Promise<void>;
+  onNavigatePage?: (page: number) => void;
+  onSetDiffHighlights?: (highlights: TextDiffItem[] | null) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -170,12 +175,72 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onConvertPdfA,
   onCreateFormField,
   onDeleteFormField,
+  onNavigatePage,
+  onSetDiffHighlights,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr' | 'audit' | 'metadata'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr' | 'audit' | 'metadata' | 'diff'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
   const [linkInputUrl, setLinkInputUrl] = useState<string>('https://');
+
+  // Diff Engine state
+  const [diffTargetDocId, setDiffTargetDocId] = useState<string>('');
+  const [diffReport, setDiffReport] = useState<CompareDocumentsResponse | null>(null);
+  const [isComparing, setIsComparing] = useState<boolean>(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffIgnoreCase, setDiffIgnoreCase] = useState<boolean>(false);
+  const [diffCompareImages, setDiffCompareImages] = useState<boolean>(true);
+  const [diffCompareMetadata, setDiffCompareMetadata] = useState<boolean>(true);
+
+  const handleRunComparison = async () => {
+    if (!documentId || !diffTargetDocId.trim()) return;
+    try {
+      setIsComparing(true);
+      setDiffError(null);
+      const res = await compareDocuments(documentId, diffTargetDocId.trim(), {
+        ignore_case: diffIgnoreCase,
+        compare_images: diffCompareImages,
+        compare_metadata: diffCompareMetadata,
+      });
+      setDiffReport(res);
+      const pageDiff = res.pages.find((p) => (p.page_number_target || p.page_number_base) === pageNumber);
+      if (pageDiff && pageDiff.text_diffs.length > 0) {
+        onSetDiffHighlights?.(pageDiff.text_diffs);
+      }
+    } catch (err: unknown) {
+      console.error('Failed to run comparison:', err);
+      setDiffError((err as Error).message || 'Error comparando documentos.');
+    } finally {
+      setIsComparing(false);
+    }
+  };
+
+  const handleUploadDiffTarget = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsComparing(true);
+      setDiffError(null);
+      const sessionRes = await uploadPdf(file);
+      setDiffTargetDocId(sessionRes.document_id);
+      const res = await compareDocuments(documentId, sessionRes.document_id, {
+        ignore_case: diffIgnoreCase,
+        compare_images: diffCompareImages,
+        compare_metadata: diffCompareMetadata,
+      });
+      setDiffReport(res);
+      const pageDiff = res.pages.find((p) => (p.page_number_target || p.page_number_base) === pageNumber);
+      if (pageDiff && pageDiff.text_diffs.length > 0) {
+        onSetDiffHighlights?.(pageDiff.text_diffs);
+      }
+    } catch (err: unknown) {
+      console.error('Failed to upload and compare target:', err);
+      setDiffError((err as Error).message || 'Error subiendo y comparando documento target.');
+    } finally {
+      setIsComparing(false);
+    }
+  };
 
   // Metadata state (/Info & XMP)
   const [metadata, setMetadata] = useState<DocumentMetadata>({});
@@ -688,6 +753,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <History size={10} />
             <span>Audit</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('diff')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'diff'
+                ? 'bg-purple-600 text-white font-semibold shadow-xs'
+                : 'text-purple-600 hover:text-purple-700 dark:hover:text-purple-400'
+            }`}
+            title="Comparador Semántico y Auditoría de Revisiones (Diff Engine)"
+          >
+            <GitCompare size={10} />
+            <span>Diff</span>
           </button>
         </div>
       </div>
@@ -3363,6 +3440,300 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </>
                   )}
                 </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'diff' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">
+                Motor de Comparación (Diff)
+              </span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400">
+                LCS Semantic
+              </span>
+            </div>
+
+            {/* Target Document Selector / Upload */}
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 space-y-2.5">
+              <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300 block">
+                Documento de Comparación (Target Revision)
+              </label>
+
+              <div className="space-y-1.5">
+                <input
+                  type="text"
+                  value={diffTargetDocId}
+                  onChange={(e) => setDiffTargetDocId(e.target.value)}
+                  placeholder="ID de documento target..."
+                  className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-purple-500 font-mono"
+                />
+
+                <div className="flex items-center gap-2">
+                  <label className="flex-1 py-1 px-2 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 text-[11px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors">
+                    <Upload size={12} />
+                    <span>Subir PDF para Comparar</span>
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      onChange={handleUploadDiffTarget}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Options */}
+              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700/60 space-y-1.5 text-[11px] text-neutral-600 dark:text-neutral-400">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={diffIgnoreCase}
+                    onChange={(e) => setDiffIgnoreCase(e.target.checked)}
+                    className="rounded text-purple-600 focus:ring-purple-500"
+                  />
+                  <span>Ignorar mayúsculas y minúsculas</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={diffCompareImages}
+                    onChange={(e) => setDiffCompareImages(e.target.checked)}
+                    className="rounded text-purple-600 focus:ring-purple-500"
+                  />
+                  <span>Comparar imágenes XObject</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={diffCompareMetadata}
+                    onChange={(e) => setDiffCompareMetadata(e.target.checked)}
+                    className="rounded text-purple-600 focus:ring-purple-500"
+                  />
+                  <span>Comparar metadatos (/Info y XMP)</span>
+                </label>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRunComparison}
+                disabled={isComparing || !diffTargetDocId}
+                className="w-full py-2 px-3 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isComparing ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" />
+                    <span>Comparando revisiones...</span>
+                  </>
+                ) : (
+                  <>
+                    <GitCompare size={13} />
+                    <span>Comparar Revisiones</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {diffError && (
+              <div className="p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-1.5">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                <span>{diffError}</span>
+              </div>
+            )}
+
+            {/* Results */}
+            {diffReport && (
+              <div className="space-y-3">
+                {/* Status banner */}
+                <div
+                  className={`p-3 rounded-lg border flex items-center justify-between text-xs font-medium ${
+                    diffReport.is_identical
+                      ? 'border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300'
+                      : 'border-purple-200 dark:border-purple-800/60 bg-purple-50 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {diffReport.is_identical ? (
+                      <CheckCircle2 size={16} className="text-emerald-500" />
+                    ) : (
+                      <GitCompare size={16} className="text-purple-500" />
+                    )}
+                    <span>
+                      {diffReport.is_identical
+                        ? 'Documentos Idénticos (Sin diferencias)'
+                        : `Diferencias Detectadas (${diffReport.summary.total_pages_with_changes} página(s))`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Counters grid */}
+                <div className="grid grid-cols-3 gap-1.5 text-center">
+                  <div className="p-2 rounded border border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/50 dark:bg-emerald-950/20">
+                    <div className="text-emerald-600 dark:text-emerald-400 font-bold text-sm">
+                      +{diffReport.summary.text_additions + diffReport.summary.image_additions}
+                    </div>
+                    <div className="text-[9px] uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                      Adiciones
+                    </div>
+                  </div>
+                  <div className="p-2 rounded border border-rose-200 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20">
+                    <div className="text-rose-600 dark:text-rose-400 font-bold text-sm">
+                      -{diffReport.summary.text_deletions + diffReport.summary.image_deletions}
+                    </div>
+                    <div className="text-[9px] uppercase tracking-wider text-rose-700 dark:text-rose-300">
+                      Eliminaciones
+                    </div>
+                  </div>
+                  <div className="p-2 rounded border border-amber-200 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/20">
+                    <div className="text-amber-600 dark:text-amber-400 font-bold text-sm">
+                      ✎{diffReport.summary.text_modifications + diffReport.summary.image_modifications}
+                    </div>
+                    <div className="text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                      Cambios
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metadata discrepancies */}
+                {diffReport.metadata_diffs.length > 0 && (
+                  <div className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 space-y-1.5 text-xs">
+                    <div className="font-semibold text-neutral-700 dark:text-neutral-300 text-[11px]">
+                      Metadatos Modificados ({diffReport.metadata_diffs.length})
+                    </div>
+                    {diffReport.metadata_diffs.map((md, idx) => (
+                      <div key={idx} className="p-1.5 rounded bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 text-[11px]">
+                        <div className="font-mono text-purple-600 font-semibold">{md.field}</div>
+                        <div className="text-rose-500 line-through text-[10px] truncate">
+                          Base: {md.base_value || '(vacío)'}
+                        </div>
+                        <div className="text-emerald-600 text-[10px] truncate">
+                          Target: {md.target_value || '(vacío)'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Per-page differences */}
+                <div className="space-y-2">
+                  <div className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider">
+                    Diferencias por Página
+                  </div>
+                  {diffReport.pages.map((pDiff, pIdx) => {
+                    const pNum = pDiff.page_number_target || pDiff.page_number_base || (pIdx + 1);
+                    const totalPageDiffs = pDiff.text_diffs.length + pDiff.image_diffs.length;
+
+                    return (
+                      <div
+                        key={pIdx}
+                        className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 overflow-hidden"
+                      >
+                        <div
+                          onClick={() => {
+                            onNavigatePage?.(pNum);
+                            onSetDiffHighlights?.(pDiff.text_diffs);
+                          }}
+                          className="p-2 bg-neutral-100/70 dark:bg-neutral-800 flex items-center justify-between text-xs font-medium cursor-pointer hover:bg-neutral-200/50 dark:hover:bg-neutral-700/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <FileText size={12} className="text-neutral-500" />
+                            <span>Página {pNum}</span>
+                            {pDiff.dimensions_changed && (
+                              <span className="text-[9px] px-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                Dimensiones cambiadas
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-neutral-500">
+                            {totalPageDiffs} cambio(s)
+                          </span>
+                        </div>
+
+                        <div className="p-2 space-y-1.5 text-xs">
+                          {pDiff.text_diffs.length === 0 && pDiff.image_diffs.length === 0 ? (
+                            <div className="text-[11px] text-neutral-400 italic">Sin cambios en esta página.</div>
+                          ) : (
+                            pDiff.text_diffs.map((td, tIdx) => (
+                              <div
+                                key={tIdx}
+                                onClick={() => {
+                                  onNavigatePage?.(pNum);
+                                  onSetDiffHighlights?.([td]);
+                                }}
+                                className={`p-2 rounded border text-left cursor-pointer transition-all ${
+                                  td.kind === 'added'
+                                    ? 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-900/40 dark:bg-emerald-950/20'
+                                    : td.kind === 'deleted'
+                                    ? 'border-rose-200 bg-rose-50/50 dark:border-rose-900/40 dark:bg-rose-950/20'
+                                    : 'border-amber-200 bg-amber-50/50 dark:border-amber-900/40 dark:bg-amber-950/20'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-1">
+                                  <span
+                                    className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                      td.kind === 'added'
+                                        ? 'bg-emerald-600 text-white'
+                                        : td.kind === 'deleted'
+                                        ? 'bg-rose-600 text-white'
+                                        : 'bg-amber-600 text-white'
+                                    }`}
+                                  >
+                                    {td.kind === 'added'
+                                      ? '+ Añadido'
+                                      : td.kind === 'deleted'
+                                      ? '- Eliminado'
+                                      : '✎ Modificado'}
+                                  </span>
+                                </div>
+
+                                {td.kind === 'modified' && (
+                                  <div className="space-y-1 text-[11px]">
+                                    <div className="text-rose-600 dark:text-rose-400 line-through">
+                                      {td.base_text}
+                                    </div>
+                                    <div className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                      {td.target_text}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 pt-1 border-t border-amber-200 dark:border-amber-800/40">
+                                      {td.word_diffs.map((wd, wIdx) => (
+                                        <span
+                                          key={wIdx}
+                                          className={`text-[9px] px-1 rounded ${
+                                            wd.kind === 'added'
+                                              ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 font-semibold'
+                                              : wd.kind === 'deleted'
+                                              ? 'bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-300 line-through'
+                                              : 'text-neutral-500'
+                                          }`}
+                                        >
+                                          {wd.text}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {td.kind === 'added' && (
+                                  <div className="text-emerald-700 dark:text-emerald-300 text-[11px] font-medium">
+                                    {td.target_text}
+                                  </div>
+                                )}
+
+                                {td.kind === 'deleted' && (
+                                  <div className="text-rose-700 dark:text-rose-300 text-[11px] line-through">
+                                    {td.base_text}
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

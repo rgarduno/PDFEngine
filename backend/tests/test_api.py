@@ -2855,6 +2855,80 @@ def test_document_metadata_get_and_update():
     assert reloaded_meta["subject"] == "Auditoría Interna"
 
 
+def test_compare_documents_api_endpoint():
+    """Validates the PDF comparison endpoint across identical and revised documents."""
+    # 1. Upload base document
+    _, res_a = _upload_minimal("base.pdf")
+    assert res_a.status_code == 200
+    doc_id_a = res_a.json()["document_id"]
+
+    # 2. Upload identical target document
+    _, res_b = _upload_minimal("target.pdf")
+    assert res_b.status_code == 200
+    doc_id_b = res_b.json()["document_id"]
+
+    # 3. Compare identical documents
+    comp_res = client.post(
+        f"/api/documents/{doc_id_a}/compare",
+        json={"target_doc_id": doc_id_b},
+    )
+    assert comp_res.status_code == 200
+    comp_data = comp_res.json()
+    assert comp_data["base_doc_id"] == doc_id_a
+    assert comp_data["target_doc_id"] == doc_id_b
+    assert comp_data["is_identical"] is True
+    assert comp_data["summary"]["text_modifications"] == 0
+    assert comp_data["summary"]["text_additions"] == 0
+    assert comp_data["summary"]["text_deletions"] == 0
+
+    # 4. Mutate paragraph on target document
+    scene_res = client.get(f"/api/documents/{doc_id_b}/pages/1/scenegraph")
+    assert scene_res.status_code == 200
+    paras = scene_res.json()["paragraphs"]
+    assert len(paras) > 0
+    target_para_id = paras[0]["id"]
+
+    edit_res = client.post(
+        f"/api/documents/{doc_id_b}/pages/1/edit/{target_para_id}",
+        json={"new_text": "Updated Contract Terms 2026\nAll clauses modified."},
+    )
+    assert edit_res.status_code == 200
+
+    # 5. Compare modified document against base
+    comp_mod_res = client.post(
+        f"/api/documents/{doc_id_a}/compare",
+        json={"target_doc_id": doc_id_b},
+    )
+    assert comp_mod_res.status_code == 200
+    mod_data = comp_mod_res.json()
+    assert mod_data["is_identical"] is False
+    assert mod_data["summary"]["text_modifications"] >= 1
+    assert mod_data["summary"]["total_pages_with_changes"] == 1
+
+    page1_diff = mod_data["pages"][0]
+    assert page1_diff["kind"] == "modified"
+    assert len(page1_diff["text_diffs"]) >= 1
+    diff_item = page1_diff["text_diffs"][0]
+    assert diff_item["kind"] == "modified"
+    assert diff_item["base_text"] is not None
+    assert diff_item["target_text"] is not None
+    assert len(diff_item["word_diffs"]) > 0
+
+    # 6. Verify audit event
+    audit_res = client.get("/api/audit")
+    assert audit_res.status_code == 200
+    events = audit_res.json()
+    assert any(e["action"] == "documents_compared" and e["document_id"] == doc_id_a for e in events)
+
+    # 7. Non-existent target document answers 404
+    bad_res = client.post(
+        f"/api/documents/{doc_id_a}/compare",
+        json={"target_doc_id": "non-existent-doc-id"},
+    )
+    assert bad_res.status_code == 404
+
+
+
 
 
 

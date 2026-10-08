@@ -112,6 +112,8 @@ from app.models import (
     DocumentMetadataModel,
     DocumentMetadataResponse,
     UpdateDocumentMetadataRequest,
+    CompareDocumentsRequest,
+    CompareDocumentsResponse,
 )
 
 app = FastAPI(
@@ -2665,6 +2667,40 @@ def update_document_metadata_endpoint(
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/compare",
+    response_model=CompareDocumentsResponse,
+)
+def compare_documents_endpoint(
+    doc_id: str,
+    request: CompareDocumentsRequest,
+):
+    """Compares the base document with a target document revision and generates a diff report."""
+    base_session = load_session(doc_id)
+    target_session = load_session(request.target_doc_id)
+    base_doc = base_session["doc"]
+    target_doc = target_session["doc"]
+    try:
+        report = base_doc.compare(
+            target_doc,
+            ignore_case=request.ignore_case,
+            similarity_threshold=request.similarity_threshold,
+            compare_images=request.compare_images,
+            compare_metadata=request.compare_metadata,
+        )
+        record_document_action("documents_compared", doc_id)
+        return CompareDocumentsResponse(
+            base_doc_id=doc_id,
+            target_doc_id=request.target_doc_id,
+            **report,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
 
 
 

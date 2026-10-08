@@ -696,3 +696,88 @@ class UpdateDocumentMetadataRequest(BaseModel):
     producer: Optional[str] = None
     creation_date: Optional[str] = None
     mod_date: Optional[str] = None
+
+
+class WordDiffModel(BaseModel):
+    """Token-level word diff within a modified text item."""
+    kind: str
+    text: str
+
+
+class TextDiffItemModel(BaseModel):
+    """Textual discrepancy between base and target."""
+    kind: str
+    base_text: Optional[str] = None
+    target_text: Optional[str] = None
+    base_bbox: Optional[List[float]] = None
+    target_bbox: Optional[List[float]] = None
+    word_diffs: List[WordDiffModel] = []
+
+
+class ImageDiffItemModel(BaseModel):
+    """Image discrepancy between base and target."""
+    kind: str
+    resource_name: str
+    base_bbox: Optional[List[float]] = None
+    target_bbox: Optional[List[float]] = None
+    base_dimensions: Optional[List[int]] = None
+    target_dimensions: Optional[List[int]] = None
+
+
+class PageDimensionsModel(BaseModel):
+    """Page boundary dimensions in points."""
+    width: float
+    height: float
+
+
+class PageDiffModel(BaseModel):
+    """Page-level comparison result."""
+    page_number_base: Optional[int] = None
+    page_number_target: Optional[int] = None
+    kind: str
+    base_dimensions: Optional[PageDimensionsModel] = None
+    target_dimensions: Optional[PageDimensionsModel] = None
+    dimensions_changed: bool = False
+    text_diffs: List[TextDiffItemModel] = []
+    image_diffs: List[ImageDiffItemModel] = []
+
+
+class MetadataDiffItemModel(BaseModel):
+    """Discrepancy in metadata fields."""
+    field: str
+    base_value: Optional[str] = None
+    target_value: Optional[str] = None
+
+
+class DiffSummaryModel(BaseModel):
+    """Quantitative summary of document differences."""
+    base_page_count: int
+    target_page_count: int
+    total_pages_with_changes: int
+    text_additions: int
+    text_deletions: int
+    text_modifications: int
+    image_additions: int
+    image_deletions: int
+    image_modifications: int
+    metadata_changes: int
+
+
+class CompareDocumentsRequest(BaseModel):
+    """Request payload to compare the base document with a target document revision."""
+    target_doc_id: str = Field(description="Document ID of the comparison target revision")
+    ignore_case: bool = Field(default=False, description="Whether to ignore character casing")
+    similarity_threshold: float = Field(default=0.35, description="Similarity score threshold for paragraph matching")
+    compare_images: bool = Field(default=True, description="Whether to detect image additions, deletions and modifications")
+    compare_metadata: bool = Field(default=True, description="Whether to compare document metadata fields")
+
+
+class CompareDocumentsResponse(BaseModel):
+    """Comprehensive comparison report between base and target document."""
+    base_doc_id: str
+    target_doc_id: str
+    is_identical: bool
+    summary: DiffSummaryModel
+    metadata_diffs: List[MetadataDiffItemModel] = []
+    pages: List[PageDiffModel] = []
+

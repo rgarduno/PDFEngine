@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AnnotationElement, BoundingBox, DetectedTableItem, DrawTool, FormFieldElement, ImageElement, Paragraph, TextAlignment } from '@/lib/types';
+import { AnnotationElement, BoundingBox, DetectedTableItem, DrawTool, FormFieldElement, ImageElement, Paragraph, TextAlignment, TextDiffItem } from '@/lib/types';
 import { fetchAuthorizedBuffer, getPageFonts, getFontBinaryUrl, getImageBinaryUrl, getExportUrl } from '@/lib/api';
 import { AuthorizedImage } from '@/components/AuthorizedImage';
 import { PdfPageRenderer } from '@/lib/pdfRenderer';
@@ -37,6 +37,7 @@ interface DualCanvasViewerProps {
   onCommitShape?: (kind: DrawTool, points: number[][]) => void;
   pdfBuffer?: ArrayBuffer | null;
   showDualCanvas?: boolean;
+  diffHighlights?: TextDiffItem[] | null;
 }
 
 // Standard US Letter dimensions in PDF Points (72 points/inch)
@@ -73,6 +74,7 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
   onCommitShape,
   pdfBuffer = null,
   showDualCanvas = true,
+  diffHighlights = null,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -763,6 +765,47 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
             </svg>
           </div>
         )}
+
+        {/* Layer 1.98: Semantic PDF Diff Highlights */}
+        {diffHighlights && diffHighlights.map((diff, dIdx) => {
+          const rawBbox = diff.target_bbox || diff.base_bbox;
+          if (!rawBbox) return null;
+          const bbox: BoundingBox = {
+            min_x: rawBbox[0],
+            min_y: rawBbox[1],
+            max_x: rawBbox[2],
+            max_y: rawBbox[3],
+            width: rawBbox[2] - rawBbox[0],
+            height: rawBbox[3] - rawBbox[1],
+          };
+          const { left, top, width, height } = pdfToScreenCoordinates(bbox);
+          const isAdded = diff.kind === 'added';
+          const isDeleted = diff.kind === 'deleted';
+          const isModified = diff.kind === 'modified';
+
+          const borderColor = isAdded ? 'border-emerald-500' : isDeleted ? 'border-rose-500' : 'border-amber-500';
+          const bgColor = isAdded ? 'bg-emerald-500/15' : isDeleted ? 'bg-rose-500/15' : 'bg-amber-500/15';
+          const badgeColor = isAdded ? 'bg-emerald-600' : isDeleted ? 'bg-rose-600' : 'bg-amber-600';
+          const label = isAdded ? '+ Añadido' : isDeleted ? '- Eliminado' : '✎ Modificado';
+
+          return (
+            <div
+              key={`diff-${dIdx}`}
+              style={{
+                left: `${left}px`,
+                top: `${top}px`,
+                width: `${Math.max(width, 24 * zoom)}px`,
+                height: `${Math.max(height, 14 * zoom)}px`,
+              }}
+              title={isModified ? `Original: ${diff.base_text || ''}\nNuevo: ${diff.target_text || ''}` : diff.target_text || diff.base_text || ''}
+              className={`absolute pointer-events-auto rounded-xs border-2 ${borderColor} ${bgColor} z-30 transition-all hover:ring-2 hover:ring-offset-1 hover:ring-amber-400`}
+            >
+              <div className={`absolute -top-5 left-0 flex items-center gap-1 rounded ${badgeColor} text-white px-1.5 py-0.5 text-[8px] font-mono shadow-xs select-none whitespace-nowrap`}>
+                <span>{label}</span>
+              </div>
+            </div>
+          );
+        })}
 
         {/* Layer 2: Interactive Paragraph Bounding Boxes & Text In-Place Editor */}
         {paragraphs.map((p) => {

@@ -557,3 +557,73 @@ export interface DocumentMetadataResponse {
   metadata: DocumentMetadata;
 }
 
+export type DiffKind = 'unchanged' | 'added' | 'deleted' | 'modified';
+
+export interface WordDiffItem {
+  kind: DiffKind;
+  text: string;
+}
+
+export interface TextDiffItem {
+  kind: DiffKind;
+  base_text?: string | null;
+  target_text?: string | null;
+  base_bbox?: [number, number, number, number] | null;
+  target_bbox?: [number, number, number, number] | null;
+  word_diffs: WordDiffItem[];
+}
+
+export interface ImageDiffItem {
+  kind: DiffKind;
+  resource_name: string;
+  base_bbox?: [number, number, number, number] | null;
+  target_bbox?: [number, number, number, number] | null;
+  base_dimensions?: [number, number] | null;
+  target_dimensions?: [number, number] | null;
+}
+
+export interface PageDimensions {
+  width: number;
+  height: number;
+}
+
+export interface PageDiff {
+  page_number_base?: number | null;
+  page_number_target?: number | null;
+  kind: DiffKind;
+  base_dimensions?: PageDimensions | null;
+  target_dimensions?: PageDimensions | null;
+  dimensions_changed: boolean;
+  text_diffs: TextDiffItem[];
+  image_diffs: ImageDiffItem[];
+}
+
+export interface MetadataDiffItem {
+  field: string;
+  base_value?: string | null;
+  target_value?: string | null;
+}
+
+export interface DiffSummary {
+  base_page_count: number;
+  target_page_count: number;
+  total_pages_with_changes: number;
+  text_additions: number;
+  text_deletions: number;
+  text_modifications: number;
+  image_additions: number;
+  image_deletions: number;
+  image_modifications: number;
+  metadata_changes: number;
+}
+
+export interface CompareDocumentsResponse {
+  base_doc_id: string;
+  target_doc_id: string;
+  is_identical: boolean;
+  summary: DiffSummary;
+  metadata_diffs: MetadataDiffItem[];
+  pages: PageDiff[];
+}
+
+

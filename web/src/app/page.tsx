@@ -89,6 +89,7 @@ import {
   OcrResponse,
   PdfAResponse,
   CreateFormFieldPayload,
+  TextDiffItem,
 } from '@/lib/types';
 
 export default function Home() {
@@ -113,6 +114,7 @@ export default function Home() {
   const [tables, setTables] = useState<DetectedTableItem[]>([]);
   const [selectedTableIdx, setSelectedTableIdx] = useState<number | null>(null);
   const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState<boolean>(false);
+  const [diffHighlights, setDiffHighlights] = useState<TextDiffItem[] | null>(null);
   const [showThumbnails, setShowThumbnails] = useState<boolean>(true);
   const [drawTool, setDrawTool] = useState<DrawTool | null>(null);
   const [strokeColor, setStrokeColor] = useState('#1d4ed8');
@@ -1313,6 +1315,7 @@ export default function Home() {
           onCommitShape={handleCommitShape}
           pdfBuffer={pdfBuffer}
           showDualCanvas={showDualCanvas}
+          diffHighlights={diffHighlights}
         />
 
         <Sidebar
@@ -1400,6 +1403,8 @@ export default function Home() {
           onConvertPdfA={handleConvertPdfA}
           onCreateFormField={handleCreateFormField}
           onDeleteFormField={handleDeleteFormField}
+          onNavigatePage={handleNavigatePage}
+          onSetDiffHighlights={setDiffHighlights}
         />
       </div>
 

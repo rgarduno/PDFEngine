@@ -4,6 +4,7 @@
 //! reordering, and deletion with topological reference graph preservation.
 
 pub mod cloner;
+pub mod diff;
 pub mod merge;
 pub mod metadata;
 pub mod optimize;
@@ -12,6 +13,10 @@ pub mod rotation;
 pub mod split;
 
 pub use cloner::ObjectCloner;
+pub use diff::{
+    compare_documents, compute_word_diffs, DiffKind, DiffOptions, DiffReport, DiffSummary,
+    ImageDiffItem, MetadataDiffItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
+};
 pub use merge::{merge_documents, merge_pdf_bytes};
 pub use metadata::{
     current_timestamps, extract_metadata, format_utc_timestamps, iso_to_pdf_date, pdf_date_to_iso,

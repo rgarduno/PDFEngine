@@ -332,7 +332,8 @@ pub fn extract_metadata(doc: &mut PdfDocument) -> PdfResult<DocumentMetadata> {
             info_meta.keywords = dict_string(&info_dict, "Keywords");
             info_meta.creator = dict_string(&info_dict, "Creator");
             info_meta.producer = dict_string(&info_dict, "Producer");
-            info_meta.creation_date = dict_string(&info_dict, "CreationDate").map(|d| pdf_date_to_iso(&d));
+            info_meta.creation_date =
+                dict_string(&info_dict, "CreationDate").map(|d| pdf_date_to_iso(&d));
             info_meta.mod_date = dict_string(&info_dict, "ModDate").map(|d| pdf_date_to_iso(&d));
         }
     }
@@ -427,7 +428,8 @@ fn build_xmp_packet(
              \x20   <pdfaid:part>{}</pdfaid:part>\n\
              \x20   <pdfaid:conformance>{}</pdfaid:conformance>\n\
              \x20 </rdf:Description>\n",
-            part, xml_escape(&conf)
+            part,
+            xml_escape(&conf)
         ));
     }
 
@@ -502,19 +504,28 @@ pub fn update_metadata(doc: &mut PdfDocument, meta: &DocumentMetadata) -> PdfRes
     set_field(&mut info_dict, "Keywords", meta.keywords.as_ref());
     set_field(&mut info_dict, "Creator", meta.creator.as_ref());
     set_field(&mut info_dict, "Producer", meta.producer.as_ref());
-    info_dict.insert("CreationDate", PdfString::literal(creation_pdf.into_bytes()));
+    info_dict.insert(
+        "CreationDate",
+        PdfString::literal(creation_pdf.into_bytes()),
+    );
     info_dict.insert("ModDate", PdfString::literal(mod_pdf.into_bytes()));
 
     doc.set_object(info_id, PdfObject::Dictionary(info_dict));
 
     // 3. Update /Root /Metadata stream (XMP)
     let catalog_id = doc.catalog_id().ok_or_else(|| {
-        PdfError::OperationError("Cannot synchronize metadata: Missing document Catalog".to_string())
+        PdfError::OperationError(
+            "Cannot synchronize metadata: Missing document Catalog".to_string(),
+        )
     })?;
 
     let mut cat_dict = match doc.get_object(catalog_id)? {
         PdfObject::Dictionary(d) => d,
-        _ => return Err(PdfError::OperationError("Catalog is not a dictionary".to_string())),
+        _ => {
+            return Err(PdfError::OperationError(
+                "Catalog is not a dictionary".to_string(),
+            ))
+        }
     };
 
     // Inspect existing XMP to preserve PDF/A conformance tags
@@ -603,12 +614,20 @@ mod tests {
         assert_eq!(extracted.keywords.as_deref(), Some("fiscal, hacienda, sat"));
         assert_eq!(extracted.creator.as_deref(), Some("PDFEngine Web Studio"));
         assert_eq!(extracted.producer.as_deref(), Some("PDFEngine Core 1.0"));
-        assert_eq!(extracted.creation_date.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(
+            extracted.creation_date.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
         assert_eq!(extracted.mod_date.as_deref(), Some("2026-10-08T12:00:00Z"));
 
         // Verify XMP stream was written to Catalog
         let catalog_id = doc.catalog_id().unwrap();
-        let cat_dict = doc.get_object(catalog_id).unwrap().as_dict().unwrap().clone();
+        let cat_dict = doc
+            .get_object(catalog_id)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone();
         let meta_id = cat_dict.get("Metadata").unwrap().as_reference().unwrap();
         let stream = match doc.get_object(meta_id).unwrap() {
             PdfObject::Stream(s) => s,
@@ -625,7 +644,12 @@ mod tests {
         let mut doc = PdfDocument::empty();
         // Manually install a PDF/A-1b packet
         let catalog_id = doc.catalog_id().unwrap();
-        let mut cat_dict = doc.get_object(catalog_id).unwrap().as_dict().unwrap().clone();
+        let mut cat_dict = doc
+            .get_object(catalog_id)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone();
         let init_xmp = b"<?xpacket begin=\"\xef\xbb\xbf\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
             <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n\
@@ -636,7 +660,10 @@ mod tests {
         stream_dict.insert("Type", PdfName::new("Metadata"));
         stream_dict.insert("Subtype", PdfName::new("XML"));
         let meta_id = doc.alloc_object_id();
-        doc.set_object(meta_id, PdfObject::Stream(PdfStream::new(stream_dict, init_xmp.to_vec())));
+        doc.set_object(
+            meta_id,
+            PdfObject::Stream(PdfStream::new(stream_dict, init_xmp.to_vec())),
+        );
         cat_dict.insert("Metadata", meta_id);
         doc.set_object(catalog_id, PdfObject::Dictionary(cat_dict));
 
@@ -668,7 +695,10 @@ mod tests {
         update_metadata(&mut doc, &meta).unwrap();
 
         let extracted = extract_metadata(&mut doc).unwrap();
-        assert_eq!(extracted.title.as_deref(), Some("Contrato de Español (Año 2026) 🚀"));
+        assert_eq!(
+            extracted.title.as_deref(),
+            Some("Contrato de Español (Año 2026) 🚀")
+        );
         assert_eq!(extracted.author.as_deref(), Some("José García & Peña"));
     }
 }
