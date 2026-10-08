@@ -41,6 +41,9 @@ import {
   addMarkup,
   addLink,
   addShape,
+  recognizeScans,
+  inspectPdfA,
+  convertPdfA,
   addStamp,
   deleteAnnotation,
   flattenAnnotations,
@@ -82,6 +85,8 @@ import {
   DetectedTableItem,
   PageOverviewItem,
   OptimizeResponse,
+  OcrResponse,
+  PdfAResponse,
   CreateFormFieldPayload,
 } from '@/lib/types';
 
@@ -1021,6 +1026,22 @@ export default function Home() {
     }
   };
 
+  const handleRecognizeScan = async (language: string): Promise<OcrResponse> => {
+    const res = await recognizeScans(session.document_id, language);
+    await handleNavigatePage(currentPage);
+    return res;
+  };
+
+  const handleCheckPdfA = async (part: '1b' | '2b'): Promise<PdfAResponse> => {
+    return inspectPdfA(session.document_id, part);
+  };
+
+  const handleConvertPdfA = async (part: '1b' | '2b'): Promise<PdfAResponse> => {
+    const res = await convertPdfA(session.document_id, part);
+    await handleNavigatePage(currentPage);
+    return res;
+  };
+
   // Rotate specific page handler
   const handleRotateSpecificPage = async (pageNum: number, degrees: number) => {
     try {
@@ -1347,6 +1368,9 @@ export default function Home() {
           onExportTable={handleExportTable}
           onDownloadTable={handleDownloadTable}
           onOptimizationComplete={handleOptimizationComplete}
+          onRecognizeScan={handleRecognizeScan}
+          onCheckPdfA={handleCheckPdfA}
+          onConvertPdfA={handleConvertPdfA}
           onCreateFormField={handleCreateFormField}
           onDeleteFormField={handleDeleteFormField}
         />

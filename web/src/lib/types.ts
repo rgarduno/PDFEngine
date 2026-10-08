@@ -457,6 +457,24 @@ export interface OptimizeResponse {
   message: string;
 }
 
+export interface OcrResponse {
+  success: boolean;
+  document_id: string;
+  pages_seen: number;
+  pages_recognized: number;
+  words_inserted: number;
+  message: string;
+}
+
+export interface PdfAResponse {
+  success: boolean;
+  document_id: string;
+  part: string;
+  conformance: string;
+  issues: string[];
+  message: string;
+}
+
 export interface CreateFormFieldPayload {
   name: string;
   field_type: FormFieldType;

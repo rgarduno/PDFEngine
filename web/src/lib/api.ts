@@ -37,6 +37,8 @@ import {
   DocumentOverviewResponse,
   OptimizeRequest,
   OptimizeResponse,
+  OcrResponse,
+  PdfAResponse,
   CreateFormFieldPayload,
   CreateFormFieldResponse,
   DeleteFormFieldResponse,
@@ -687,6 +689,50 @@ export async function addShape(
       /* The response body is not JSON. */
     }
     throw new Error(detail);
+  }
+  return await res.json();
+}
+
+async function rejectWithDetail(res: Response, fallback: string): Promise<never> {
+  let detail = fallback;
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === 'string') detail = body.detail;
+  } catch {
+    /* The response body is not JSON. */
+  }
+  throw new Error(detail);
+}
+
+export async function recognizeScans(docId: string, language: string): Promise<OcrResponse> {
+  const trimmed = language.trim();
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/ocr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(trimmed.length > 0 ? { language: trimmed } : {}),
+  });
+  if (!res.ok) {
+    await rejectWithDetail(res, 'Failed to add searchable text');
+  }
+  return await res.json();
+}
+
+export async function inspectPdfA(docId: string, part: '1b' | '2b'): Promise<PdfAResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pdfa?part=${part}`);
+  if (!res.ok) {
+    await rejectWithDetail(res, 'Failed to check archive structure');
+  }
+  return await res.json();
+}
+
+export async function convertPdfA(docId: string, part: '1b' | '2b'): Promise<PdfAResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/api/documents/${docId}/pdfa`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ part }),
+  });
+  if (!res.ok) {
+    await rejectWithDetail(res, 'Failed to archive document');
   }
   return await res.json();
 }

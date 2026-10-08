@@ -528,6 +528,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to start editing.
 
+The inspector tab **OCR** sends searchable text and a PDF/A-1b or PDF/A-2b check or conversion to the API on port 8000. Start that process with `PDFENGINE_CORS_ORIGINS=http://localhost:3000` and the same token as `NEXT_PUBLIC_PDFENGINE_API_KEY` in `web/.env.local`. Searchable text calls a local `tesseract` binary. An empty language uses `eng`. The answer is counts, the scan image stays, and recognition is not guaranteed. **Revisar** checks structure and does not rewrite the file. **Convertir** rewrites it. That check is not veraPDF, Acrobat preflight, or a legal acceptance.
+
 ---
 
 ## Project Roadmap

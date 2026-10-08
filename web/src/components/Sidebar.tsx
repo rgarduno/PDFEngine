@@ -55,6 +55,8 @@ import {
   DetectedTableItem,
   OptimizeRequest,
   OptimizeResponse,
+  OcrResponse,
+  PdfAResponse,
   CreateFormFieldPayload,
 } from '@/lib/types';
 
@@ -106,6 +108,9 @@ interface SidebarProps {
   onExportTable?: (tableIdx: number, format: 'csv' | 'json' | 'markdown' | 'html') => Promise<string>;
   onDownloadTable?: (tableIdx: number, format: string) => void;
   onOptimizationComplete?: (stats: OptimizeResponse) => void;
+  onRecognizeScan?: (language: string) => Promise<OcrResponse>;
+  onCheckPdfA?: (part: '1b' | '2b') => Promise<PdfAResponse>;
+  onConvertPdfA?: (part: '1b' | '2b') => Promise<PdfAResponse>;
   onCreateFormField?: (payload: CreateFormFieldPayload) => Promise<void>;
   onDeleteFormField?: (fieldName: string) => Promise<void>;
 }
@@ -158,10 +163,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onExportTable,
   onDownloadTable,
   onOptimizationComplete,
+  onRecognizeScan,
+  onCheckPdfA,
+  onConvertPdfA,
   onCreateFormField,
   onDeleteFormField,
 }) => {
-  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize'>('paragraphs');
+  const [activeTab, setActiveTab] = useState<'paragraphs' | 'images' | 'forms' | 'annots' | 'pages' | 'watermark' | 'redact' | 'security' | 'tables' | 'optimize' | 'ocr'>('paragraphs');
   const [tableExportFormat, setTableExportFormat] = useState<'csv' | 'json' | 'markdown' | 'html'>('csv');
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [isExportingTable, setIsExportingTable] = useState<boolean>(false);
@@ -183,6 +191,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [optimizeStats, setOptimizeStats] = useState<OptimizeResponse | null>(null);
   const [optimizeError, setOptimizeError] = useState<string | null>(null);
   const [copiedOptReport, setCopiedOptReport] = useState<boolean>(false);
+  const [ocrLanguage, setOcrLanguage] = useState<string>('');
+  const [ocrBusy, setOcrBusy] = useState<boolean>(false);
+  const [ocrResult, setOcrResult] = useState<OcrResponse | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [pdfaPart, setPdfaPart] = useState<'1b' | '2b'>('1b');
+  const [pdfaBusy, setPdfaBusy] = useState<'check' | 'convert' | null>(null);
+  const [pdfaResult, setPdfaResult] = useState<PdfAResponse | null>(null);
+  const [pdfaError, setPdfaError] = useState<string | null>(null);
 
   const [wmText, setWmText] = useState<string>('CONFIDENCIAL');
   const [wmFontSize, setWmFontSize] = useState<number>(52);
@@ -318,6 +334,65 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  const handleRecognizeScan = async () => {
+    const language = ocrLanguage.trim();
+    if (language.length > 16) {
+      setOcrError('El idioma admite como máximo 16 caracteres.');
+      return;
+    }
+    if (!onRecognizeScan) {
+      setOcrError('El estudio no tiene la acción de reconocimiento.');
+      return;
+    }
+    setOcrBusy(true);
+    setOcrError(null);
+    try {
+      const response = await onRecognizeScan(language);
+      setOcrResult(response);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al reconocer el escaneo';
+      setOcrError(msg);
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
+  const handleCheckPdfA = async () => {
+    if (!onCheckPdfA) {
+      setPdfaError('El estudio no tiene la revisión de archivo.');
+      return;
+    }
+    setPdfaBusy('check');
+    setPdfaError(null);
+    try {
+      const response = await onCheckPdfA(pdfaPart);
+      setPdfaResult(response);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al revisar el archivo';
+      setPdfaError(msg);
+    } finally {
+      setPdfaBusy(null);
+    }
+  };
+
+  const handleConvertPdfA = async () => {
+    if (!onConvertPdfA) {
+      setPdfaError('El estudio no tiene la conversión de archivo.');
+      return;
+    }
+    setPdfaBusy('convert');
+    setPdfaError(null);
+    try {
+      const response = await onConvertPdfA(pdfaPart);
+      setPdfaResult(response);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al convertir el archivo';
+      setPdfaError(msg);
+    } finally {
+      setPdfaBusy(null);
+    }
+  };
+
   const handleRunOptimization = async () => {
     setIsOptimizing(true);
     setOptimizeError(null);
@@ -379,7 +454,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-emerald-500 font-medium">AST Synced</span>
         </div>
 
-        {/* Tab Switcher: 5x2 Grid */}
+        {/* Tab Switcher */}
         <div className="mt-3 grid grid-cols-5 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg">
           <button
             onClick={() => setActiveTab('paragraphs')}
@@ -500,6 +575,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Zap size={10} />
             <span>Optim</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('ocr')}
+            className={`flex items-center justify-center gap-0.5 py-1 text-[8px] font-medium rounded-md transition-all ${
+              activeTab === 'ocr'
+                ? 'bg-sky-600 text-white font-semibold shadow-xs'
+                : 'text-sky-700 hover:text-sky-800 dark:hover:text-sky-300'
+            }`}
+            title="Texto buscable y PDF/A"
+          >
+            <FileCheck size={10} />
+            <span>OCR</span>
           </button>
         </div>
       </div>
@@ -2665,6 +2752,157 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span>Descargar PDF</span>
                   </button>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'ocr' && (
+          <div className="space-y-4">
+            <div>
+              <div className="text-[11px] font-semibold text-neutral-400 uppercase px-2 mb-1">
+                Texto buscable
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 px-2 leading-relaxed">
+                Usa tesseract en esta máquina. Un idioma vacío usa eng. La respuesta son conteos: la imagen del escaneo no cambia y el reconocimiento no está garantizado.
+              </p>
+            </div>
+
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-800 rounded-lg space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+                Idioma (traineddata)
+                <input
+                  type="text"
+                  value={ocrLanguage}
+                  maxLength={16}
+                  onChange={(e) => setOcrLanguage(e.target.value)}
+                  placeholder="eng"
+                  className="mt-1 w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs font-mono text-neutral-800 dark:text-neutral-100"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleRecognizeScan();
+                }}
+                disabled={ocrBusy || pdfaBusy !== null}
+                className="w-full py-2 px-3 bg-sky-600 hover:bg-sky-700 disabled:bg-neutral-300 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                {ocrBusy ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" />
+                    <span>Reconociendo…</span>
+                  </>
+                ) : (
+                  <>
+                    <FileCheck size={13} />
+                    <span>Reconocer</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {ocrError && (
+              <div className="p-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-lg text-rose-600 dark:text-rose-400 text-xs">
+                {ocrError}
+              </div>
+            )}
+
+            {ocrResult && (
+              <div className="p-3 bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200/80 dark:border-sky-800/60 rounded-xl space-y-2">
+                <p className="text-[11px] text-neutral-700 dark:text-neutral-200 leading-relaxed">
+                  {ocrResult.message}
+                </p>
+                <div className="text-[10px] space-y-1 text-neutral-600 dark:text-neutral-400">
+                  <div className="flex justify-between">
+                    <span>Páginas con imagen:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">{ocrResult.pages_seen}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Páginas reconocidas:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">{ocrResult.pages_recognized}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Palabras insertadas:</span>
+                    <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">{ocrResult.words_inserted}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div className="text-[11px] font-semibold text-neutral-400 uppercase px-2 mb-1">
+                PDF/A
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 px-2 leading-relaxed">
+                Partes 1b y 2b. Revisar no reescribe el archivo. Convertir sí. La comprobación es estructural: no es veraPDF, ni el preflight de Acrobat, ni una aceptación legal.
+              </p>
+            </div>
+
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-800 rounded-lg space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+                Parte
+                <select
+                  value={pdfaPart}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next === '1b' || next === '2b') setPdfaPart(next);
+                  }}
+                  className="mt-1 w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs text-neutral-800 dark:text-neutral-100"
+                >
+                  <option value="1b">PDF/A-1b</option>
+                  <option value="2b">PDF/A-2b</option>
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleCheckPdfA();
+                  }}
+                  disabled={ocrBusy || pdfaBusy !== null}
+                  className="py-2 px-2 bg-neutral-800 hover:bg-neutral-900 disabled:bg-neutral-300 text-white rounded-lg text-[10px] font-semibold transition-colors cursor-pointer"
+                >
+                  {pdfaBusy === 'check' ? 'Revisando…' : 'Revisar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleConvertPdfA();
+                  }}
+                  disabled={ocrBusy || pdfaBusy !== null}
+                  className="py-2 px-2 bg-sky-600 hover:bg-sky-700 disabled:bg-neutral-300 text-white rounded-lg text-[10px] font-semibold transition-colors cursor-pointer"
+                >
+                  {pdfaBusy === 'convert' ? 'Convirtiendo…' : 'Convertir'}
+                </button>
+              </div>
+            </div>
+
+            {pdfaError && (
+              <div className="p-2.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-lg text-rose-600 dark:text-rose-400 text-xs">
+                {pdfaError}
+              </div>
+            )}
+
+            {pdfaResult && (
+              <div className="p-3 bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200/80 dark:border-sky-800/60 rounded-xl space-y-2">
+                <p className="text-[11px] text-neutral-700 dark:text-neutral-200 leading-relaxed">
+                  {pdfaResult.message}
+                </p>
+                <div className="text-[10px] text-neutral-500">
+                  Parte {pdfaResult.part}, conformidad {pdfaResult.conformance}
+                </div>
+                {pdfaResult.issues.length === 0 ? (
+                  <p className="text-[10px] text-neutral-600 dark:text-neutral-400">
+                    Sin incidencias en la comprobación estructural.
+                  </p>
+                ) : (
+                  <ul className="max-h-48 overflow-y-auto space-y-1 text-[10px] text-neutral-700 dark:text-neutral-300 list-disc pl-4">
+                    {pdfaResult.issues.map((issue, index) => (
+                      <li key={`${index}-${issue}`}>{issue}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>
