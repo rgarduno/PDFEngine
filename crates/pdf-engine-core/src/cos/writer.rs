@@ -71,7 +71,12 @@ impl<W: Write> Writer<W> {
             PdfObject::Real(r) => {
                 // Format real number without unnecessary scientific notation
                 if r.is_finite() {
-                    self.write_all(format!("{:.5}", r).trim_end_matches('0').trim_end_matches('.').as_bytes())
+                    self.write_all(
+                        format!("{:.5}", r)
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .as_bytes(),
+                    )
                 } else {
                     self.write_all(b"0")
                 }
@@ -246,19 +251,19 @@ impl<W: Write> Writer<W> {
             let first = numbers[index];
             let mut last = first;
             index += 1;
-            while index < numbers.len()
-                && last < u32::MAX
-                && numbers[index] == last + 1
-            {
+            while index < numbers.len() && last < u32::MAX && numbers[index] == last + 1 {
                 last = numbers[index];
                 index += 1;
             }
-            let count = last.checked_sub(first).and_then(|span| span.checked_add(1)).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "cross-reference object number overflow",
-                )
-            })?;
+            let count = last
+                .checked_sub(first)
+                .and_then(|span| span.checked_add(1))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "cross-reference object number overflow",
+                    )
+                })?;
             subsections.push((first, count));
         }
 
@@ -314,8 +319,8 @@ impl<W: Write> Writer<W> {
         }
 
         // Compress the binary table using FlateDecode
-        let compressed_table = encode_flate(&raw_table, Compression::best())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let compressed_table =
+            encode_flate(&raw_table, Compression::best()).map_err(io::Error::other)?;
 
         // Construct XRef stream dictionary
         let mut stream_dict = trailer_dict.clone();
@@ -406,7 +411,11 @@ mod tests {
             .write_xref_stream(&entries, &PdfDictionary::new())
             .unwrap();
 
-        assert!(buffer.len() < 50_000, "sparse xref grew to {} bytes", buffer.len());
+        assert!(
+            buffer.len() < 50_000,
+            "sparse xref grew to {} bytes",
+            buffer.len()
+        );
         let text = String::from_utf8_lossy(&buffer);
         assert!(text.contains("[ 0 2 1000000 2 ]"));
         assert!(!text.contains("[ 0 1000002 ]"));

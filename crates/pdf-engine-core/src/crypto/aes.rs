@@ -43,8 +43,8 @@ const INV_SBOX: [u8; 256] = [
 ];
 
 const RCON: [u32; 11] = [
-    0x00000000, 0x01000000, 0x02000000, 0x04000000, 0x08000000, 0x10000000,
-    0x20000000, 0x40000000, 0x80000000, 0x1b000000, 0x36000000,
+    0x00000000, 0x01000000, 0x02000000, 0x04000000, 0x08000000, 0x10000000, 0x20000000, 0x40000000,
+    0x80000000, 0x1b000000, 0x36000000,
 ];
 
 #[inline(always)]
@@ -274,7 +274,7 @@ pub fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> PdfResult
     // PKCS#7 padding
     let pad_len = 16 - (plaintext.len() % 16);
     let mut buffer = Vec::with_capacity(16 + plaintext.len() + pad_len);
-    
+
     // Output starts with IV
     buffer.extend_from_slice(iv);
 
@@ -339,19 +339,25 @@ pub fn aes_cbc_decrypt(key: &[u8], ciphertext_with_iv: &[u8]) -> PdfResult<Vec<u
     if let Some(&pad_val) = plaintext.last() {
         let pad_len = pad_val as usize;
         if pad_len == 0 || pad_len > 16 || pad_len > plaintext.len() {
-            return Err(PdfError::CryptographyError("Invalid PKCS#7 padding".to_string()));
+            return Err(PdfError::CryptographyError(
+                "Invalid PKCS#7 padding".to_string(),
+            ));
         }
 
         for &b in &plaintext[plaintext.len() - pad_len..] {
             if b != pad_val {
-                return Err(PdfError::CryptographyError("Malformed PKCS#7 padding bytes".to_string()));
+                return Err(PdfError::CryptographyError(
+                    "Malformed PKCS#7 padding bytes".to_string(),
+                ));
             }
         }
 
         plaintext.truncate(plaintext.len() - pad_len);
         Ok(plaintext)
     } else {
-        Err(PdfError::CryptographyError("Empty decrypted plaintext".to_string()))
+        Err(PdfError::CryptographyError(
+            "Empty decrypted plaintext".to_string(),
+        ))
     }
 }
 
@@ -370,10 +376,7 @@ mod tests {
         block.copy_from_slice(&plaintext);
 
         cipher.encrypt_block(&mut block);
-        assert_eq!(
-            hex::encode(&block),
-            "3ad77bb40d7a3660a89ecaf32466ef97"
-        );
+        assert_eq!(hex::encode(&block), "3ad77bb40d7a3660a89ecaf32466ef97");
 
         cipher.decrypt_block(&mut block);
         assert_eq!(hex::encode(&block), "6bc1bee22e409f96e93d7e117393172a");
@@ -390,10 +393,7 @@ mod tests {
         block.copy_from_slice(&plaintext);
 
         cipher.encrypt_block(&mut block);
-        assert_eq!(
-            hex::encode(&block),
-            "f3eed1bdb5d2a03c064b5a7e3db181f8"
-        );
+        assert_eq!(hex::encode(&block), "f3eed1bdb5d2a03c064b5a7e3db181f8");
 
         cipher.decrypt_block(&mut block);
         assert_eq!(hex::encode(&block), "6bc1bee22e409f96e93d7e117393172a");

@@ -128,8 +128,9 @@ pub fn embed_cms_timestamp(doc: &mut PdfDocument, token: &[u8]) -> PdfResult<Ver
     let limits = doc.limits.clone();
     let mut file = doc.raw_data().to_vec();
     let (hex_start, hex_end) = contents_hex_span(&file, PKCS7_MARK)?;
-    let mut contents = decode_hex(std::str::from_utf8(&file[hex_start..hex_end]).map_err(|_| rejected())?)
-        .map_err(|_| rejected())?;
+    let mut contents =
+        decode_hex(std::str::from_utf8(&file[hex_start..hex_end]).map_err(|_| rejected())?)
+            .map_err(|_| rejected())?;
     let der_len = signed::der_len(&contents).ok_or_else(rejected)?;
     if contents[der_len..].iter().any(|byte| *byte != 0) {
         return Err(rejected());
@@ -362,10 +363,18 @@ mod tests {
         assert!(sig.contents_hex.len() > 64);
         let raw = doc.raw_data();
         assert!(raw.windows(PKCS7_MARK.len()).any(|w| w == PKCS7_MARK));
-        assert!(raw.windows(b"/Filter /Adobe.PPKLite".len()).any(|w| w == b"/Filter /Adobe.PPKLite"));
-        assert!(!raw.windows(b"/PDFEngine.sha256".len()).any(|w| w == b"/PDFEngine.sha256"));
-        assert!(!raw.windows(key_der.as_bytes().len()).any(|w| w == key_der.as_bytes()));
-        assert!(raw.windows(b"PKCS#7 detached".len()).any(|w| w == b"PKCS#7 detached"));
+        assert!(raw
+            .windows(b"/Filter /Adobe.PPKLite".len())
+            .any(|w| w == b"/Filter /Adobe.PPKLite"));
+        assert!(!raw
+            .windows(b"/PDFEngine.sha256".len())
+            .any(|w| w == b"/PDFEngine.sha256"));
+        assert!(!raw
+            .windows(key_der.as_bytes().len())
+            .any(|w| w == key_der.as_bytes()));
+        assert!(raw
+            .windows(b"PKCS#7 detached".len())
+            .any(|w| w == b"PKCS#7 detached"));
 
         let mut tampered = raw.to_vec();
         tampered[10] ^= 0x01;
@@ -383,7 +392,12 @@ mod tests {
         let cert_pem = cert.to_pem(LineEnding::LF).unwrap();
         let pkcs1 = key.to_pkcs1_pem(LineEnding::LF).unwrap();
         let mut doc = page();
-        let sig = sign_document_cms(&mut doc, &config(), &pem_material(&cert_pem, pkcs1.as_str(), None)).unwrap();
+        let sig = sign_document_cms(
+            &mut doc,
+            &config(),
+            &pem_material(&cert_pem, pkcs1.as_str(), None),
+        )
+        .unwrap();
         assert!(sig.byte_range_valid);
 
         let secret = p256::SecretKey::random(&mut OsRng);
@@ -391,7 +405,12 @@ mod tests {
         let (_signer, cert) = issue_p256(&secret, "CN=PDFEngineP256");
         let cert_pem = cert.to_pem(LineEnding::LF).unwrap();
         let mut doc = page();
-        let sig = sign_document_cms(&mut doc, &config(), &pem_material(&cert_pem, sec1.as_str(), None)).unwrap();
+        let sig = sign_document_cms(
+            &mut doc,
+            &config(),
+            &pem_material(&cert_pem, sec1.as_str(), None),
+        )
+        .unwrap();
         assert!(sig.byte_range_valid);
         assert_eq!(sig.sub_filter, "adbe.pkcs7.detached");
     }
@@ -402,10 +421,15 @@ mod tests {
         let cert = issue_rsa(&rsa_key(), "CN=Other", 4);
         let cert_pem = cert.to_pem(LineEnding::LF).unwrap();
         let key_pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
-        let err = must_fail(credentials::load(&pem_material(&cert_pem, key_pem.as_str(), None)));
+        let err = must_fail(credentials::load(&pem_material(
+            &cert_pem,
+            key_pem.as_str(),
+            None,
+        )));
         assert_eq!(err, "Private key does not match the certificate.");
 
-        let encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n";
+        let encrypted =
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n";
         let err = must_fail(credentials::load(&pem_material(&cert_pem, encrypted, None)));
         assert_eq!(err, "Certificate or private key could not be read.");
         assert!(!err.contains("AAAA"));
@@ -416,7 +440,13 @@ mod tests {
         let password = b"correct-horse";
         let key = rsa_key();
         let cert = issue_rsa(&key, "CN=PDFEngine", 5);
-        let p12 = build_pfx(&key, &cert, std::str::from_utf8(password).unwrap(), true, Some(2048));
+        let p12 = build_pfx(
+            &key,
+            &cert,
+            std::str::from_utf8(password).unwrap(),
+            true,
+            Some(2048),
+        );
         let mut doc = page();
         let sig = sign_document_cms(
             &mut doc,
@@ -540,7 +570,10 @@ mod tests {
         let sig = sign_document(&mut doc, &config()).unwrap();
         assert_eq!(sig.sub_filter, "PDFEngine.sha256");
         assert!(sig.byte_range_valid);
-        assert!(!doc.raw_data().windows(b"adbe.pkcs7.detached".len()).any(|w| w == b"adbe.pkcs7.detached"));
+        assert!(!doc
+            .raw_data()
+            .windows(b"adbe.pkcs7.detached".len())
+            .any(|w| w == b"adbe.pkcs7.detached"));
     }
 
     fn build_pfx(
@@ -559,7 +592,10 @@ mod tests {
         use pkcs12::mac_data::MacData;
         use pkcs12::pfx::{Pfx, Version};
         use pkcs12::safe_bag::SafeBag;
-        use pkcs12::{PKCS_12_CERT_BAG_OID, PKCS_12_KEY_BAG_OID, PKCS_12_PKCS8_KEY_BAG_OID, PKCS_12_X509_CERT_OID};
+        use pkcs12::{
+            PKCS_12_CERT_BAG_OID, PKCS_12_KEY_BAG_OID, PKCS_12_PKCS8_KEY_BAG_OID,
+            PKCS_12_X509_CERT_OID,
+        };
         use pkcs5::pbes2::Parameters;
         use spki::AlgorithmIdentifierOwned;
 
@@ -571,7 +607,9 @@ mod tests {
         let iv = [4u8; 16];
         if shroud {
             let params = Parameters::pbkdf2_sha256_aes256cbc(1000, &salt, &iv).unwrap();
-            ciphertext = params.encrypt(password.as_bytes(), key_der.as_bytes()).unwrap();
+            ciphertext = params
+                .encrypt(password.as_bytes(), key_der.as_bytes())
+                .unwrap();
             let scheme = pkcs5::EncryptionScheme::from(params);
             let epki = pkcs8::EncryptedPrivateKeyInfo {
                 encryption_algorithm: scheme,
@@ -607,7 +645,14 @@ mod tests {
         let outer = data_info(&auth_der);
         let mac_data = mac_iterations.map(|iterations| {
             let mac_salt = [3u8; 8];
-            let mac_key = derive_key_utf8::<Sha256>(password, &mac_salt, Pkcs12KeyType::Mac, iterations.max(1), 32).unwrap();
+            let mac_key = derive_key_utf8::<Sha256>(
+                password,
+                &mac_salt,
+                Pkcs12KeyType::Mac,
+                iterations.max(1),
+                32,
+            )
+            .unwrap();
             let mut mac = Hmac::<Sha256>::new_from_slice(&mac_key).unwrap();
             mac.update(&auth_der);
             let digest = mac.finalize().into_bytes();
@@ -619,7 +664,7 @@ mod tests {
                     },
                     digest: OctetString::new(digest.as_slice()).unwrap(),
                 },
-                mac_salt: OctetString::new(&mac_salt).unwrap(),
+                mac_salt: OctetString::new(mac_salt).unwrap(),
                 iterations,
             }
         });
@@ -628,7 +673,11 @@ mod tests {
             auth_safe: outer,
             mac_data,
         };
-        let _ = (ContextSpecificRef::<AnyRef>::from, TagMode::Explicit, TagNumber::N0);
+        let _ = (
+            ContextSpecificRef::<AnyRef>::from,
+            TagMode::Explicit,
+            TagNumber::N0,
+        );
         pfx.to_der().unwrap()
     }
 

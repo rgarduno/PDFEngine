@@ -1,7 +1,7 @@
 use pdf_engine_core::fonts::FontMetrics;
 use pdf_engine_core::stream::{
-    build_ast_from_operations, serialize_ast, ContentNode, ContentStreamTokenizer, GraphicsStateStack,
-    Matrix,
+    build_ast_from_operations, serialize_ast, ContentNode, ContentStreamTokenizer,
+    GraphicsStateStack, Matrix,
 };
 
 #[test]
@@ -19,7 +19,9 @@ Q
 
     // 1. Tokenize and build AST
     let mut tokenizer = ContentStreamTokenizer::new(raw_stream);
-    let ops = tokenizer.tokenize_all().expect("Failed to tokenize content stream");
+    let ops = tokenizer
+        .tokenize_all()
+        .expect("Failed to tokenize content stream");
     let ast = build_ast_from_operations(ops);
 
     assert_eq!(ast.nodes.len(), 1);

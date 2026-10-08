@@ -7,9 +7,9 @@
 //! 4. Deep graphics state nesting (`q ... Q` stack depth).
 //! 5. Complex typographic ligatures and Unicode edge cases.
 
-use std::io::Write;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use std::io::Write;
 
 use pdf_engine_core::cos::filters::decode_flate;
 use pdf_engine_core::cos::{ObjectId, PdfDocument};
@@ -32,11 +32,16 @@ fn test_zip_bomb_bounded_memory_guard() {
     encoder.write_all(&uncompressed_payload).unwrap();
     let compressed_bytes = encoder.finish().unwrap();
 
-    assert!(compressed_bytes.len() < 2048, "Zlib payload should be highly compressed");
+    assert!(
+        compressed_bytes.len() < 2048,
+        "Zlib payload should be highly compressed"
+    );
 
     // Configure strict security limits: max 64 KB decompressed
-    let mut limits = SecurityLimits::default();
-    limits.max_stream_decompressed_bytes = 64 * 1024; // 64 KiB ceiling
+    let limits = SecurityLimits {
+        max_stream_decompressed_bytes: 64 * 1024, // 64 KiB ceiling
+        ..SecurityLimits::default()
+    };
 
     // Attempting decompression must fail safely without OOM
     let result = decode_flate(&compressed_bytes, None, &limits);
@@ -52,9 +57,11 @@ fn test_zip_bomb_bounded_memory_guard() {
     }
 
     // Configure strict ratio limit: 10:1 ratio
-    let mut ratio_limits = SecurityLimits::default();
-    ratio_limits.max_stream_decompressed_bytes = 10 * 1024 * 1024; // High ceiling
-    ratio_limits.max_decompression_ratio = 10;                     // Strict 10:1 ratio
+    let ratio_limits = SecurityLimits {
+        max_stream_decompressed_bytes: 10 * 1024 * 1024, // High ceiling
+        max_decompression_ratio: 10,                     // Strict 10:1 ratio
+        ..SecurityLimits::default()
+    };
 
     let ratio_result = decode_flate(&compressed_bytes, None, &ratio_limits);
     match ratio_result {
@@ -65,7 +72,10 @@ fn test_zip_bomb_bounded_memory_guard() {
                 msg
             );
         }
-        other => panic!("Expected SecurityLimitExceeded ratio error, got: {:?}", other),
+        other => panic!(
+            "Expected SecurityLimitExceeded ratio error, got: {:?}",
+            other
+        ),
     }
 }
 
@@ -119,7 +129,9 @@ fn test_deep_graphics_state_stack_stress() {
     }
 
     let mut tokenizer = ContentStreamTokenizer::new(&stream_ops);
-    let ops = tokenizer.tokenize_all().expect("Tokenization should succeed");
+    let ops = tokenizer
+        .tokenize_all()
+        .expect("Tokenization should succeed");
     assert_eq!(ops.len(), 128 * 3);
 
     let mut state_stack = GraphicsStateStack::new();
@@ -131,7 +143,9 @@ fn test_deep_graphics_state_stack_stress() {
                 let _ = state_stack.pop();
             }
             "cm" => {
-                state_stack.current.concat_matrix(&Matrix::translation(10.0, 10.0));
+                state_stack
+                    .current
+                    .concat_matrix(&Matrix::translation(10.0, 10.0));
             }
             _ => {}
         }
@@ -181,7 +195,8 @@ fn test_multi_column_dense_document_layout_and_surgical_edits() {
         &target_5,
         "MODIFIED: Financial record #6 successfully audited and approved.",
         &metrics,
-    ).expect("Surgical edit on paragraph #5 must succeed");
+    )
+    .expect("Surgical edit on paragraph #5 must succeed");
 
     let target_15 = paragraphs[15].clone();
     SurgicalEditor::edit_paragraph(
@@ -189,15 +204,24 @@ fn test_multi_column_dense_document_layout_and_surgical_edits() {
         &target_15,
         "MODIFIED: Column 2 financial settlement finalized with legal verification.",
         &metrics,
-    ).expect("Surgical edit on paragraph #15 must succeed");
+    )
+    .expect("Surgical edit on paragraph #15 must succeed");
 
     // Reconstruct layout after mutations
     let re_reconstructor = LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
     let re_paragraphs = re_reconstructor.reconstruct().unwrap();
 
-    assert_eq!(re_paragraphs.len(), 20, "Block count must remain exactly 20");
-    assert!(re_paragraphs[5].text().contains("Financial record #6 successfully audited"));
-    assert!(re_paragraphs[15].text().contains("Column 2 financial settlement finalized"));
+    assert_eq!(
+        re_paragraphs.len(),
+        20,
+        "Block count must remain exactly 20"
+    );
+    assert!(re_paragraphs[5]
+        .text()
+        .contains("Financial record #6 successfully audited"));
+    assert!(re_paragraphs[15]
+        .text()
+        .contains("Column 2 financial settlement finalized"));
 
     // Verify untouched paragraphs are 100% identical
     assert_eq!(re_paragraphs[0].text(), paragraphs[0].text());
@@ -207,7 +231,9 @@ fn test_multi_column_dense_document_layout_and_surgical_edits() {
     // Serialize mutated AST and verify roundtrip integrity
     let out_bytes = serialize_ast(&ast);
     assert!(!out_bytes.is_empty());
-    assert!(out_bytes.windows(b"MODIFIED: Financial record #6".len()).any(|w| w == b"MODIFIED: Financial record #6"));
+    assert!(out_bytes
+        .windows(b"MODIFIED: Financial record #6".len())
+        .any(|w| w == b"MODIFIED: Financial record #6"));
 }
 
 #[test]
@@ -283,7 +309,10 @@ fn test_font_encoder_and_glyph_fallback_editing() {
         &metrics,
         &encoder,
     );
-    assert!(edit_result.is_ok(), "Surgical edit with FontEncoder must succeed");
+    assert!(
+        edit_result.is_ok(),
+        "Surgical edit with FontEncoder must succeed"
+    );
 
     let serialized = serialize_ast(&ast);
     assert!(!serialized.is_empty());

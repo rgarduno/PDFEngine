@@ -9,10 +9,10 @@ pub mod png;
 pub use jpeg::{parse_jpeg, JpegHeader};
 pub use png::{encode_png, parse_png_header, parse_png_pixels, PngHeader};
 
-use std::collections::HashMap;
-use std::io::Write;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use std::collections::HashMap;
+use std::io::Write;
 
 use crate::cos::filters::decode_stream;
 use crate::cos::object::{ObjectId, PdfDictionary, PdfName, PdfObject, PdfStream};
@@ -48,10 +48,7 @@ pub struct ImageInfo {
 }
 
 /// Extracts all Image XObjects on a specific page with their bounding boxes and transformation matrices.
-pub fn extract_page_images(
-    doc: &mut PdfDocument,
-    page_id: ObjectId,
-) -> PdfResult<Vec<ImageInfo>> {
+pub fn extract_page_images(doc: &mut PdfDocument, page_id: ObjectId) -> PdfResult<Vec<ImageInfo>> {
     let page_obj = doc.get_object(page_id)?;
     let page_dict = match page_obj {
         PdfObject::Dictionary(d) => d,
@@ -102,20 +99,35 @@ pub fn extract_page_images(
             _ => continue,
         };
 
-        let subtype = stream_dict.get("Subtype").and_then(|s| s.as_name()).unwrap_or("");
+        let subtype = stream_dict
+            .get("Subtype")
+            .and_then(|s| s.as_name())
+            .unwrap_or("");
         if subtype != "Image" {
             continue;
         }
 
-        let width = stream_dict.get("Width").and_then(|w| w.as_i64()).unwrap_or(0) as u32;
-        let height = stream_dict.get("Height").and_then(|h| h.as_i64()).unwrap_or(0) as u32;
+        let width = stream_dict
+            .get("Width")
+            .and_then(|w| w.as_i64())
+            .unwrap_or(0) as u32;
+        let height = stream_dict
+            .get("Height")
+            .and_then(|h| h.as_i64())
+            .unwrap_or(0) as u32;
         let color_space = stream_dict
             .get("ColorSpace")
             .and_then(|c| c.as_name())
             .unwrap_or("DeviceRGB")
             .to_string();
-        let bits = stream_dict.get("BitsPerComponent").and_then(|b| b.as_i64()).unwrap_or(8) as u32;
-        let filter = stream_dict.get("Filter").and_then(|f| f.as_name()).map(|f| f.to_string());
+        let bits = stream_dict
+            .get("BitsPerComponent")
+            .and_then(|b| b.as_i64())
+            .unwrap_or(8) as u32;
+        let filter = stream_dict
+            .get("Filter")
+            .and_then(|f| f.as_name())
+            .map(|f| f.to_string());
 
         let clean_name = key.as_str().trim_start_matches('/').to_string();
         declared_images.insert(
@@ -161,7 +173,9 @@ pub fn extract_page_images(
                     let d = op.operands[3].as_f64().unwrap_or(1.0);
                     let e = op.operands[4].as_f64().unwrap_or(0.0);
                     let f = op.operands[5].as_f64().unwrap_or(0.0);
-                    state_stack.current.concat_matrix(&Matrix::new(a, b, c, d, e, f));
+                    state_stack
+                        .current
+                        .concat_matrix(&Matrix::new(a, b, c, d, e, f));
                 }
             }
             "Do" => {
@@ -246,7 +260,11 @@ pub fn get_image_binary(
         }
     };
 
-    let filter = stream.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
+    let filter = stream
+        .dict
+        .get("Filter")
+        .and_then(|f| f.as_name())
+        .unwrap_or("");
 
     // If DCTDecode, stream content is already a valid JPEG file
     if filter == "DCTDecode" || filter == "DCT" {
@@ -257,9 +275,21 @@ pub fn get_image_binary(
     let decode_parms = stream.dict.get("DecodeParms").and_then(|p| p.as_dict());
     let decoded = decode_stream(filter, decode_parms, &stream.content, &doc.limits)?;
 
-    let width = stream.dict.get("Width").and_then(|w| w.as_i64()).unwrap_or(1) as u32;
-    let height = stream.dict.get("Height").and_then(|h| h.as_i64()).unwrap_or(1) as u32;
-    let color_space = stream.dict.get("ColorSpace").and_then(|c| c.as_name()).unwrap_or("DeviceRGB");
+    let width = stream
+        .dict
+        .get("Width")
+        .and_then(|w| w.as_i64())
+        .unwrap_or(1) as u32;
+    let height = stream
+        .dict
+        .get("Height")
+        .and_then(|h| h.as_i64())
+        .unwrap_or(1) as u32;
+    let color_space = stream
+        .dict
+        .get("ColorSpace")
+        .and_then(|c| c.as_name())
+        .unwrap_or("DeviceRGB");
     let is_rgb = color_space != "DeviceGray";
 
     let png_bytes = encode_png(width, height, &decoded, is_rgb)?;
@@ -283,14 +313,31 @@ pub fn replace_image_content(
         };
 
         let stream = doc.get_stream_mut(image_id)?;
-        stream.dict.insert("Type", PdfObject::Name(PdfName::new("XObject")));
-        stream.dict.insert("Subtype", PdfObject::Name(PdfName::new("Image")));
-        stream.dict.insert("Width", PdfObject::Integer(header.width as i64));
-        stream.dict.insert("Height", PdfObject::Integer(header.height as i64));
-        stream.dict.insert("ColorSpace", PdfObject::Name(PdfName::new(color_space)));
-        stream.dict.insert("BitsPerComponent", PdfObject::Integer(header.precision as i64));
-        stream.dict.insert("Filter", PdfObject::Name(PdfName::new("DCTDecode")));
-        stream.dict.insert("Length", PdfObject::Integer(new_bytes.len() as i64));
+        stream
+            .dict
+            .insert("Type", PdfObject::Name(PdfName::new("XObject")));
+        stream
+            .dict
+            .insert("Subtype", PdfObject::Name(PdfName::new("Image")));
+        stream
+            .dict
+            .insert("Width", PdfObject::Integer(header.width as i64));
+        stream
+            .dict
+            .insert("Height", PdfObject::Integer(header.height as i64));
+        stream
+            .dict
+            .insert("ColorSpace", PdfObject::Name(PdfName::new(color_space)));
+        stream.dict.insert(
+            "BitsPerComponent",
+            PdfObject::Integer(header.precision as i64),
+        );
+        stream
+            .dict
+            .insert("Filter", PdfObject::Name(PdfName::new("DCTDecode")));
+        stream
+            .dict
+            .insert("Length", PdfObject::Integer(new_bytes.len() as i64));
         stream.dict.remove("DecodeParms");
         stream.dict.remove("SMask");
         stream.content = new_bytes.to_vec();
@@ -320,28 +367,49 @@ pub fn replace_image_content(
                     filter: "FlateDecode".to_string(),
                     message: format!("Alpha zlib compression failed: {}", e),
                 })?;
-            Some(a_encoder.finish().map_err(|e| PdfError::DecompressionError {
-                filter: "FlateDecode".to_string(),
-                message: format!("Alpha zlib finish failed: {}", e),
-            })?)
+            Some(
+                a_encoder
+                    .finish()
+                    .map_err(|e| PdfError::DecompressionError {
+                        filter: "FlateDecode".to_string(),
+                        message: format!("Alpha zlib finish failed: {}", e),
+                    })?,
+            )
         } else {
             None
         };
 
         let stream = doc.get_stream_mut(image_id)?;
-        stream.dict.insert("Type", PdfObject::Name(PdfName::new("XObject")));
-        stream.dict.insert("Subtype", PdfObject::Name(PdfName::new("Image")));
-        stream.dict.insert("Width", PdfObject::Integer(width as i64));
-        stream.dict.insert("Height", PdfObject::Integer(height as i64));
-        stream.dict.insert("ColorSpace", PdfObject::Name(PdfName::new("DeviceRGB")));
-        stream.dict.insert("BitsPerComponent", PdfObject::Integer(8));
-        stream.dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
-        stream.dict.insert("Length", PdfObject::Integer(compressed_rgb.len() as i64));
+        stream
+            .dict
+            .insert("Type", PdfObject::Name(PdfName::new("XObject")));
+        stream
+            .dict
+            .insert("Subtype", PdfObject::Name(PdfName::new("Image")));
+        stream
+            .dict
+            .insert("Width", PdfObject::Integer(width as i64));
+        stream
+            .dict
+            .insert("Height", PdfObject::Integer(height as i64));
+        stream
+            .dict
+            .insert("ColorSpace", PdfObject::Name(PdfName::new("DeviceRGB")));
+        stream
+            .dict
+            .insert("BitsPerComponent", PdfObject::Integer(8));
+        stream
+            .dict
+            .insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
+        stream
+            .dict
+            .insert("Length", PdfObject::Integer(compressed_rgb.len() as i64));
         stream.dict.remove("DecodeParms");
         stream.content = compressed_rgb;
 
         if let Some(alpha_bytes) = compressed_alpha {
-            let smask_id = if let Some(r) = stream.dict.get("SMask").and_then(|s| s.as_reference()) {
+            let smask_id = if let Some(r) = stream.dict.get("SMask").and_then(|s| s.as_reference())
+            {
                 r
             } else {
                 doc.alloc_object_id()
@@ -357,10 +425,15 @@ pub fn replace_image_content(
             smask_dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
             smask_dict.insert("Length", PdfObject::Integer(alpha_bytes.len() as i64));
 
-            doc.set_object(smask_id, PdfObject::Stream(PdfStream::new(smask_dict, alpha_bytes)));
+            doc.set_object(
+                smask_id,
+                PdfObject::Stream(PdfStream::new(smask_dict, alpha_bytes)),
+            );
 
             let stream_mut = doc.get_stream_mut(image_id)?;
-            stream_mut.dict.insert("SMask", PdfObject::Reference(smask_id));
+            stream_mut
+                .dict
+                .insert("SMask", PdfObject::Reference(smask_id));
         } else {
             stream.dict.remove("SMask");
         }
@@ -396,7 +469,10 @@ pub fn create_image_xobject(
         stream_dict.insert("Width", PdfObject::Integer(header.width as i64));
         stream_dict.insert("Height", PdfObject::Integer(header.height as i64));
         stream_dict.insert("ColorSpace", PdfObject::Name(PdfName::new(color_space)));
-        stream_dict.insert("BitsPerComponent", PdfObject::Integer(header.precision as i64));
+        stream_dict.insert(
+            "BitsPerComponent",
+            PdfObject::Integer(header.precision as i64),
+        );
         stream_dict.insert("Filter", PdfObject::Name(PdfName::new("DCTDecode")));
         stream_dict.insert("Length", PdfObject::Integer(image_bytes.len() as i64));
 
@@ -429,10 +505,14 @@ pub fn create_image_xobject(
                     filter: "FlateDecode".to_string(),
                     message: format!("Alpha zlib compression failed: {}", e),
                 })?;
-            Some(a_encoder.finish().map_err(|e| PdfError::DecompressionError {
-                filter: "FlateDecode".to_string(),
-                message: format!("Alpha zlib finish failed: {}", e),
-            })?)
+            Some(
+                a_encoder
+                    .finish()
+                    .map_err(|e| PdfError::DecompressionError {
+                        filter: "FlateDecode".to_string(),
+                        message: format!("Alpha zlib finish failed: {}", e),
+                    })?,
+            )
         } else {
             None
         };
@@ -461,7 +541,10 @@ pub fn create_image_xobject(
             smask_dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
             smask_dict.insert("Length", PdfObject::Integer(alpha_bytes.len() as i64));
 
-            doc.set_object(smask_id, PdfObject::Stream(PdfStream::new(smask_dict, alpha_bytes)));
+            doc.set_object(
+                smask_id,
+                PdfObject::Stream(PdfStream::new(smask_dict, alpha_bytes)),
+            );
             stream_dict.insert("SMask", PdfObject::Reference(smask_id));
         }
 
@@ -557,21 +640,25 @@ mod tests {
         assert_eq!(img.bbox.height(), 100.0);
 
         // 2. Fetch binary (should synthesize PNG for browser viewing)
-        let (bin_bytes, mime) = get_image_binary(&mut doc, img.object_id).expect("Fetch image binary");
+        let (bin_bytes, mime) =
+            get_image_binary(&mut doc, img.object_id).expect("Fetch image binary");
         assert_eq!(mime, "image/png");
         assert!(bin_bytes.starts_with(&png::PNG_SIGNATURE));
 
         // 3. Replace image with a new PNG logo (4x2 pixels)
         let new_png_pixels = vec![
-            10, 20, 30,  40, 50, 60,  70, 80, 90,  100, 110, 120,
-            130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240,
+            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+            200, 210, 220, 230, 240,
         ];
-        let replacement_png = encode_png(4, 2, &new_png_pixels, true).expect("Encode replacement PNG");
+        let replacement_png =
+            encode_png(4, 2, &new_png_pixels, true).expect("Encode replacement PNG");
 
-        replace_image_content(&mut doc, img.object_id, &replacement_png).expect("Replace image in-place");
+        replace_image_content(&mut doc, img.object_id, &replacement_png)
+            .expect("Replace image in-place");
 
         // 4. Re-extract and verify updated metadata
-        let updated_images = extract_page_images(&mut doc, page_ids[0]).expect("Extract updated images");
+        let updated_images =
+            extract_page_images(&mut doc, page_ids[0]).expect("Extract updated images");
         assert_eq!(updated_images.len(), 1);
         assert_eq!(updated_images[0].width_px, 4);
         assert_eq!(updated_images[0].height_px, 2);
@@ -586,10 +673,10 @@ mod tests {
         assert!(saved_bytes.ends_with(b"%%EOF\n"));
 
         let mut roundtrip_doc = PdfDocument::load(&saved_bytes).expect("Reload modified PDF");
-        let re_images = extract_page_images(&mut roundtrip_doc, page_ids[0]).expect("Extract reloaded images");
+        let re_images =
+            extract_page_images(&mut roundtrip_doc, page_ids[0]).expect("Extract reloaded images");
         assert_eq!(re_images.len(), 1);
         assert_eq!(re_images[0].width_px, 4);
         assert_eq!(re_images[0].height_px, 2);
     }
 }
-

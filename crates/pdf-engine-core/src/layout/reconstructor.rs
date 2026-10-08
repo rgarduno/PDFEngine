@@ -3,7 +3,7 @@
 //! Evaluates page content ASTs, simulates graphics state matrices, extracts
 //! positioned glyphs, and hierarchically clusters them into Spans -> Lines -> ParagraphBlocks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::error::{PdfError, PdfResult};
 use crate::fonts::{FontMetrics, ResolvedFont, ToUnicodeMap};
@@ -20,6 +20,7 @@ pub struct LayoutReconstructor<'a> {
     ast: &'a ContentAst,
     fonts: BTreeMap<String, FontMetrics>,
     cmaps: BTreeMap<String, ToUnicodeMap>,
+    composite_fonts: HashSet<String>,
 }
 
 impl<'a> LayoutReconstructor<'a> {
@@ -29,6 +30,7 @@ impl<'a> LayoutReconstructor<'a> {
             ast,
             fonts: BTreeMap::new(),
             cmaps: BTreeMap::new(),
+            composite_fonts: HashSet::new(),
         }
     }
 
@@ -52,6 +54,9 @@ impl<'a> LayoutReconstructor<'a> {
             self.fonts.insert(name.clone(), face.metrics.clone());
             if let Some(cmap) = &face.cmap {
                 self.cmaps.insert(name.clone(), cmap.clone());
+            }
+            if face.is_composite {
+                self.composite_fonts.insert(name.clone());
             }
         }
         self
@@ -120,7 +125,8 @@ impl<'a> LayoutReconstructor<'a> {
             "Tf" => {
                 if op.operands.len() >= 2 {
                     if let Some(name) = op.operands[0].as_name() {
-                        state_stack.current.text_state.font_name = name.trim_start_matches('/').to_string();
+                        state_stack.current.text_state.font_name =
+                            name.trim_start_matches('/').to_string();
                     }
                     if let Some(size) = op.operands[1].as_f64() {
                         state_stack.current.text_state.font_size = size;
@@ -170,11 +176,15 @@ impl<'a> LayoutReconstructor<'a> {
                     let d = op.operands[3].as_f64().unwrap_or(1.0);
                     let e = op.operands[4].as_f64().unwrap_or(0.0);
                     let f = op.operands[5].as_f64().unwrap_or(0.0);
-                    state_stack.current.set_text_matrix(Matrix::new(a, b, c, d, e, f));
+                    state_stack
+                        .current
+                        .set_text_matrix(Matrix::new(a, b, c, d, e, f));
                 } else if op.operands.len() >= 2 {
                     let e = op.operands[0].as_f64().unwrap_or(0.0);
                     let f = op.operands[1].as_f64().unwrap_or(0.0);
-                    state_stack.current.set_text_matrix(Matrix::new(1.0, 0.0, 0.0, 1.0, e, f));
+                    state_stack
+                        .current
+                        .set_text_matrix(Matrix::new(1.0, 0.0, 0.0, 1.0, e, f));
                 }
             }
             "T*" => {
@@ -194,11 +204,17 @@ impl<'a> LayoutReconstructor<'a> {
                                 self.show_string_glyphs(&s.bytes, node_id, state_stack, glyphs);
                             }
                             crate::cos::PdfObject::Integer(k) => {
-                                let dx = FontMetrics::compute_kerning_displacement(*k as f64, &state_stack.current.text_state);
+                                let dx = FontMetrics::compute_kerning_displacement(
+                                    *k as f64,
+                                    &state_stack.current.text_state,
+                                );
                                 state_stack.current.advance_text(dx);
                             }
                             crate::cos::PdfObject::Real(k) => {
-                                let dx = FontMetrics::compute_kerning_displacement(*k, &state_stack.current.text_state);
+                                let dx = FontMetrics::compute_kerning_displacement(
+                                    *k,
+                                    &state_stack.current.text_state,
+                                );
                                 state_stack.current.advance_text(dx);
                             }
                             _ => {}
@@ -221,48 +237,102 @@ impl<'a> LayoutReconstructor<'a> {
         let font_name = state_stack.current.text_state.font_name.clone();
         let metrics = self.fonts.get(&font_name);
         let cmap = self.cmaps.get(&font_name);
+        let is_composite = self.composite_fonts.contains(&font_name);
 
-        for &b in bytes {
-            let char_code = b as u32;
+        if is_composite {
+            let mut i = 0;
+            while i < bytes.len() {
+                let b0 = bytes[i];
+                let b1 = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+                let char_code = ((b0 as u32) << 8) | (b1 as u32);
+                i += 2;
 
-            // Resolve Unicode
-            let unicode = if let Some(cmap) = cmap {
-                cmap.decode_code(char_code)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| (b as char).to_string())
-            } else {
-                (b as char).to_string()
-            };
+                // Resolve Unicode from /ToUnicode CMap
+                let unicode = if let Some(cmap) = cmap {
+                    cmap.decode_code(char_code)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            char::from_u32(char_code)
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "\u{FFFD}".to_string())
+                        })
+                } else {
+                    char::from_u32(char_code)
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "\u{FFFD}".to_string())
+                };
 
-            let font_size = state_stack.current.text_state.font_size;
-            let text_advance = if let Some(m) = metrics {
-                m.compute_char_advance(char_code, &state_stack.current.text_state)
-            } else {
-                (500.0 / 1000.0) * font_size
-            };
+                let font_size = state_stack.current.text_state.font_size;
+                let text_advance = if let Some(m) = metrics {
+                    m.compute_char_advance(char_code, &state_stack.current.text_state)
+                } else {
+                    font_size
+                };
 
-            // Origins are already in page space. The stored advance has to use
-            // that same unit, or a scaled text matrix looks like a gap between letters.
-            let tm = state_stack.current.text_matrix;
-            let ctm = state_stack.current.ctm;
-            let page_advance = text_advance * (tm.a * ctm.a + tm.b * ctm.c);
-            let trm = state_stack.current.text_rendering_matrix();
-            let rendered_size = trm.c.hypot(trm.d);
+                let tm = state_stack.current.text_matrix;
+                let ctm = state_stack.current.ctm;
+                let page_advance = text_advance * (tm.a * ctm.a + tm.b * ctm.c);
+                let trm = state_stack.current.text_rendering_matrix();
+                let rendered_size = trm.c.hypot(trm.d);
 
-            let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
-            let origin = Point::new(origin_x, origin_y);
-            glyphs.push(PositionedGlyph::new(
-                char_code,
-                unicode,
-                origin,
-                page_advance,
-                font_name.clone(),
-                font_size,
-                rendered_size,
-                node_id,
-            ));
+                let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
+                let origin = Point::new(origin_x, origin_y);
+                glyphs.push(PositionedGlyph::new(
+                    char_code,
+                    unicode,
+                    origin,
+                    page_advance,
+                    font_name.clone(),
+                    font_size,
+                    rendered_size,
+                    node_id,
+                ));
 
-            state_stack.current.advance_text(text_advance);
+                state_stack.current.advance_text(text_advance);
+            }
+        } else {
+            for &b in bytes {
+                let char_code = b as u32;
+
+                // Resolve Unicode
+                let unicode = if let Some(cmap) = cmap {
+                    cmap.decode_code(char_code)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| (b as char).to_string())
+                } else {
+                    (b as char).to_string()
+                };
+
+                let font_size = state_stack.current.text_state.font_size;
+                let text_advance = if let Some(m) = metrics {
+                    m.compute_char_advance(char_code, &state_stack.current.text_state)
+                } else {
+                    (500.0 / 1000.0) * font_size
+                };
+
+                // Origins are already in page space. The stored advance has to use
+                // that same unit, or a scaled text matrix looks like a gap between letters.
+                let tm = state_stack.current.text_matrix;
+                let ctm = state_stack.current.ctm;
+                let page_advance = text_advance * (tm.a * ctm.a + tm.b * ctm.c);
+                let trm = state_stack.current.text_rendering_matrix();
+                let rendered_size = trm.c.hypot(trm.d);
+
+                let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
+                let origin = Point::new(origin_x, origin_y);
+                glyphs.push(PositionedGlyph::new(
+                    char_code,
+                    unicode,
+                    origin,
+                    page_advance,
+                    font_name.clone(),
+                    font_size,
+                    rendered_size,
+                    node_id,
+                ));
+
+                state_stack.current.advance_text(text_advance);
+            }
         }
     }
 
@@ -285,9 +355,9 @@ impl<'a> LayoutReconstructor<'a> {
                 continue;
             }
 
-            let prev: &PositionedGlyph = cur_span_glyphs.last().ok_or_else(|| {
-                PdfError::LayoutError("glyph span has no preceding glyph".into())
-            })?;
+            let prev: &PositionedGlyph = cur_span_glyphs
+                .last()
+                .ok_or_else(|| PdfError::LayoutError("glyph span has no preceding glyph".into()))?;
             let same_baseline = (prev.origin.y - glyph.origin.y).abs() < 1.0;
             let same_font = prev.font_name == glyph.font_name;
             let same_size = (prev.font_size - glyph.font_size).abs() < 0.5;
@@ -316,7 +386,12 @@ impl<'a> LayoutReconstructor<'a> {
             b.baseline_y
                 .partial_cmp(&a.baseline_y)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.bbox.min_x.partial_cmp(&b.bbox.min_x).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    a.bbox
+                        .min_x
+                        .partial_cmp(&b.bbox.min_x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
 
         let mut cur_line_spans = Vec::new();
@@ -327,7 +402,9 @@ impl<'a> LayoutReconstructor<'a> {
             }
 
             let line_base = cur_line_spans[0].baseline_y;
-            let visual = cur_line_spans[0].rendered_size.max(cur_line_spans[0].font_size);
+            let visual = cur_line_spans[0]
+                .rendered_size
+                .max(cur_line_spans[0].font_size);
             let tolerance = visual * 0.2;
 
             if (span.baseline_y - line_base).abs() <= tolerance {
@@ -354,9 +431,9 @@ impl<'a> LayoutReconstructor<'a> {
                 continue;
             }
 
-            let prev_line: &TextLine = cur_para_lines.last().ok_or_else(|| {
-                PdfError::LayoutError("paragraph has no preceding line".into())
-            })?;
+            let prev_line: &TextLine = cur_para_lines
+                .last()
+                .ok_or_else(|| PdfError::LayoutError("paragraph has no preceding line".into()))?;
             let dy = prev_line.baseline_y - line.baseline_y;
             let avg_height = prev_line.bbox.height().max(line.bbox.height());
 
@@ -365,13 +442,18 @@ impl<'a> LayoutReconstructor<'a> {
             let is_consecutive = dy > 0.0 && dy <= avg_height * 2.2;
             let same_face = Self::same_typographic_face(prev_line, &line);
             let horizontal_overlap = prev_line.bbox.intersects(&line.bbox)
-                || (line.bbox.min_x <= prev_line.bbox.max_x && line.bbox.max_x >= prev_line.bbox.min_x);
+                || (line.bbox.min_x <= prev_line.bbox.max_x
+                    && line.bbox.max_x >= prev_line.bbox.min_x);
 
             if is_consecutive && same_face && (horizontal_overlap || cur_para_lines.len() < 2) {
                 cur_para_lines.push(line);
             } else {
                 let source_nodes = Self::collect_source_node_ids(&cur_para_lines);
-                if let Some(para) = ParagraphBlock::new(next_para_id, std::mem::take(&mut cur_para_lines), source_nodes) {
+                if let Some(para) = ParagraphBlock::new(
+                    next_para_id,
+                    std::mem::take(&mut cur_para_lines),
+                    source_nodes,
+                ) {
                     paragraphs.push(para);
                     next_para_id += 1;
                 }
@@ -419,7 +501,10 @@ mod tests {
     use crate::fonts::ToUnicodeMap;
     use crate::stream::{build_ast_from_operations, ContentStreamTokenizer};
 
-    fn reconstruct_with(stream: &str, builder: impl FnOnce(LayoutReconstructor) -> LayoutReconstructor) -> Vec<ParagraphBlock> {
+    fn reconstruct_with(
+        stream: &str,
+        builder: impl FnOnce(LayoutReconstructor) -> LayoutReconstructor,
+    ) -> Vec<ParagraphBlock> {
         let mut tokenizer = ContentStreamTokenizer::new(stream.as_bytes());
         let ops = tokenizer.tokenize_all().expect("content stream tokenizes");
         let ast = build_ast_from_operations(ops);
@@ -434,7 +519,9 @@ mod tests {
             "BT\n/F1 16 Tf\n50 700 Tm\n(Rafael) Tj\n0 -20 Td\n/F2 9 Tf\n(Skills) Tj\nET\n",
             |recon| {
                 let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
-                recon.with_font("F1", metrics.clone()).with_font("F2", metrics)
+                recon
+                    .with_font("F1", metrics.clone())
+                    .with_font("F2", metrics)
             },
         );
         assert_eq!(paragraphs.len(), 2);
@@ -453,7 +540,8 @@ mod tests {
         cmap.insert(0x24, "e".to_string());
         cmap.insert(0x25, "l".to_string());
         let metrics = FontMetrics::new(33, 37, vec![500.0; 5], 500.0);
-        let letters = std::str::from_utf8(&[0x21, 0x22, 0x23, 0x22, 0x24, 0x25]).expect("latin-1 bytes");
+        let letters =
+            std::str::from_utf8(&[0x21, 0x22, 0x23, 0x22, 0x24, 0x25]).expect("latin-1 bytes");
         let stream = format!(
             "0.2577778 0 0 0.24 -14.33629 601.92 cm\nBT\n67 0 0 67 806.4168 578 Tm\n/TT2 1 Tf\n({letters}) Tj\nET\n"
         );
@@ -484,5 +572,54 @@ mod tests {
         assert!((span.rendered_size - 12.0).abs() < 0.001);
         assert!((span.glyphs[0].advance - 6.0).abs() < 0.001);
         assert_eq!(span.glyphs[0].char_code, b'H' as u32);
+    }
+
+    #[test]
+    fn composite_type0_font_decodes_2byte_cids_correctly() {
+        let mut cmap = ToUnicodeMap::new();
+        cmap.insert(0x0001, "H".to_string());
+        cmap.insert(0x0002, "e".to_string());
+        cmap.insert(0x0003, "l".to_string());
+        cmap.insert(0x0004, "o".to_string());
+
+        let mut cid_widths = BTreeMap::new();
+        cid_widths.insert(1, 600.0);
+        cid_widths.insert(2, 550.0);
+        cid_widths.insert(3, 300.0);
+        cid_widths.insert(4, 550.0);
+        let metrics = FontMetrics::new_cid(cid_widths, 1000.0);
+
+        let face = ResolvedFont {
+            metrics,
+            cmap: Some(cmap),
+            family: "Calibri".to_string(),
+            weight: 400,
+            style: "normal".to_string(),
+            is_composite: true,
+        };
+
+        let mut faces = BTreeMap::new();
+        faces.insert("C0".to_string(), face);
+
+        // Raw hex <0001 0002 0003 0003 0004> represents CIDs [1, 2, 3, 3, 4] -> "Hello"
+        let stream = "BT\n/C0 12 Tf\n<00010002000300030004> Tj\nET\n";
+        let paragraphs = reconstruct_with(stream, |recon| recon.with_resolved(&faces));
+
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Hello");
+        let glyphs = &paragraphs[0].lines[0].spans[0].glyphs;
+        assert_eq!(glyphs.len(), 5);
+        assert_eq!(glyphs[0].char_code, 0x0001);
+        assert_eq!(glyphs[0].unicode, "H");
+        assert_eq!(glyphs[1].char_code, 0x0002);
+        assert_eq!(glyphs[1].unicode, "e");
+        assert_eq!(glyphs[2].char_code, 0x0003);
+        assert_eq!(glyphs[2].unicode, "l");
+        assert_eq!(glyphs[3].char_code, 0x0003);
+        assert_eq!(glyphs[3].unicode, "l");
+        assert_eq!(glyphs[4].char_code, 0x0004);
+        assert_eq!(glyphs[4].unicode, "o");
+        // Verify advance for 'H' (CID 1): 600/1000 * 12 = 7.2
+        assert!((glyphs[0].advance - 7.2).abs() < 1e-4);
     }
 }

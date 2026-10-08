@@ -689,7 +689,9 @@ pub(crate) fn find_marked_signature(file: &[u8], mark: &[u8]) -> Option<usize> {
 /// Replaces a short `/ByteRange [ 0 0 0 0 ]` with the fixed 10-digit zero form.
 pub(crate) fn widen_byte_range_placeholder(file: &mut Vec<u8>, mark: &[u8]) -> PdfResult<()> {
     let sub_at = find_marked_signature(file, mark).ok_or_else(|| {
-        PdfError::CryptographyError("Signature marker disappeared while reserving ByteRange.".into())
+        PdfError::CryptographyError(
+            "Signature marker disappeared while reserving ByteRange.".into(),
+        )
     })?;
     let obj_start = object_start(file, sub_at);
     let bracket = find_byte_range_bracket(file, obj_start, sub_at)?;

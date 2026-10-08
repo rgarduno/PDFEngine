@@ -104,13 +104,13 @@ impl StampType {
     /// Standard RGB color associated with the stamp type.
     pub fn default_color(&self) -> [f64; 3] {
         match self {
-            StampType::Approved => [0.15, 0.68, 0.38],      // Emerald Green
-            StampType::Confidential => [0.85, 0.15, 0.15],  // Red
-            StampType::Draft => [0.20, 0.45, 0.85],         // Royal Blue
-            StampType::Rejected => [0.75, 0.10, 0.10],      // Crimson Red
-            StampType::Final => [0.40, 0.20, 0.70],         // Purple
-            StampType::TopSecret => [0.90, 0.30, 0.10],     // Dark Orange
-            StampType::Custom(_) => [0.20, 0.45, 0.85],     // Blue
+            StampType::Approved => [0.15, 0.68, 0.38], // Emerald Green
+            StampType::Confidential => [0.85, 0.15, 0.15], // Red
+            StampType::Draft => [0.20, 0.45, 0.85],    // Royal Blue
+            StampType::Rejected => [0.75, 0.10, 0.10], // Crimson Red
+            StampType::Final => [0.40, 0.20, 0.70],    // Purple
+            StampType::TopSecret => [0.90, 0.30, 0.10], // Dark Orange
+            StampType::Custom(_) => [0.20, 0.45, 0.85], // Blue
         }
     }
 

@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, HashSet};
 
 pub use filters::{decode_stream, encode_flate, Compression};
 pub use lexer::{Lexer, Token};
-pub use object::{ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString, StringFormat};
+pub use object::{
+    ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString, StringFormat,
+};
 pub use parser::Parser;
 pub use writer::Writer;
 pub use xref::{XRefEntry, XRefTable};
@@ -167,7 +169,8 @@ impl PdfDocument {
             return Ok(obj.clone());
         }
 
-        self.limits.validate_depth(depth, id.number, id.generation)?;
+        self.limits
+            .validate_depth(depth, id.number, id.generation)?;
         if !stack.insert(id) {
             return Err(PdfError::CircularReference {
                 id: id.number,
@@ -243,11 +246,7 @@ impl PdfDocument {
     }
 
     /// Extracts an object from an `/ObjStm` compressed stream (ISO 32000-1 §7.5.7).
-    fn extract_from_obj_stm(
-        &self,
-        stream: &PdfStream,
-        target_index: u16,
-    ) -> PdfResult<PdfObject> {
+    fn extract_from_obj_stm(&self, stream: &PdfStream, target_index: u16) -> PdfResult<PdfObject> {
         let declared = stream
             .dict
             .get("N")
@@ -316,13 +315,17 @@ impl PdfDocument {
             offsets.push(offset);
         }
 
-        let rel_offset = offsets
-            .get(target_index as usize)
-            .copied()
-            .ok_or_else(|| PdfError::InvalidXRef {
-                offset: 0,
-                message: format!("ObjStm relative offset not found for index {}", target_index),
-            })?;
+        let rel_offset =
+            offsets
+                .get(target_index as usize)
+                .copied()
+                .ok_or_else(|| PdfError::InvalidXRef {
+                    offset: 0,
+                    message: format!(
+                        "ObjStm relative offset not found for index {}",
+                        target_index
+                    ),
+                })?;
 
         let obj_start = first_offset + rel_offset;
         let mut parser = Parser::at_offset(&decompressed, obj_start);
@@ -405,7 +408,8 @@ impl PdfDocument {
             pages.push(node_id);
         } else if type_name == "Pages" {
             if let Some(kids) = dict.get("Kids").and_then(|k| k.as_array()) {
-                let kid_refs: Vec<ObjectId> = kids.iter().filter_map(|k| k.as_reference()).collect();
+                let kid_refs: Vec<ObjectId> =
+                    kids.iter().filter_map(|k| k.as_reference()).collect();
                 for kid in kid_refs {
                     self.traverse_pages_node(kid, pages, visited, depth + 1)?;
                 }
@@ -430,7 +434,13 @@ impl PdfDocument {
     /// Allocates a new unused `ObjectId`.
     pub fn alloc_object_id(&self) -> ObjectId {
         let max_from_objects = self.objects.keys().map(|id| id.number).max().unwrap_or(0);
-        let max_from_xref = self.xref.entries.keys().map(|id| id.number).max().unwrap_or(0);
+        let max_from_xref = self
+            .xref
+            .entries
+            .keys()
+            .map(|id| id.number)
+            .max()
+            .unwrap_or(0);
         ObjectId::new(max_from_objects.max(max_from_xref) + 1)
     }
 
@@ -477,9 +487,11 @@ impl PdfDocument {
                     if let Some(r) = item.as_reference() {
                         let stream_obj = self.get_object(r)?;
                         if let PdfObject::Stream(s) = stream_obj {
-                            let filter = s.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
+                            let filter =
+                                s.dict.get("Filter").and_then(|f| f.as_name()).unwrap_or("");
                             let decode_parms = s.dict.get("DecodeParms").and_then(|p| p.as_dict());
-                            let chunk = decode_stream(filter, decode_parms, &s.content, &self.limits)?;
+                            let chunk =
+                                decode_stream(filter, decode_parms, &s.content, &self.limits)?;
                             combined.extend_from_slice(&chunk);
                             combined.push(b'\n');
                         }
@@ -607,7 +619,15 @@ impl PdfDocument {
         if trailer.get("Type").and_then(|obj| obj.as_name()) == Some("XRef") {
             trailer.remove("Type");
         }
-        for key in ["W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm"] {
+        for key in [
+            "W",
+            "Index",
+            "Filter",
+            "DecodeParms",
+            "Length",
+            "Prev",
+            "XRefStm",
+        ] {
             trailer.remove(key);
         }
         trailer.insert("Size", i64::from(highest) + 1);
@@ -692,7 +712,13 @@ mod tests {
 
         let mut loaded = PdfDocument::load(&bytes).expect("load");
         let saved = loaded.get_object(gap_id).expect("object 4");
-        assert_eq!(saved.as_dict().and_then(|d| d.get("Type")).and_then(|o| o.as_name()), Some("Font"));
+        assert_eq!(
+            saved
+                .as_dict()
+                .and_then(|d| d.get("Type"))
+                .and_then(|o| o.as_name()),
+            Some("Font")
+        );
         assert!(loaded.get_object(ObjectId::new(1)).is_ok());
     }
 }

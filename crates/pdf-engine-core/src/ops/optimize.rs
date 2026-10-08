@@ -10,9 +10,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::cos::filters::{encode_flate, Compression};
-use crate::cos::object::{
-    ObjectId, PdfDictionary, PdfName, PdfObject, PdfStream,
-};
+use crate::cos::object::{ObjectId, PdfDictionary, PdfName, PdfObject, PdfStream};
 use crate::cos::writer::Writer;
 use crate::cos::xref::XRefEntry;
 use crate::cos::PdfDocument;
@@ -216,7 +214,12 @@ pub fn collect_garbage(doc: &mut PdfDocument) -> PdfResult<usize> {
     if let Some(info_ref) = doc.xref.trailer.get("Info").and_then(|r| r.as_reference()) {
         worklist.push(info_ref);
     }
-    if let Some(enc_ref) = doc.xref.trailer.get("Encrypt").and_then(|r| r.as_reference()) {
+    if let Some(enc_ref) = doc
+        .xref
+        .trailer
+        .get("Encrypt")
+        .and_then(|r| r.as_reference())
+    {
         worklist.push(enc_ref);
     }
 
@@ -495,8 +498,7 @@ pub fn save_optimized_to_vec(
                         .map_err(|e| PdfError::OperationError(e.to_string()))?;
                     objects_bytes.push(b'\n');
 
-                    compressed_entries
-                        .insert(id, (container_id.number, idx as u16));
+                    compressed_entries.insert(id, (container_id.number, idx as u16));
                 }
             }
 
@@ -635,7 +637,10 @@ mod tests {
         let dead_obj_1 = doc.alloc_object_id();
         doc.set_object(dead_obj_1, PdfObject::Integer(99999));
         let dead_obj_2 = doc.alloc_object_id();
-        doc.set_object(dead_obj_2, PdfObject::String(crate::cos::PdfString::literal("Orphaned data")));
+        doc.set_object(
+            dead_obj_2,
+            PdfObject::String(crate::cos::PdfString::literal("Orphaned data")),
+        );
 
         // Add an active page with an uncompressed content stream
         let pages_id = doc.pages_id().unwrap();
@@ -643,13 +648,17 @@ mod tests {
         doc.set_object(page_id, PdfObject::Null);
         let content_id = doc.alloc_object_id();
 
-        let uncompressed_text = b"BT /F1 12 Tf 100 700 Td (Hello World Optimization) Tj ET\n".repeat(50);
+        let uncompressed_text =
+            b"BT /F1 12 Tf 100 700 Td (Hello World Optimization) Tj ET\n".repeat(50);
         let mut content_dict = PdfDictionary::new();
         content_dict.insert("Length", uncompressed_text.len() as i64);
-        doc.set_object(content_id, PdfObject::Stream(PdfStream {
-            dict: content_dict,
-            content: uncompressed_text.clone(),
-        }));
+        doc.set_object(
+            content_id,
+            PdfObject::Stream(PdfStream {
+                dict: content_dict,
+                content: uncompressed_text.clone(),
+            }),
+        );
 
         let mut page_dict = PdfDictionary::new();
         page_dict.insert("Type", PdfName::new("Page"));
@@ -750,25 +759,31 @@ mod tests {
 
         // Create stream 1
         let s1_id = doc.alloc_object_id();
-        doc.set_object(s1_id, PdfObject::Stream(PdfStream {
-            dict: {
-                let mut d = PdfDictionary::new();
-                d.insert("Length", stream_bytes.len() as i64);
-                d
-            },
-            content: stream_bytes.to_vec(),
-        }));
+        doc.set_object(
+            s1_id,
+            PdfObject::Stream(PdfStream {
+                dict: {
+                    let mut d = PdfDictionary::new();
+                    d.insert("Length", stream_bytes.len() as i64);
+                    d
+                },
+                content: stream_bytes.to_vec(),
+            }),
+        );
 
         // Create identical stream 2
         let s2_id = doc.alloc_object_id();
-        doc.set_object(s2_id, PdfObject::Stream(PdfStream {
-            dict: {
-                let mut d = PdfDictionary::new();
-                d.insert("Length", stream_bytes.len() as i64);
-                d
-            },
-            content: stream_bytes.to_vec(),
-        }));
+        doc.set_object(
+            s2_id,
+            PdfObject::Stream(PdfStream {
+                dict: {
+                    let mut d = PdfDictionary::new();
+                    d.insert("Length", stream_bytes.len() as i64);
+                    d
+                },
+                content: stream_bytes.to_vec(),
+            }),
+        );
 
         // Page 1 points to s1
         let p1_id = doc.alloc_object_id();
@@ -840,13 +855,7 @@ mod tests {
         let content = vec![b'A'; MAX_BEST_RECOMPRESS_BYTES + 1];
         let mut dict = PdfDictionary::new();
         dict.insert("Length", content.len() as i64);
-        doc.set_object(
-            id,
-            PdfObject::Stream(PdfStream {
-                dict,
-                content,
-            }),
-        );
+        doc.set_object(id, PdfObject::Stream(PdfStream { dict, content }));
 
         let (count, saved) = recompress_streams(&mut doc).unwrap();
         assert_eq!(count, 0);

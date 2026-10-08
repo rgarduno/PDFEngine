@@ -1,9 +1,7 @@
 use pdf_engine_core::editor::SurgicalEditor;
 use pdf_engine_core::fonts::FontMetrics;
 use pdf_engine_core::layout::LayoutReconstructor;
-use pdf_engine_core::stream::{
-    build_ast_from_operations, serialize_ast, ContentStreamTokenizer,
-};
+use pdf_engine_core::stream::{build_ast_from_operations, serialize_ast, ContentStreamTokenizer};
 
 #[test]
 fn test_surgical_paragraph_replacement_and_reflow() {

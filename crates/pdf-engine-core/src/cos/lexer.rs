@@ -202,7 +202,8 @@ impl<'a> Lexer<'a> {
             });
         }
 
-        self.parse_regular_token(token_bytes, start_offset).map(Some)
+        self.parse_regular_token(token_bytes, start_offset)
+            .map(Some)
     }
 
     /// Reads literal string according to ISO 32000-1 §7.3.4.2.
@@ -433,6 +434,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_lex_primitives() {
         let input = b"true false null 123 -456 3.14159 /Type /Font#20Name [ ] << >> R obj endobj";
         let mut lexer = Lexer::new(input);

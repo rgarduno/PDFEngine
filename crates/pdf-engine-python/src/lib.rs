@@ -2,20 +2,24 @@
 //!
 //! Exposes high-level document loading, page scene graph inspection,
 //! and in-place surgical paragraph editing to Python and FastAPI backends.
+#![allow(clippy::too_many_arguments)]
 
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 use std::fs;
 
-use pdf_engine_core::annots::{
-    AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType,
-};
+use pdf_engine_core::annots::{AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType};
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
 use pdf_engine_core::editor::SurgicalEditor;
 use pdf_engine_core::fonts::{resolve_page_fonts, FontMetrics, ResolvedFont};
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
+use pdf_engine_core::redact::{RedactionConfig, RedactionPattern, RedactionSummary};
+use pdf_engine_core::security::{
+    DigitalSignatureConfig, EncryptionOptions, EncryptionRevision, PdfPermissions,
+    VerifiedSignature,
+};
 use pdf_engine_core::stream::{
     build_ast_from_operations, serialize_ast, ContentAst, ContentStreamTokenizer, Operation,
 };
@@ -23,14 +27,6 @@ use pdf_engine_core::watermark::{
     ImageWatermarkConfig, PaginationConfig, PaginationPosition, TextWatermarkConfig,
     WatermarkPlacement,
 };
-use pdf_engine_core::redact::{
-    RedactionConfig, RedactionPattern, RedactionSummary,
-};
-use pdf_engine_core::security::{
-    DigitalSignatureConfig, EncryptionOptions, EncryptionRevision, PdfPermissions,
-    VerifiedSignature,
-};
-
 
 /// High-level representation of an extracted paragraph block in Python.
 #[pyclass(name = "Paragraph")]
@@ -72,7 +68,10 @@ impl PyParagraph {
     fn __repr__(&self) -> String {
         format!(
             "<Paragraph id={} lines={} align='{}' text='{:.30}...'>",
-            self.id, self.line_count, self.alignment, self.text.replace('\n', " ")
+            self.id,
+            self.line_count,
+            self.alignment,
+            self.text.replace('\n', " ")
         )
     }
 
@@ -117,8 +116,15 @@ impl PyImageInfo {
     fn __repr__(&self) -> String {
         format!(
             "<ImageInfo id={} name='{}' size={}x{} cs='{}' bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
-            self.id, self.name, self.width_px, self.height_px, self.color_space,
-            self.min_x, self.min_y, self.max_x, self.max_y
+            self.id,
+            self.name,
+            self.width_px,
+            self.height_px,
+            self.color_space,
+            self.min_x,
+            self.min_y,
+            self.max_x,
+            self.max_y
         )
     }
 
@@ -305,7 +311,10 @@ impl PyRedactionSummary {
     fn __repr__(&self) -> String {
         format!(
             "<RedactionSummary page={} purged_glyphs={} blackout_boxes={} pruned_annots={}>",
-            self.page_number, self.purged_glyphs_count, self.blackout_boxes_count, self.pruned_annotations_count
+            self.page_number,
+            self.purged_glyphs_count,
+            self.blackout_boxes_count,
+            self.pruned_annotations_count
         )
     }
 }
@@ -738,8 +747,7 @@ impl PyPage {
                     TextAlignment::Right => "right",
                     TextAlignment::Justified => "justified",
                 };
-                let (font_size, font_family, font_weight, font_style) =
-                    face_style(p, &self.faces);
+                let (font_size, font_family, font_weight, font_style) = face_style(p, &self.faces);
                 PyParagraph {
                     id: p.id,
                     text: p.text(),
@@ -840,7 +848,12 @@ fn face_style(
             face.weight,
             face.style.clone(),
         ),
-        None => (block.rendered_size(), String::new(), 400, "normal".to_string()),
+        None => (
+            block.rendered_size(),
+            String::new(),
+            400,
+            "normal".to_string(),
+        ),
     }
 }
 
@@ -928,16 +941,15 @@ impl PyPdfDocument {
         let mut reloaded_pages = Vec::with_capacity(page_ids.len());
 
         for (idx, &page_id) in page_ids.iter().enumerate() {
-            let faces = resolve_page_fonts(&mut self.doc, page_id).map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e))
-            })?;
+            let faces = resolve_page_fonts(&mut self.doc, page_id)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e)))?;
             if let Ok(page_obj) = self.doc.get_object(page_id) {
                 if let Some(dict) = page_obj.as_dict() {
                     let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
                     let (ast, paragraphs) = if let Some(c_ref) = contents_id {
                         if let Ok(PdfObject::Stream(_)) = self.doc.get_object(c_ref) {
-                            let ops = tokenize_decoded_page(&mut self.doc, page_id)
-                                .unwrap_or_default();
+                            let ops =
+                                tokenize_decoded_page(&mut self.doc, page_id).unwrap_or_default();
                             let ast = build_ast_from_operations(ops);
                             let paragraphs = reconstruct_layout(&ast, &metrics, &faces)?;
                             (ast, paragraphs)
@@ -997,14 +1009,15 @@ impl PyPdfDocument {
         &mut self,
         language: Option<String>,
     ) -> PyResult<(usize, usize, usize)> {
-        let report = pdf_engine_core::add_searchable_text_layer(
-            &mut self.doc,
-            language.as_deref(),
-        )
-        .map_err(|e| {
-            PyRuntimeError::new_err(format!("Failed to add searchable text: {}", e))
-        })?;
-        Ok((report.pages_seen, report.pages_recognized, report.words_inserted))
+        let report = pdf_engine_core::add_searchable_text_layer(&mut self.doc, language.as_deref())
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to add searchable text: {}", e))
+            })?;
+        Ok((
+            report.pages_seen,
+            report.pages_recognized,
+            report.words_inserted,
+        ))
     }
 
     /// Rewrites the document as PDF/A-1b (`1b`) or PDF/A-2b (`2b`).
@@ -1018,9 +1031,8 @@ impl PyPdfDocument {
                 "Failed to archive: Archive part was rejected.",
             ));
         };
-        pdf_engine_core::convert_to_pdfa(&mut self.doc, level).map_err(|error| {
-            PyRuntimeError::new_err(format!("Failed to archive: {error}"))
-        })
+        pdf_engine_core::convert_to_pdfa(&mut self.doc, level)
+            .map_err(|error| PyRuntimeError::new_err(format!("Failed to archive: {error}")))
     }
 
     /// Reports archive issues for `1b` or `2b` without rewriting the document.
@@ -1030,9 +1042,8 @@ impl PyPdfDocument {
                 "Failed to archive: Archive part was rejected.",
             ));
         };
-        pdf_engine_core::validate_pdfa(&mut self.doc, level).map_err(|error| {
-            PyRuntimeError::new_err(format!("Failed to archive: {error}"))
-        })
+        pdf_engine_core::validate_pdfa(&mut self.doc, level)
+            .map_err(|error| PyRuntimeError::new_err(format!("Failed to archive: {error}")))
     }
 
     /// Retrieves a mutable reference to a page by 1-based or 0-based index.
@@ -1131,7 +1142,9 @@ impl PyPdfDocument {
         if zero_idx < self.page_ids.len() {
             let page_id = self.page_ids[zero_idx];
             let images = pdf_engine_core::images::extract_page_images(&mut self.doc, page_id)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract page images: {}", e)))?;
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to extract page images: {}", e))
+                })?;
 
             Ok(images
                 .into_iter()
@@ -1162,7 +1175,9 @@ impl PyPdfDocument {
     pub fn get_image_binary(&mut self, object_id_num: u32) -> PyResult<(Vec<u8>, String)> {
         let obj_id = ObjectId::new(object_id_num);
         let (bytes, mime) = pdf_engine_core::images::get_image_binary(&mut self.doc, obj_id)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to retrieve image binary: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to retrieve image binary: {}", e))
+            })?;
         Ok((bytes, mime.to_string()))
     }
 
@@ -1175,8 +1190,10 @@ impl PyPdfDocument {
 
     /// Extracts all interactive AcroForm fields from the document.
     pub fn get_form_fields(&mut self) -> PyResult<Vec<PyFormField>> {
-        let fields = pdf_engine_core::forms::extract_document_forms(&mut self.doc)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract form fields: {}", e)))?;
+        let fields =
+            pdf_engine_core::forms::extract_document_forms(&mut self.doc).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to extract form fields: {}", e))
+            })?;
 
         Ok(fields
             .into_iter()
@@ -1357,14 +1374,16 @@ impl PyPdfDocument {
         &mut self,
         values: std::collections::HashMap<String, String>,
     ) -> PyResult<usize> {
-        pdf_engine_core::forms::fill_fields_batch(&mut self.doc, &values)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to batch fill form fields: {}", e)))
+        pdf_engine_core::forms::fill_fields_batch(&mut self.doc, &values).map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to batch fill form fields: {}", e))
+        })
     }
 
     /// Flattens all interactive form fields into permanent page content and strips widget annotations.
     pub fn flatten_forms(&mut self) -> PyResult<usize> {
-        let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e)))?;
+        let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc).map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e))
+        })?;
 
         self.reload_active_pages()?;
         Ok(count)
@@ -1378,15 +1397,19 @@ impl PyPdfDocument {
             page_index
         };
         let annots = pdf_engine_core::annots::extract_page_annotations(&mut self.doc, zero_idx)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract page annotations: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to extract page annotations: {}", e))
+            })?;
 
         Ok(annots.into_iter().map(PyAnnotation::from_core).collect())
     }
 
     /// Extracts all non-widget annotations across the entire document.
     pub fn get_all_annotations(&mut self) -> PyResult<Vec<PyAnnotation>> {
-        let annots = pdf_engine_core::annots::extract_all_annotations(&mut self.doc)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract document annotations: {}", e)))?;
+        let annots =
+            pdf_engine_core::annots::extract_all_annotations(&mut self.doc).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to extract document annotations: {}", e))
+            })?;
 
         Ok(annots.into_iter().map(PyAnnotation::from_core).collect())
     }
@@ -1485,13 +1508,9 @@ impl PyPdfDocument {
             target_page_index
         };
         let rect = Rect::new(min_x, min_y, max_x, max_y);
-        let annot_id = pdf_engine_core::annots::add_link_goto(
-            &mut self.doc,
-            zero_idx,
-            rect,
-            target_zero,
-        )
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to add goto link: {}", e)))?;
+        let annot_id =
+            pdf_engine_core::annots::add_link_goto(&mut self.doc, zero_idx, rect, target_zero)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to add goto link: {}", e)))?;
 
         Ok(annot_id.number)
     }
@@ -1631,7 +1650,9 @@ impl PyPdfDocument {
             }
         });
         let count = pdf_engine_core::annots::flatten_annotations(&mut self.doc, target_idx)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to flatten annotations: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to flatten annotations: {}", e))
+            })?;
 
         self.reload_active_pages()?;
         Ok(count)
@@ -1802,7 +1823,9 @@ impl PyPdfDocument {
         };
 
         let count = pdf_engine_core::watermark::apply_text_watermark(&mut self.doc, &config)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to apply text watermark: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to apply text watermark: {}", e))
+            })?;
 
         let updated = Self::from_doc(self.doc.clone())?;
         self.doc = updated.doc;
@@ -1842,7 +1865,9 @@ impl PyPdfDocument {
         };
 
         let count = pdf_engine_core::watermark::apply_image_watermark(&mut self.doc, &config)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to apply image watermark: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to apply image watermark: {}", e))
+            })?;
 
         let updated = Self::from_doc(self.doc.clone())?;
         self.doc = updated.doc;
@@ -2167,9 +2192,8 @@ impl PyPdfDocument {
 
     /// DER TimeStampReq over the signature value of the last valid PKCS#7.
     pub fn cms_timestamp_request(&self) -> PyResult<Vec<u8>> {
-        pdf_engine_core::security::cms_timestamp_request(&self.doc).map_err(|e| {
-            PyRuntimeError::new_err(format!("Timestamp request failed: {}", e))
-        })
+        pdf_engine_core::security::cms_timestamp_request(&self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Timestamp request failed: {}", e)))
     }
 
     /// Embeds an RFC 3161 token into the existing PKCS#7 contents hole.
@@ -2204,7 +2228,10 @@ impl PyPdfDocument {
     /// That check is not a trust decision.
     pub fn verify_signatures(&self) -> PyResult<Vec<PyVerifiedSignature>> {
         let sigs = pdf_engine_core::security::verify_document_signatures(&self.doc);
-        Ok(sigs.into_iter().map(PyVerifiedSignature::from_core).collect())
+        Ok(sigs
+            .into_iter()
+            .map(PyVerifiedSignature::from_core)
+            .collect())
     }
 
     /// Detects all structured tables on the specified page (1-indexed).
@@ -2318,10 +2345,9 @@ impl PyPdfDocument {
             deduplicate_streams,
             use_xref_stream: true,
         };
-        let (bytes, stats) = self
-            .doc
-            .save_optimized_to_vec(&options)
-            .map_err(|e| PyRuntimeError::new_err(format!("Optimization serialization failed: {}", e)))?;
+        let (bytes, stats) = self.doc.save_optimized_to_vec(&options).map_err(|e| {
+            PyRuntimeError::new_err(format!("Optimization serialization failed: {}", e))
+        })?;
         Ok((bytes, PyOptimizationStats::from_core(stats)))
     }
 }

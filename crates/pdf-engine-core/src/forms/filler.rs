@@ -1,11 +1,13 @@
 //! Logic for setting AcroForm field values and synthesizing appearance streams (/AP /N).
 
-use std::collections::HashMap;
-use crate::cos::object::{ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString};
+use crate::cos::object::{
+    ObjectId, PdfArray, PdfDictionary, PdfName, PdfObject, PdfStream, PdfString,
+};
 use crate::cos::PdfDocument;
 use crate::error::{PdfError, PdfResult};
 use crate::forms::reader::extract_document_forms;
 use crate::forms::types::{FormField, FormFieldType};
+use std::collections::HashMap;
 
 /// Fills a single form field by name or ID and updates its visual appearance stream.
 pub fn fill_field_value(
@@ -14,9 +16,9 @@ pub fn fill_field_value(
     new_value: &str,
 ) -> PdfResult<bool> {
     let fields = extract_document_forms(doc)?;
-    let target = fields.iter().find(|f| {
-        f.name == field_identifier || f.id.number.to_string() == field_identifier
-    });
+    let target = fields
+        .iter()
+        .find(|f| f.name == field_identifier || f.id.number.to_string() == field_identifier);
 
     let target_field = match target {
         Some(f) => f.clone(),
@@ -37,7 +39,10 @@ pub fn fill_fields_batch(
     let mut updated_count = 0;
 
     for field in fields {
-        if let Some(new_val) = values.get(&field.name).or_else(|| values.get(&field.id.number.to_string())) {
+        if let Some(new_val) = values
+            .get(&field.name)
+            .or_else(|| values.get(&field.id.number.to_string()))
+        {
             apply_field_value_and_appearance(doc, &field, new_val)?;
             updated_count += 1;
         }
@@ -54,7 +59,12 @@ fn apply_field_value_and_appearance(
 ) -> PdfResult<()> {
     let mut field_dict = match doc.get_object(field.id)? {
         PdfObject::Dictionary(d) => d,
-        _ => return Err(PdfError::ObjectNotFound { id: field.id.number, gen: field.id.generation }),
+        _ => {
+            return Err(PdfError::ObjectNotFound {
+                id: field.id.number,
+                gen: field.id.generation,
+            })
+        }
     };
 
     let width = field.rect.width().max(10.0);
@@ -63,7 +73,10 @@ fn apply_field_value_and_appearance(
     match field.field_type {
         FormFieldType::Text | FormFieldType::Choice => {
             // Update /V value
-            field_dict.insert("V", PdfObject::String(PdfString::literal(new_value.as_bytes().to_vec())));
+            field_dict.insert(
+                "V",
+                PdfObject::String(PdfString::literal(new_value.as_bytes().to_vec())),
+            );
 
             // Synthesize Form XObject for /AP /N (Normal Appearance)
             let font_size = (height * 0.65).clamp(8.0, 14.0);
@@ -75,12 +88,8 @@ fn apply_field_value_and_appearance(
                 font_size, baseline_y, escaped_text
             );
 
-            let appearance_stream_id = create_form_xobject_stream(
-                doc,
-                width,
-                height,
-                stream_ops.into_bytes(),
-            )?;
+            let appearance_stream_id =
+                create_form_xobject_stream(doc, width, height, stream_ops.into_bytes())?;
 
             // Link into /AP << /N {stream_ref} >>
             let mut ap_dict = PdfDictionary::new();
@@ -99,23 +108,20 @@ fn apply_field_value_and_appearance(
             field_dict.insert("AS", PdfObject::Name(PdfName::new(state_name)));
 
             // Synthesize appearance for checkbox
-            let stream_ops = if is_checked {
-                format!(
+            let stream_ops =
+                if is_checked {
+                    format!(
                     "q\n0.2 0.2 0.2 rg\n1.8 w\n{:.1} {:.1} m\n{:.1} {:.1} l\n{:.1} {:.1} l\nS\nQ\n",
                     width * 0.2, height * 0.5,
                     width * 0.45, height * 0.25,
                     width * 0.8, height * 0.75
                 )
-            } else {
-                "q\nQ\n".to_string()
-            };
+                } else {
+                    "q\nQ\n".to_string()
+                };
 
-            let appearance_stream_id = create_form_xobject_stream(
-                doc,
-                width,
-                height,
-                stream_ops.into_bytes(),
-            )?;
+            let appearance_stream_id =
+                create_form_xobject_stream(doc, width, height, stream_ops.into_bytes())?;
 
             let mut ap_dict = PdfDictionary::new();
             ap_dict.insert("N", PdfObject::Reference(appearance_stream_id));
@@ -133,7 +139,10 @@ fn apply_field_value_and_appearance(
         }
 
         _ => {
-            field_dict.insert("V", PdfObject::String(PdfString::literal(new_value.as_bytes().to_vec())));
+            field_dict.insert(
+                "V",
+                PdfObject::String(PdfString::literal(new_value.as_bytes().to_vec())),
+            );
         }
     }
 

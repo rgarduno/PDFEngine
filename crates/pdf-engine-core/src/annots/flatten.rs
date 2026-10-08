@@ -12,10 +12,7 @@ use crate::error::{PdfError, PdfResult};
 /// on a specific page (or across the entire document if page_index is None) into permanent vectors and text.
 ///
 /// Returns the number of annotations successfully flattened.
-pub fn flatten_annotations(
-    doc: &mut PdfDocument,
-    page_index: Option<usize>,
-) -> PdfResult<usize> {
+pub fn flatten_annotations(doc: &mut PdfDocument, page_index: Option<usize>) -> PdfResult<usize> {
     let pages = doc.get_pages()?;
     let targets: Vec<usize> = match page_index {
         Some(idx) => {
@@ -45,13 +42,15 @@ fn flatten_single_page_annotations(doc: &mut PdfDocument, page_index: usize) -> 
     let annots = extract_page_annotations(doc, page_index)?;
     let visual_annots: Vec<Annotation> = annots
         .into_iter()
-        .filter(|a| matches!(
-            a.subtype,
-            AnnotationSubtype::Highlight
-                | AnnotationSubtype::Underline
-                | AnnotationSubtype::StrikeOut
-                | AnnotationSubtype::Stamp
-        ))
+        .filter(|a| {
+            matches!(
+                a.subtype,
+                AnnotationSubtype::Highlight
+                    | AnnotationSubtype::Underline
+                    | AnnotationSubtype::StrikeOut
+                    | AnnotationSubtype::Stamp
+            )
+        })
         .collect();
 
     if visual_annots.is_empty() {
@@ -145,7 +144,9 @@ fn flatten_single_page_annotations(doc: &mut PdfDocument, page_index: usize) -> 
 
                 // Centered text
                 let char_count = text.len().max(1) as f64;
-                let font_size = (height * 0.45).min((width * 0.8) / (char_count * 0.65)).clamp(9.0, 24.0);
+                let font_size = (height * 0.45)
+                    .min((width * 0.8) / (char_count * 0.65))
+                    .clamp(9.0, 24.0);
                 let est_width = char_count * font_size * 0.58;
                 let text_x = rect.min_x + ((width - est_width) / 2.0).max(4.0);
                 let text_y = rect.min_y + (height - font_size) / 2.0 + (font_size * 0.22);

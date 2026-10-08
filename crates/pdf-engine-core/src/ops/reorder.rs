@@ -28,13 +28,23 @@ pub fn delete_pages(doc: &mut PdfDocument, page_indices: &[usize]) -> PdfResult<
     let kept_page_ids: Vec<ObjectId> = all_pages
         .iter()
         .enumerate()
-        .filter_map(|(i, &id)| if delete_set.contains(&i) { None } else { Some(id) })
+        .filter_map(|(i, &id)| {
+            if delete_set.contains(&i) {
+                None
+            } else {
+                Some(id)
+            }
+        })
         .collect();
 
     let pages_id = doc.pages_id()?;
     let mut pages_dict = match doc.get_object(pages_id)? {
         PdfObject::Dictionary(d) => d,
-        _ => return Err(PdfError::OperationError("Root /Pages is not a dictionary".to_string())),
+        _ => {
+            return Err(PdfError::OperationError(
+                "Root /Pages is not a dictionary".to_string(),
+            ))
+        }
     };
 
     let kids_array: PdfArray = kept_page_ids
@@ -85,7 +95,11 @@ pub fn reorder_pages(doc: &mut PdfDocument, new_order: &[usize]) -> PdfResult<()
     let pages_id = doc.pages_id()?;
     let mut pages_dict = match doc.get_object(pages_id)? {
         PdfObject::Dictionary(d) => d,
-        _ => return Err(PdfError::OperationError("Root /Pages is not a dictionary".to_string())),
+        _ => {
+            return Err(PdfError::OperationError(
+                "Root /Pages is not a dictionary".to_string(),
+            ))
+        }
     };
 
     let kids_array: PdfArray = reordered_ids

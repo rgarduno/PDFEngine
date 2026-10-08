@@ -5,10 +5,7 @@ use crate::error::{PdfError, PdfResult};
 use crate::ops::cloner::ObjectCloner;
 
 /// Extracts a specified subset of pages by index (0-based) into a new, self-contained `PdfDocument`.
-pub fn extract_pages(
-    doc: &mut PdfDocument,
-    page_indices: &[usize],
-) -> PdfResult<PdfDocument> {
+pub fn extract_pages(doc: &mut PdfDocument, page_indices: &[usize]) -> PdfResult<PdfDocument> {
     let all_pages = doc.get_pages()?;
     for &idx in page_indices {
         if idx >= all_pages.len() {
@@ -32,10 +29,7 @@ pub fn extract_pages(
 
 /// Splits a document into chunks of `chunk_size` pages each.
 /// For example, a 10-page document with chunk_size 1 produces 10 single-page documents.
-pub fn split_document(
-    doc: &mut PdfDocument,
-    chunk_size: usize,
-) -> PdfResult<Vec<PdfDocument>> {
+pub fn split_document(doc: &mut PdfDocument, chunk_size: usize) -> PdfResult<Vec<PdfDocument>> {
     if chunk_size == 0 {
         return Err(PdfError::OperationError(
             "chunk_size must be at least 1".to_string(),

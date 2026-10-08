@@ -43,7 +43,8 @@ pub fn export_to_csv(table: &DetectedTable) -> String {
 
 /// Escapes a CSV cell value according to RFC 4180 rules.
 fn escape_csv_cell(val: &str) -> String {
-    let needs_quotes = val.contains(',') || val.contains('"') || val.contains('\n') || val.contains('\r');
+    let needs_quotes =
+        val.contains(',') || val.contains('"') || val.contains('\n') || val.contains('\r');
     if needs_quotes {
         let escaped = val.replace('"', "\"\"");
         format!("\"{}\"", escaped)
@@ -106,7 +107,10 @@ pub fn export_to_json(table: &DetectedTable) -> String {
             "      \"bbox\": [{:.2}, {:.2}, {:.2}, {:.2}],\n",
             cell.bbox.min_x, cell.bbox.min_y, cell.bbox.max_x, cell.bbox.max_y
         ));
-        out.push_str(&format!("      \"text\": \"{}\"\n", escape_json_str(&cell.text)));
+        out.push_str(&format!(
+            "      \"text\": \"{}\"\n",
+            escape_json_str(&cell.text)
+        ));
         out.push_str("    }");
         if i + 1 < table.cells.len() {
             out.push(',');
@@ -149,7 +153,9 @@ pub fn export_to_markdown(table: &DetectedTable) -> String {
     let headers: Vec<String> = if !table.headers.is_empty() {
         table.headers.clone()
     } else {
-        (0..table.col_count).map(|i| format!("Col {}", i + 1)).collect()
+        (0..table.col_count)
+            .map(|i| format!("Col {}", i + 1))
+            .collect()
     };
 
     out.push('|');

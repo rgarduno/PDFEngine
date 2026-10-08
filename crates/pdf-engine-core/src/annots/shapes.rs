@@ -67,10 +67,13 @@ pub fn add_shape(
     style: ShapeStyle,
 ) -> PdfResult<ObjectId> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| PdfError::InvalidPageNumber {
-        page: page_index + 1,
-        total: pages.len(),
-    })?;
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
+            page: page_index + 1,
+            total: pages.len(),
+        })?;
     let style = checked_style(kind, style)?;
     let geometry = geometry_for(kind, points, &style)?;
 
@@ -78,7 +81,10 @@ pub fn add_shape(
     let annot_id = doc.alloc_object_id();
     let mut annot = PdfDictionary::new();
     annot.insert("Type", PdfObject::Name("Annot".into()));
-    annot.insert("Subtype", PdfObject::Name(kind.subtype().as_pdf_name().into()));
+    annot.insert(
+        "Subtype",
+        PdfObject::Name(kind.subtype().as_pdf_name().into()),
+    );
     annot.insert("Rect", rect_array(&geometry.rect));
     annot.insert("C", color_array(style.stroke));
     annot.insert("CA", PdfObject::Real(style.opacity));
@@ -146,27 +152,42 @@ fn geometry_for(kind: ShapeKind, points: &[[f64; 2]], style: &ShapeStyle) -> Pdf
     }
     match kind {
         ShapeKind::Ink if points.len() < 2 => {
-            return Err(PdfError::OperationError("A shape needs more points.".into()));
+            return Err(PdfError::OperationError(
+                "A shape needs more points.".into(),
+            ));
         }
         ShapeKind::Line if points.len() != 2 => {
-            return Err(PdfError::OperationError("A shape needs more points.".into()));
+            return Err(PdfError::OperationError(
+                "A shape needs more points.".into(),
+            ));
         }
         ShapeKind::Polygon if points.len() < 3 => {
-            return Err(PdfError::OperationError("A shape needs more points.".into()));
+            return Err(PdfError::OperationError(
+                "A shape needs more points.".into(),
+            ));
         }
         ShapeKind::Square | ShapeKind::Circle if points.len() != 2 => {
-            return Err(PdfError::OperationError("A shape needs more points.".into()));
+            return Err(PdfError::OperationError(
+                "A shape needs more points.".into(),
+            ));
         }
         _ => {}
     }
 
     let owned = points.to_vec();
-    let pad = style.line_width.max(1.0) + if style.line_ending.is_some() { 14.0 } else { 1.0 };
+    let pad = style.line_width.max(1.0)
+        + if style.line_ending.is_some() {
+            14.0
+        } else {
+            1.0
+        };
     let rect = match kind {
         ShapeKind::Square | ShapeKind::Circle => {
             let rect = Rect::new(points[0][0], points[0][1], points[1][0], points[1][1]);
             if rect.width() < 1.0 || rect.height() < 1.0 {
-                return Err(PdfError::OperationError("A shape needs more points.".into()));
+                return Err(PdfError::OperationError(
+                    "A shape needs more points.".into(),
+                ));
             }
             rect
         }
@@ -196,24 +217,43 @@ fn bounds(points: &[[f64; 2]], pad: f64) -> PdfResult<Rect> {
         max_y = max_y.max(point[1]);
     }
     if !min_x.is_finite() {
-        return Err(PdfError::OperationError("A shape needs more points.".into()));
+        return Err(PdfError::OperationError(
+            "A shape needs more points.".into(),
+        ));
     }
     let rect = Rect::new(min_x - pad, min_y - pad, max_x + pad, max_y + pad);
     if rect.width() < 1.0 {
-        return Ok(Rect::new(rect.min_x, rect.min_y, rect.min_x + 1.0, rect.max_y.max(rect.min_y + 1.0)));
+        return Ok(Rect::new(
+            rect.min_x,
+            rect.min_y,
+            rect.min_x + 1.0,
+            rect.max_y.max(rect.min_y + 1.0),
+        ));
     }
     if rect.height() < 1.0 {
-        return Ok(Rect::new(rect.min_x, rect.min_y, rect.max_x, rect.min_y + 1.0));
+        return Ok(Rect::new(
+            rect.min_x,
+            rect.min_y,
+            rect.max_x,
+            rect.min_y + 1.0,
+        ));
     }
     Ok(rect)
 }
 
 fn checked_style(kind: ShapeKind, mut style: ShapeStyle) -> PdfResult<ShapeStyle> {
-    if style.stroke.iter().any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel)) {
+    if style
+        .stroke
+        .iter()
+        .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
+    {
         return Err(PdfError::OperationError("Shape color was rejected.".into()));
     }
     if let Some(fill) = style.fill {
-        if fill.iter().any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel)) {
+        if fill
+            .iter()
+            .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
+        {
             return Err(PdfError::OperationError("Shape color was rejected.".into()));
         }
     }
@@ -235,7 +275,11 @@ fn checked_style(kind: ShapeKind, mut style: ShapeStyle) -> PdfResult<ShapeStyle
     Ok(style)
 }
 
-fn write_appearance(doc: &mut PdfDocument, geometry: &Geometry, style: &ShapeStyle) -> PdfResult<ObjectId> {
+fn write_appearance(
+    doc: &mut PdfDocument,
+    geometry: &Geometry,
+    style: &ShapeStyle,
+) -> PdfResult<ObjectId> {
     let width = geometry.rect.width();
     let height = geometry.rect.height();
     let mut ops = String::new();
@@ -270,7 +314,10 @@ fn write_appearance(doc: &mut PdfDocument, geometry: &Geometry, style: &ShapeSty
     }
     dict.insert("Resources", PdfObject::Dictionary(resources));
     let id = doc.alloc_object_id();
-    doc.set_object(id, PdfObject::Stream(PdfStream::new(dict, ops.into_bytes())));
+    doc.set_object(
+        id,
+        PdfObject::Stream(PdfStream::new(dict, ops.into_bytes())),
+    );
     Ok(id)
 }
 
@@ -294,7 +341,11 @@ fn appearance_path(geometry: &Geometry, style: &ShapeStyle) -> String {
     }
     let width = geometry.rect.width();
     let height = geometry.rect.height();
-    let paint = if geometry.fill.is_some() { "B\n" } else { "S\n" };
+    let paint = if geometry.fill.is_some() {
+        "B\n"
+    } else {
+        "S\n"
+    };
     match geometry.kind {
         ShapeKind::Square => {
             ops.push_str(&format!("0 0 {:.2} {:.2} re\n{}", width, height, paint));
@@ -325,11 +376,7 @@ fn appearance_path(geometry: &Geometry, style: &ShapeStyle) -> String {
     ops
 }
 
-fn stroke_polyline(
-    ops: &mut String,
-    geometry: &Geometry,
-    local: impl Fn([f64; 2]) -> (f64, f64),
-) {
+fn stroke_polyline(ops: &mut String, geometry: &Geometry, local: impl Fn([f64; 2]) -> (f64, f64)) {
     for (index, point) in geometry.points.iter().copied().enumerate() {
         let (x, y) = local(point);
         if index == 0 {

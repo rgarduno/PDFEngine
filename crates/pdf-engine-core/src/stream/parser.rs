@@ -184,7 +184,9 @@ impl<'a> ContentStreamTokenizer<'a> {
                 self.cursor = lex.cursor();
                 Ok(s)
             }
-            _ => Err(PdfError::ContentStreamError("Failed to parse literal string".to_string())),
+            _ => Err(PdfError::ContentStreamError(
+                "Failed to parse literal string".to_string(),
+            )),
         }
     }
 
@@ -195,7 +197,9 @@ impl<'a> ContentStreamTokenizer<'a> {
                 self.cursor = lex.cursor();
                 Ok(s)
             }
-            _ => Err(PdfError::ContentStreamError("Failed to parse hex string".to_string())),
+            _ => Err(PdfError::ContentStreamError(
+                "Failed to parse hex string".to_string(),
+            )),
         }
     }
 
@@ -241,7 +245,9 @@ impl<'a> ContentStreamTokenizer<'a> {
             if self.cursor >= self.data.len() {
                 break;
             }
-            if self.cursor + 1 < self.data.len() && &self.data[self.cursor..self.cursor + 2] == b">>" {
+            if self.cursor + 1 < self.data.len()
+                && &self.data[self.cursor..self.cursor + 2] == b">>"
+            {
                 self.cursor += 2;
                 break;
             }
@@ -275,7 +281,9 @@ impl<'a> ContentStreamTokenizer<'a> {
         if b == b'<' {
             if self.cursor + 1 < self.data.len() && self.data[self.cursor + 1] == b'<' {
                 self.cursor += 2;
-                return Ok(Some(PdfObject::Dictionary(self.read_inline_dict(depth + 1)?)));
+                return Ok(Some(PdfObject::Dictionary(
+                    self.read_inline_dict(depth + 1)?,
+                )));
             }
             return Ok(Some(PdfObject::String(self.read_hex_string()?)));
         }

@@ -1,5 +1,6 @@
 //! Unit and integration tests for table detection and multi-format export.
 
+use crate::cos::object::PdfObject;
 use crate::error::PdfError;
 use crate::layout::geometry::Rect;
 use crate::layout::line::TextLine;
@@ -12,7 +13,6 @@ use crate::tables::detector::{
 };
 use crate::tables::export::{export_to_csv, export_to_html, export_to_json, export_to_markdown};
 use crate::tables::types::{DetectedTable, TableCell};
-use crate::cos::object::PdfObject;
 
 #[test]
 fn test_csv_rfc4180_export() {
@@ -27,10 +27,20 @@ fn test_csv_rfc4180_export() {
             TableCell::new(0, 1, Rect::new(200.0, 650.0, 350.0, 700.0), "Description"),
             TableCell::new(0, 2, Rect::new(350.0, 650.0, 500.0, 700.0), "Price, USD"),
             TableCell::new(1, 0, Rect::new(50.0, 600.0, 200.0, 650.0), "Widget A"),
-            TableCell::new(1, 1, Rect::new(200.0, 600.0, 350.0, 650.0), "High \"performance\" model"),
+            TableCell::new(
+                1,
+                1,
+                Rect::new(200.0, 600.0, 350.0, 650.0),
+                "High \"performance\" model",
+            ),
             TableCell::new(1, 2, Rect::new(350.0, 600.0, 500.0, 650.0), "$100.00"),
             TableCell::new(2, 0, Rect::new(50.0, 550.0, 200.0, 600.0), "Widget B"),
-            TableCell::new(2, 1, Rect::new(200.0, 550.0, 350.0, 600.0), "Standard, reliable"),
+            TableCell::new(
+                2,
+                1,
+                Rect::new(200.0, 550.0, 350.0, 600.0),
+                "Standard, reliable",
+            ),
             TableCell::new(2, 2, Rect::new(350.0, 550.0, 500.0, 600.0), "$50.00"),
         ],
         headers: Vec::new(),

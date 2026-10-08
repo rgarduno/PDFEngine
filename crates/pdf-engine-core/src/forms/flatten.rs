@@ -3,12 +3,12 @@
 //! Converts interactive AcroForm fields into permanent page vector graphics and text,
 //! strips widget annotations, and removes interactive forms to prevent document tampering.
 
-use std::collections::HashMap;
 use crate::cos::object::{ObjectId, PdfDictionary, PdfName, PdfObject, PdfStream};
 use crate::cos::PdfDocument;
 use crate::error::{PdfError, PdfResult};
 use crate::forms::reader::extract_document_forms;
 use crate::forms::types::{FormField, FormFieldType};
+use std::collections::HashMap;
 
 /// Flattens all interactive form fields across the entire document into permanent vector graphics and text.
 ///
@@ -69,7 +69,10 @@ fn flatten_page_fields(
 
                     append_ops.push_str(&format!(
                         "q\nBT\n/F1 {:.1} Tf\n0 0 0 rg\n{:.2} {:.2} Td\n({}) Tj\nET\nQ\n",
-                        font_size, llx + 2.0, lly + baseline_y, escaped
+                        font_size,
+                        llx + 2.0,
+                        lly + baseline_y,
+                        escaped
                     ));
                 }
             }
@@ -78,9 +81,12 @@ fn flatten_page_fields(
                 if field.is_checked() {
                     append_ops.push_str(&format!(
                         "q\n0 0 0 RG\n1.8 w\n{:.2} {:.2} m\n{:.2} {:.2} l\n{:.2} {:.2} l\nS\nQ\n",
-                        llx + width * 0.2, lly + height * 0.5,
-                        llx + width * 0.45, lly + height * 0.25,
-                        llx + width * 0.8, lly + height * 0.75
+                        llx + width * 0.2,
+                        lly + height * 0.5,
+                        llx + width * 0.45,
+                        lly + height * 0.25,
+                        llx + width * 0.8,
+                        lly + height * 0.75
                     ));
                 }
             }
@@ -93,7 +99,10 @@ fn flatten_page_fields(
                     let radius = (width.min(height) * 0.25).max(2.0);
                     append_ops.push_str(&format!(
                         "q\n0 0 0 rg\n{:.2} {:.2} {:.2} {:.2} re\nf\nQ\n",
-                        center_x - radius, center_y - radius, radius * 2.0, radius * 2.0
+                        center_x - radius,
+                        center_y - radius,
+                        radius * 2.0,
+                        radius * 2.0
                     ));
                 }
             }
@@ -151,7 +160,10 @@ fn flatten_page_fields(
 }
 
 /// Ensures the page /Resources /Font dictionary contains /F1 (Helvetica).
-fn ensure_page_font_resource(doc: &mut PdfDocument, page_dict: &mut PdfDictionary) -> PdfResult<()> {
+fn ensure_page_font_resource(
+    doc: &mut PdfDocument,
+    page_dict: &mut PdfDictionary,
+) -> PdfResult<()> {
     let mut resources = match page_dict.get("Resources") {
         Some(PdfObject::Dictionary(d)) => d.clone(),
         Some(PdfObject::Reference(r)) => match doc.get_object(*r)? {

@@ -109,7 +109,11 @@ pub fn get_or_create_acroform(doc: &mut PdfDocument) -> PdfResult<ObjectId> {
             })?;
             let mut root_dict = match doc.get_object(root_id)? {
                 PdfObject::Dictionary(dict) => dict,
-                _ => return Err(PdfError::OperationError("Catalog root is not a dictionary".into())),
+                _ => {
+                    return Err(PdfError::OperationError(
+                        "Catalog root is not a dictionary".into(),
+                    ))
+                }
             };
             root_dict.insert("AcroForm", PdfObject::Reference(new_id));
             doc.set_object(root_id, PdfObject::Dictionary(root_dict));
@@ -155,7 +159,11 @@ pub fn get_or_create_acroform(doc: &mut PdfDocument) -> PdfResult<ObjectId> {
     })?;
     let mut root_dict = match doc.get_object(root_id)? {
         PdfObject::Dictionary(dict) => dict,
-        _ => return Err(PdfError::OperationError("Catalog root is not a dictionary".into())),
+        _ => {
+            return Err(PdfError::OperationError(
+                "Catalog root is not a dictionary".into(),
+            ))
+        }
     };
     root_dict.insert("AcroForm", PdfObject::Reference(acroform_id));
     doc.set_object(root_id, PdfObject::Dictionary(root_dict));
@@ -171,7 +179,9 @@ pub fn create_form_field(
 ) -> PdfResult<FormField> {
     let clean_name = options.name.trim();
     if clean_name.is_empty() {
-        return Err(PdfError::OperationError("Field name cannot be empty".into()));
+        return Err(PdfError::OperationError(
+            "Field name cannot be empty".into(),
+        ));
     }
 
     let page_ids = doc.get_pages()?;
@@ -296,7 +306,9 @@ pub fn create_form_field(
             let mut selected = default_val.to_string();
             if let Some(ref opts) = options.options {
                 for opt in opts {
-                    opt_arr.push(PdfObject::String(PdfString::literal(opt.as_bytes().to_vec())));
+                    opt_arr.push(PdfObject::String(PdfString::literal(
+                        opt.as_bytes().to_vec(),
+                    )));
                 }
                 if selected.is_empty() && !opts.is_empty() {
                     selected = opts[0].clone();
@@ -329,7 +341,11 @@ pub fn create_form_field(
     // Append to /AcroForm /Fields
     let mut acro_dict = match doc.get_object(acroform_id)? {
         PdfObject::Dictionary(d) => d,
-        _ => return Err(PdfError::OperationError("AcroForm is not a dictionary".into())),
+        _ => {
+            return Err(PdfError::OperationError(
+                "AcroForm is not a dictionary".into(),
+            ))
+        }
     };
     let mut fields_arr = match acro_dict.remove("Fields") {
         Some(PdfObject::Array(arr)) => arr,

@@ -58,8 +58,10 @@ fn test_apply_pagination_default() {
     assert_eq!(count, 2);
 
     let pages = doc.get_pages().expect("Get pages");
-    let content_p1 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
-    let content_p2 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
+    let content_p1 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
+    let content_p2 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
 
     assert!(content_p1.contains("Página 1 de 2"));
     assert!(content_p2.contains("Página 2 de 2"));
@@ -87,8 +89,10 @@ fn test_apply_pagination_skip_first_page() {
     assert_eq!(count, 1);
 
     let pages = doc.get_pages().expect("Get pages");
-    let content_p1 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
-    let content_p2 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
+    let content_p1 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
+    let content_p2 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
 
     assert!(!content_p1.contains("Sheet"));
     assert!(content_p2.contains("Sheet 1 of 2"));
@@ -113,7 +117,8 @@ fn test_apply_text_watermark_background() {
     assert_eq!(count, 2);
 
     let pages = doc.get_pages().expect("Get pages");
-    let content_p1 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
+    let content_p1 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
 
     assert!(content_p1.contains("/GS_WM gs"));
     assert!(content_p1.contains("/F_WM"));
@@ -122,7 +127,10 @@ fn test_apply_text_watermark_background() {
     // Verify background placement: watermark appears before original page content
     let wm_pos = content_p1.find("CONFIDENCIAL").unwrap();
     let orig_pos = content_p1.find("Page 1 Content").unwrap();
-    assert!(wm_pos < orig_pos, "Background watermark must be prepended before original page content");
+    assert!(
+        wm_pos < orig_pos,
+        "Background watermark must be prepended before original page content"
+    );
 }
 
 #[test]
@@ -144,8 +152,10 @@ fn test_apply_text_watermark_foreground() {
     assert_eq!(count, 1);
 
     let pages = doc.get_pages().expect("Get pages");
-    let content_p1 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
-    let content_p2 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
+    let content_p1 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
+    let content_p2 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[1]).unwrap()).to_string();
 
     assert!(!content_p1.contains("DRAFT"));
     assert!(content_p2.contains("DRAFT"));
@@ -153,7 +163,10 @@ fn test_apply_text_watermark_foreground() {
     // Verify foreground placement: watermark appears after original page content
     let wm_pos = content_p2.find("DRAFT").unwrap();
     let orig_pos = content_p2.find("Page 2 Content").unwrap();
-    assert!(wm_pos > orig_pos, "Foreground watermark must be appended after original page content");
+    assert!(
+        wm_pos > orig_pos,
+        "Foreground watermark must be appended after original page content"
+    );
 }
 
 #[test]
@@ -179,7 +192,8 @@ fn test_apply_image_watermark() {
     assert_eq!(count, 2);
 
     let pages = doc.get_pages().expect("Get pages");
-    let content_p1 = String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
+    let content_p1 =
+        String::from_utf8_lossy(&doc.get_page_content_bytes(pages[0]).unwrap()).to_string();
 
     assert!(content_p1.contains("/WM_IMG Do"));
     assert!(content_p1.contains("/GS_WM gs"));

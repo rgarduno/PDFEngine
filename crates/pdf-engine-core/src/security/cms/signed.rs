@@ -10,7 +10,10 @@ use der::{Any, AnyRef, Decode, Encode, Sequence, Tagged};
 use rsa::traits::PublicKeyParts;
 use sha2::Digest;
 use signature::{Keypair, Signer, Verifier};
-use spki::{AlgorithmIdentifierOwned, DecodePublicKey, DynSignatureAlgorithmIdentifier, SignatureBitStringEncoding};
+use spki::{
+    AlgorithmIdentifierOwned, DecodePublicKey, DynSignatureAlgorithmIdentifier,
+    SignatureBitStringEncoding,
+};
 use x509_cert::attr::Attribute;
 use x509_cert::Certificate;
 
@@ -22,7 +25,8 @@ use crate::error::PdfResult;
 const SHA256_WITH_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
 const ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 const ESS_CERT_V2: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.47");
-const TIME_STAMP_TOKEN: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.14");
+const TIME_STAMP_TOKEN: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.14");
 
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 struct EssCertIdV2 {
@@ -52,11 +56,23 @@ pub(crate) fn build_detached(creds: &Loaded, digest: &[u8]) -> PdfResult<Vec<u8>
     match &creds.key {
         KeyMaterial::Rsa(key) => {
             let signer = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone());
-            sign_eci::<_, rsa::pkcs1v15::Signature>(&signer, &creds.leaf, &creds.chain, &eci, Some(digest))
+            sign_eci::<_, rsa::pkcs1v15::Signature>(
+                &signer,
+                &creds.leaf,
+                &creds.chain,
+                &eci,
+                Some(digest),
+            )
         }
         KeyMaterial::P256(secret) => {
             let signer = p256::ecdsa::SigningKey::from(secret.clone());
-            sign_eci::<_, p256::ecdsa::DerSignature>(&signer, &creds.leaf, &creds.chain, &eci, Some(digest))
+            sign_eci::<_, p256::ecdsa::DerSignature>(
+                &signer,
+                &creds.leaf,
+                &creds.chain,
+                &eci,
+                Some(digest),
+            )
         }
     }
 }
@@ -104,7 +120,9 @@ where
         .map_err(|_| failed())?;
 
     let mut builder = ::cms::builder::SignedDataBuilder::new(eci);
-    builder.add_digest_algorithm(digest_alg).map_err(|_| failed())?;
+    builder
+        .add_digest_algorithm(digest_alg)
+        .map_err(|_| failed())?;
     builder
         .add_certificate(::cms::cert::CertificateChoices::Certificate(cert.clone()))
         .map_err(|_| failed())?;
@@ -116,7 +134,11 @@ where
     builder
         .add_signer_info::<S, Sig>(info_builder)
         .map_err(|_| failed())?;
-    builder.build().map_err(|_| failed())?.to_der().map_err(|_| failed())
+    builder
+        .build()
+        .map_err(|_| failed())?
+        .to_der()
+        .map_err(|_| failed())
 }
 
 /// Length of the leading DER value, ignoring trailing zero padding.
@@ -184,9 +206,8 @@ pub(crate) fn insert_timestamp(cms_der: &[u8], token: &[u8]) -> PdfResult<Vec<u8
         values,
     });
     signer.unsigned_attrs = Some(SetOfVec::try_from(attrs).map_err(|_| rejected())?);
-    signed.signer_infos = ::cms::signed_data::SignerInfos(
-        SetOfVec::try_from(vec![signer]).map_err(|_| rejected())?,
-    );
+    signed.signer_infos =
+        ::cms::signed_data::SignerInfos(SetOfVec::try_from(vec![signer]).map_err(|_| rejected())?);
     encode_signed_data(&signed)
 }
 
@@ -269,7 +290,8 @@ pub(crate) fn message_digest_matches(
     let Some(signed_attrs) = signer.signed_attrs.as_ref() else {
         return false;
     };
-    if !content_type_matches(signed_attrs, content_type) || !digest_matches(signed_attrs, expected) {
+    if !content_type_matches(signed_attrs, content_type) || !digest_matches(signed_attrs, expected)
+    {
         return false;
     }
     let Some(cert) = signer_cert(signed, signer) else {
@@ -278,18 +300,31 @@ pub(crate) fn message_digest_matches(
     let Ok(signed_der) = signed_attrs.to_der() else {
         return false;
     };
-    if !signature_ok(cert, &signed_der, signer.signature.as_bytes(), &signer.signature_algorithm) {
+    if !signature_ok(
+        cert,
+        &signed_der,
+        signer.signature.as_bytes(),
+        &signer.signature_algorithm,
+    ) {
         return false;
     }
     ess_ok(signed_attrs, cert) && timestamps_ok(signer, depth)
 }
 
-fn one_signer(cms_der: &[u8]) -> Option<(::cms::signed_data::SignedData, ::cms::signed_data::SignerInfo)> {
+fn one_signer(
+    cms_der: &[u8],
+) -> Option<(
+    ::cms::signed_data::SignedData,
+    ::cms::signed_data::SignerInfo,
+)> {
     let info = ::cms::content_info::ContentInfo::from_der(cms_der).ok()?;
     if info.content_type != const_oid::db::rfc5911::ID_SIGNED_DATA {
         return None;
     }
-    let signed = info.content.decode_as::<::cms::signed_data::SignedData>().ok()?;
+    let signed = info
+        .content
+        .decode_as::<::cms::signed_data::SignedData>()
+        .ok()?;
     let signer = {
         let infos = signed.signer_infos.0.as_slice();
         if infos.len() != 1 {
@@ -459,7 +494,10 @@ fn timestamps_ok(signer: &::cms::signed_data::SignerInfo, depth: u8) -> bool {
 
 fn has_timestamp(signer: &::cms::signed_data::SignerInfo) -> bool {
     signer.unsigned_attrs.as_ref().is_some_and(|attrs| {
-        attrs.as_slice().iter().any(|attr| attr.oid == TIME_STAMP_TOKEN)
+        attrs
+            .as_slice()
+            .iter()
+            .any(|attr| attr.oid == TIME_STAMP_TOKEN)
     })
 }
 

@@ -1,6 +1,4 @@
-use crate::cos::{
-    ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, Writer,
-};
+use crate::cos::{ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, Writer};
 use crate::ops::{
     delete_pages, extract_pages, get_page_rotation, merge_documents, merge_pdf_bytes,
     reorder_pages, rotate_all_pages, rotate_page, set_page_rotation, split_by_ranges,
@@ -48,12 +46,7 @@ fn create_test_multipage_pdf(page_texts: &[&str]) -> Vec<u8> {
         page_dict.insert("Parent", pages_id);
         page_dict.insert(
             "MediaBox",
-            vec![
-                0i64.into(),
-                0i64.into(),
-                612i64.into(),
-                792i64.into(),
-            ],
+            vec![0i64.into(), 0i64.into(), 612i64.into(), 792i64.into()],
         );
         page_dict.insert("Contents", content_id);
 
@@ -154,8 +147,12 @@ fn test_extract_and_split_pages() {
     let extracted_pages = extracted.get_pages().expect("Failed to get pages");
     assert_eq!(extracted_pages.len(), 2);
 
-    let content_0 = extracted.get_page_content_bytes(extracted_pages[0]).unwrap();
-    let content_1 = extracted.get_page_content_bytes(extracted_pages[1]).unwrap();
+    let content_0 = extracted
+        .get_page_content_bytes(extracted_pages[0])
+        .unwrap();
+    let content_1 = extracted
+        .get_page_content_bytes(extracted_pages[1])
+        .unwrap();
     assert!(String::from_utf8_lossy(&content_0).contains("Beta"));
     assert!(String::from_utf8_lossy(&content_1).contains("Delta"));
 

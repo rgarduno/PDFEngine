@@ -48,7 +48,8 @@ pub fn find_emails(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let len = bytes.len();
 
-    let is_local_char = |b: u8| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-' || b == b'+';
+    let is_local_char =
+        |b: u8| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-' || b == b'+';
     let is_domain_char = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
 
     let mut i = 0;
@@ -101,26 +102,37 @@ pub fn find_ssn(text: &str) -> Vec<(usize, usize)> {
     // Check `\b\d{3}-\d{2}-\d{4}\b` (11 chars)
     if n >= 11 {
         for i in 0..=n - 11 {
-            let is_prev_digit = if i > 0 { chars[i - 1].1.is_ascii_digit() } else { false };
-            let is_next_digit = if i + 11 < n { chars[i + 11].1.is_ascii_digit() } else { false };
+            let is_prev_digit = if i > 0 {
+                chars[i - 1].1.is_ascii_digit()
+            } else {
+                false
+            };
+            let is_next_digit = if i + 11 < n {
+                chars[i + 11].1.is_ascii_digit()
+            } else {
+                false
+            };
 
             if !is_prev_digit && !is_next_digit {
-                let matches_pattern =
-                    chars[i].1.is_ascii_digit() &&
-                    chars[i + 1].1.is_ascii_digit() &&
-                    chars[i + 2].1.is_ascii_digit() &&
-                    chars[i + 3].1 == '-' &&
-                    chars[i + 4].1.is_ascii_digit() &&
-                    chars[i + 5].1.is_ascii_digit() &&
-                    chars[i + 6].1 == '-' &&
-                    chars[i + 7].1.is_ascii_digit() &&
-                    chars[i + 8].1.is_ascii_digit() &&
-                    chars[i + 9].1.is_ascii_digit() &&
-                    chars[i + 10].1.is_ascii_digit();
+                let matches_pattern = chars[i].1.is_ascii_digit()
+                    && chars[i + 1].1.is_ascii_digit()
+                    && chars[i + 2].1.is_ascii_digit()
+                    && chars[i + 3].1 == '-'
+                    && chars[i + 4].1.is_ascii_digit()
+                    && chars[i + 5].1.is_ascii_digit()
+                    && chars[i + 6].1 == '-'
+                    && chars[i + 7].1.is_ascii_digit()
+                    && chars[i + 8].1.is_ascii_digit()
+                    && chars[i + 9].1.is_ascii_digit()
+                    && chars[i + 10].1.is_ascii_digit();
 
                 if matches_pattern {
                     let start_byte = chars[i].0;
-                    let end_byte = if i + 11 < n { chars[i + 11].0 } else { text.len() };
+                    let end_byte = if i + 11 < n {
+                        chars[i + 11].0
+                    } else {
+                        text.len()
+                    };
                     results.push((start_byte, end_byte));
                 }
             }
@@ -158,7 +170,11 @@ pub fn find_credit_cards(text: &str) -> Vec<(usize, usize)> {
 
                     if digits.len() == 16 && luhn_check(&digits) {
                         let start_byte = chars[i].0;
-                        let end_byte = if i + 19 < n { chars[i + 19].0 } else { text.len() };
+                        let end_byte = if i + 19 < n {
+                            chars[i + 19].0
+                        } else {
+                            text.len()
+                        };
                         results.push((start_byte, end_byte));
                     }
                 }
@@ -169,8 +185,16 @@ pub fn find_credit_cards(text: &str) -> Vec<(usize, usize)> {
     // 2. Unformatted: continuous 16 digits bounded by non-digits
     if n >= 16 {
         for i in 0..=n - 16 {
-            let is_prev_digit = if i > 0 { chars[i - 1].1.is_ascii_digit() } else { false };
-            let is_next_digit = if i + 16 < n { chars[i + 16].1.is_ascii_digit() } else { false };
+            let is_prev_digit = if i > 0 {
+                chars[i - 1].1.is_ascii_digit()
+            } else {
+                false
+            };
+            let is_next_digit = if i + 16 < n {
+                chars[i + 16].1.is_ascii_digit()
+            } else {
+                false
+            };
 
             if !is_prev_digit && !is_next_digit {
                 let is_all_digits = (0..16).all(|k| chars[i + k].1.is_ascii_digit());
@@ -181,7 +205,11 @@ pub fn find_credit_cards(text: &str) -> Vec<(usize, usize)> {
 
                     if luhn_check(&digits) {
                         let start_byte = chars[i].0;
-                        let end_byte = if i + 16 < n { chars[i + 16].0 } else { text.len() };
+                        let end_byte = if i + 16 < n {
+                            chars[i + 16].0
+                        } else {
+                            text.len()
+                        };
                         results.push((start_byte, end_byte));
                     }
                 }
@@ -230,7 +258,8 @@ pub fn find_phones(text: &str) -> Vec<(usize, usize)> {
                 if ch.is_ascii_digit() {
                     digit_count += 1;
                     end += 1;
-                } else if ch == '-' || ch == ' ' || ch == '(' || ch == ')' || ch == '.' || ch == '+' {
+                } else if ch == '-' || ch == ' ' || ch == '(' || ch == ')' || ch == '.' || ch == '+'
+                {
                     end += 1;
                 } else {
                     break;
@@ -266,14 +295,22 @@ pub fn find_rfc(text: &str) -> Vec<(usize, usize)> {
     let is_rfc_letter = |c: char| c.is_ascii_alphabetic() || c == '&' || c == 'Ñ' || c == 'ñ';
 
     for i in 0..n {
-        let is_prev_alnum = if i > 0 { chars[i - 1].1.is_ascii_alphanumeric() } else { false };
+        let is_prev_alnum = if i > 0 {
+            chars[i - 1].1.is_ascii_alphanumeric()
+        } else {
+            false
+        };
         if is_prev_alnum {
             continue;
         }
 
         // Try Persona Física (13 chars: 4 letters + 6 digits + 3 alnum)
         if i + 13 <= n {
-            let is_next_alnum = if i + 13 < n { chars[i + 13].1.is_ascii_alphanumeric() } else { false };
+            let is_next_alnum = if i + 13 < n {
+                chars[i + 13].1.is_ascii_alphanumeric()
+            } else {
+                false
+            };
             if !is_next_alnum {
                 let letters_4 = (0..4).all(|k| is_rfc_letter(chars[i + k].1));
                 let digits_6 = (4..10).all(|k| chars[i + k].1.is_ascii_digit());
@@ -281,7 +318,11 @@ pub fn find_rfc(text: &str) -> Vec<(usize, usize)> {
 
                 if letters_4 && digits_6 && homoclave_3 {
                     let start_byte = chars[i].0;
-                    let end_byte = if i + 13 < n { chars[i + 13].0 } else { text.len() };
+                    let end_byte = if i + 13 < n {
+                        chars[i + 13].0
+                    } else {
+                        text.len()
+                    };
                     results.push((start_byte, end_byte));
                     continue;
                 }
@@ -290,7 +331,11 @@ pub fn find_rfc(text: &str) -> Vec<(usize, usize)> {
 
         // Try Persona Moral (12 chars: 3 letters + 6 digits + 3 alnum)
         if i + 12 <= n {
-            let is_next_alnum = if i + 12 < n { chars[i + 12].1.is_ascii_alphanumeric() } else { false };
+            let is_next_alnum = if i + 12 < n {
+                chars[i + 12].1.is_ascii_alphanumeric()
+            } else {
+                false
+            };
             if !is_next_alnum {
                 let letters_3 = (0..3).all(|k| is_rfc_letter(chars[i + k].1));
                 let digits_6 = (3..9).all(|k| chars[i + k].1.is_ascii_digit());
@@ -298,7 +343,11 @@ pub fn find_rfc(text: &str) -> Vec<(usize, usize)> {
 
                 if letters_3 && digits_6 && homoclave_3 {
                     let start_byte = chars[i].0;
-                    let end_byte = if i + 12 < n { chars[i + 12].0 } else { text.len() };
+                    let end_byte = if i + 12 < n {
+                        chars[i + 12].0
+                    } else {
+                        text.len()
+                    };
                     results.push((start_byte, end_byte));
                 }
             }
@@ -319,8 +368,16 @@ pub fn find_curp(text: &str) -> Vec<(usize, usize)> {
     }
 
     for i in 0..=n - 18 {
-        let is_prev_alnum = if i > 0 { chars[i - 1].1.is_ascii_alphanumeric() } else { false };
-        let is_next_alnum = if i + 18 < n { chars[i + 18].1.is_ascii_alphanumeric() } else { false };
+        let is_prev_alnum = if i > 0 {
+            chars[i - 1].1.is_ascii_alphanumeric()
+        } else {
+            false
+        };
+        let is_next_alnum = if i + 18 < n {
+            chars[i + 18].1.is_ascii_alphanumeric()
+        } else {
+            false
+        };
 
         if !is_prev_alnum && !is_next_alnum {
             let letters_4 = (0..4).all(|k| chars[i + k].1.is_ascii_alphabetic());
@@ -333,7 +390,11 @@ pub fn find_curp(text: &str) -> Vec<(usize, usize)> {
 
             if letters_4 && digits_6 && is_gender && state_and_cons && homoclave && check_digit {
                 let start_byte = chars[i].0;
-                let end_byte = if i + 18 < n { chars[i + 18].0 } else { text.len() };
+                let end_byte = if i + 18 < n {
+                    chars[i + 18].0
+                } else {
+                    text.len()
+                };
                 results.push((start_byte, end_byte));
             }
         }

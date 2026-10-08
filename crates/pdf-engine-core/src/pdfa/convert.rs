@@ -148,15 +148,7 @@ pub fn validate_pdfa(doc: &mut PdfDocument, level: PdfALevel) -> PdfResult<Vec<S
             }
         }
         let object = doc.get_object(id)?;
-        scan_tree(
-            &object,
-            0,
-            max_depth,
-            id,
-            level,
-            &mut issues,
-            &mut groups,
-        )?;
+        scan_tree(&object, 0, max_depth, id, level, &mut issues, &mut groups)?;
     }
     for group_id in groups {
         let object = doc.get_object(group_id)?;
@@ -234,7 +226,10 @@ fn record_special(doc: &PdfDocument) -> (HashSet<ObjectId>, HashSet<ObjectId>) {
         let Some(dict) = object.as_dict() else {
             continue;
         };
-        let subtype = dict.get("S").and_then(|value| value.as_name()).map(str::to_string);
+        let subtype = dict
+            .get("S")
+            .and_then(|value| value.as_name())
+            .map(str::to_string);
         if subtype.as_deref() == Some("Transparency") {
             transparency.insert(*id);
         }
@@ -242,7 +237,8 @@ fn record_special(doc: &PdfDocument) -> (HashSet<ObjectId>, HashSet<ObjectId>) {
             subtype.as_deref(),
             Some("JavaScript" | "Launch" | "SubmitForm")
         );
-        let javascript = dict.get("Subtype").and_then(|value| value.as_name()) == Some("JavaScript");
+        let javascript =
+            dict.get("Subtype").and_then(|value| value.as_name()) == Some("JavaScript");
         if (dangerous || javascript) && !is_structural(dict) {
             actions.insert(*id);
         }
@@ -281,10 +277,17 @@ fn scrub_value(
         });
     }
     match value {
-        PdfObject::Dictionary(dict) => scrub_dict(dict, level, transparency, depth, max_depth, object_id),
-        PdfObject::Stream(stream) => {
-            scrub_dict(&mut stream.dict, level, transparency, depth, max_depth, object_id)
+        PdfObject::Dictionary(dict) => {
+            scrub_dict(dict, level, transparency, depth, max_depth, object_id)
         }
+        PdfObject::Stream(stream) => scrub_dict(
+            &mut stream.dict,
+            level,
+            transparency,
+            depth,
+            max_depth,
+            object_id,
+        ),
         PdfObject::Array(items) => {
             for item in items.iter_mut() {
                 scrub_value(item, level, transparency, depth + 1, max_depth, object_id)?;
@@ -325,7 +328,10 @@ fn scrub_dict(
         dict.remove("S");
     }
     if is_annotation(dict) {
-        let flags = dict.get("F").and_then(|value| value.as_f64()).unwrap_or(0.0);
+        let flags = dict
+            .get("F")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
         dict.insert("F", flags.round() as i64 | 4);
     }
     let keys = owned_keys(dict);
@@ -365,7 +371,9 @@ fn group_should_drop(dict: &PdfDictionary, transparency: &HashSet<ObjectId>) -> 
 }
 
 fn owned_keys(dict: &PdfDictionary) -> Vec<String> {
-    dict.iter().map(|(name, _)| name.as_str().to_string()).collect()
+    dict.iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect()
 }
 
 fn null_rejected(doc: &mut PdfDocument, actions: &HashSet<ObjectId>) -> PdfResult<()> {
@@ -376,9 +384,17 @@ fn null_rejected(doc: &mut PdfDocument, actions: &HashSet<ObjectId>) -> PdfResul
         let Some(dict) = object.as_dict() else {
             continue;
         };
-        let type_name = dict.get("Type").and_then(|value| value.as_name()).map(str::to_string);
-        let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
-        if type_name.as_deref() == Some("EmbeddedFile") || subtype.as_deref() == Some("EmbeddedFile") {
+        let type_name = dict
+            .get("Type")
+            .and_then(|value| value.as_name())
+            .map(str::to_string);
+        let subtype = dict
+            .get("Subtype")
+            .and_then(|value| value.as_name())
+            .map(str::to_string);
+        if type_name.as_deref() == Some("EmbeddedFile")
+            || subtype.as_deref() == Some("EmbeddedFile")
+        {
             doomed.insert(*id);
         }
         if is_disallowed_annot(subtype.as_deref()) {
@@ -401,7 +417,11 @@ fn filter_annots(doc: &mut PdfDocument) -> PdfResult<()> {
         if !dict.contains_key("Annots") {
             continue;
         }
-        let Some(existing) = dict.get("Annots").and_then(|value| value.as_array()).map(|items| items.to_vec()) else {
+        let Some(existing) = dict
+            .get("Annots")
+            .and_then(|value| value.as_array())
+            .map(|items| items.to_vec())
+        else {
             continue;
         };
         let mut kept = Vec::new();
@@ -426,13 +446,19 @@ fn annot_item_rejected(item: &PdfObject, doc: &mut PdfDocument) -> PdfResult<boo
             return Ok(true);
         }
         if let Some(dict) = target.as_dict() {
-            let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
+            let subtype = dict
+                .get("Subtype")
+                .and_then(|value| value.as_name())
+                .map(str::to_string);
             return Ok(is_disallowed_annot(subtype.as_deref()));
         }
         return Ok(false);
     }
     if let Some(dict) = item.as_dict() {
-        let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
+        let subtype = dict
+            .get("Subtype")
+            .and_then(|value| value.as_name())
+            .map(str::to_string);
         return Ok(is_disallowed_annot(subtype.as_deref()));
     }
     Ok(false)
@@ -448,7 +474,10 @@ fn ensure_appearances(doc: &mut PdfDocument) -> PdfResult<()> {
         if !is_annotation(&dict) {
             continue;
         }
-        let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
+        let subtype = dict
+            .get("Subtype")
+            .and_then(|value| value.as_name())
+            .map(str::to_string);
         if subtype.as_deref() == Some("Popup") || is_disallowed_annot(subtype.as_deref()) {
             continue;
         }
@@ -653,7 +682,11 @@ fn embed_fonts(doc: &mut PdfDocument) -> PdfResult<()> {
             continue;
         }
         let widths = archive_widths(&dict, doc)?;
-        let unicode = if let Some(existing) = dict.get("ToUnicode").filter(|value| !value.is_null()).cloned() {
+        let unicode = if let Some(existing) = dict
+            .get("ToUnicode")
+            .filter(|value| !value.is_null())
+            .cloned()
+        {
             existing
         } else {
             PdfObject::Reference(shared_unicode(doc, &mut unicode_id)?)
@@ -701,7 +734,10 @@ fn store_face(doc: &mut PdfDocument, widths: &[i32; 224], tag_index: u32) -> Pdf
     file_dict.insert("Length1", face.bytes.len() as i64);
     file_dict.insert("Filter", PdfName::new("FlateDecode"));
     let file_id = doc.alloc_object_id();
-    doc.set_object(file_id, PdfObject::Stream(PdfStream::new(file_dict, compressed)));
+    doc.set_object(
+        file_id,
+        PdfObject::Stream(PdfStream::new(file_dict, compressed)),
+    );
 
     let mut descriptor = PdfDictionary::new();
     descriptor.insert("Type", PdfName::new("FontDescriptor"));
@@ -794,7 +830,10 @@ fn winansi_tounicode() -> Vec<u8> {
 }
 
 fn archive_widths(dict: &PdfDictionary, doc: &mut PdfDocument) -> PdfResult<[i32; 224]> {
-    let base = dict.get("BaseFont").and_then(|value| value.as_name()).unwrap_or("");
+    let base = dict
+        .get("BaseFont")
+        .and_then(|value| value.as_name())
+        .unwrap_or("");
     let mut widths = default_widths(base);
     let Some(raw) = dict.get("Widths").cloned() else {
         return Ok(widths);
@@ -807,7 +846,10 @@ fn archive_widths(dict: &PdfDictionary, doc: &mut PdfDocument) -> PdfResult<[i32
     let Some(array) = resolved.as_array() else {
         return Ok(widths);
     };
-    let first = dict.get("FirstChar").and_then(|value| value.as_i64()).unwrap_or(0);
+    let first = dict
+        .get("FirstChar")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
     let last = dict.get("LastChar").and_then(|value| value.as_i64());
     for (index, item) in array.iter().enumerate() {
         let Some(value) = item.as_f64() else {
@@ -865,11 +907,18 @@ fn is_composite_font(dict: &PdfDictionary) -> bool {
 }
 
 fn composite_has_program(dict: &PdfDictionary, doc: &mut PdfDocument) -> PdfResult<bool> {
-    let subtype = dict.get("Subtype").and_then(|value| value.as_name()).unwrap_or("");
+    let subtype = dict
+        .get("Subtype")
+        .and_then(|value| value.as_name())
+        .unwrap_or("");
     if subtype == "CIDFontType0" || subtype == "CIDFontType2" {
         return descriptor_has_program(dict, doc);
     }
-    let Some(kids) = dict.get("DescendantFonts").and_then(|value| value.as_array()).map(|items| items.to_vec()) else {
+    let Some(kids) = dict
+        .get("DescendantFonts")
+        .and_then(|value| value.as_array())
+        .map(|items| items.to_vec())
+    else {
         return Ok(false);
     };
     if kids.is_empty() {
@@ -897,14 +946,19 @@ fn descriptor_has_program(dict: &PdfDictionary, doc: &mut PdfDocument) -> PdfRes
 }
 
 fn has_program_key(dict: &PdfDictionary) -> bool {
-    ["FontFile", "FontFile2", "FontFile3"].iter().any(|key| match dict.get(*key) {
-        Some(PdfObject::Null) | None => false,
-        Some(_) => true,
-    })
+    ["FontFile", "FontFile2", "FontFile3"]
+        .iter()
+        .any(|key| match dict.get(*key) {
+            Some(PdfObject::Null) | None => false,
+            Some(_) => true,
+        })
 }
 
 fn simple_embedded(dict: &PdfDictionary, doc: &mut PdfDocument) -> PdfResult<bool> {
-    let subtype = dict.get("Subtype").and_then(|value| value.as_name()).unwrap_or("");
+    let subtype = dict
+        .get("Subtype")
+        .and_then(|value| value.as_name())
+        .unwrap_or("");
     let char_procs = dict.get("CharProcs").is_some_and(|value| !value.is_null());
     if subtype == "Type3" && char_procs {
         return Ok(true);
@@ -955,7 +1009,10 @@ fn install_archive_info(doc: &mut PdfDocument, level: PdfALevel) -> PdfResult<()
     meta_dict.insert("Subtype", PdfName::new("XML"));
     meta_dict.insert("Length", packet.len() as i64);
     let meta_id = doc.alloc_object_id();
-    doc.set_object(meta_id, PdfObject::Stream(PdfStream::new(meta_dict, packet)));
+    doc.set_object(
+        meta_id,
+        PdfObject::Stream(PdfStream::new(meta_dict, packet)),
+    );
 
     let profile = super::icc::srgb_profile();
     let mut profile_dict = PdfDictionary::new();
@@ -970,14 +1027,22 @@ fn install_archive_info(doc: &mut PdfDocument, level: PdfALevel) -> PdfResult<()
     let mut intent = PdfDictionary::new();
     intent.insert("Type", PdfName::new("OutputIntent"));
     intent.insert("S", PdfName::new("GTS_PDFA1"));
-    intent.insert("OutputConditionIdentifier", PdfString::literal(b"sRGB".to_vec()));
-    intent.insert("RegistryName", PdfString::literal(b"http://www.color.org".to_vec()));
+    intent.insert(
+        "OutputConditionIdentifier",
+        PdfString::literal(b"sRGB".to_vec()),
+    );
+    intent.insert(
+        "RegistryName",
+        PdfString::literal(b"http://www.color.org".to_vec()),
+    );
     intent.insert("Info", PdfString::literal(b"sRGB".to_vec()));
     intent.insert("DestOutputProfile", profile_id);
     catalog.insert("Metadata", meta_id);
     catalog.insert("OutputIntents", vec![PdfObject::Dictionary(intent)]);
     doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
-    doc.xref.trailer.insert("ID", trailer_identifier(doc, level.part_number()));
+    doc.xref
+        .trailer
+        .insert("ID", trailer_identifier(doc, level.part_number()));
     doc.write_version = level.pdf_version().to_string();
     Ok(())
 }
@@ -1004,7 +1069,10 @@ fn trailer_identifier(doc: &PdfDocument, part: u8) -> PdfObject {
     seed.push(part);
     let digest = crate::crypto::sha256::sha256(&seed);
     let text = PdfString::hex(digest[..16].to_vec());
-    PdfObject::Array(vec![PdfObject::String(text.clone()), PdfObject::String(text)])
+    PdfObject::Array(vec![
+        PdfObject::String(text.clone()),
+        PdfObject::String(text),
+    ])
 }
 
 fn normalize_lengths(doc: &mut PdfDocument) -> PdfResult<()> {
@@ -1040,13 +1108,29 @@ fn scan_tree(
         PdfObject::Dictionary(dict) => {
             note_dict(dict, level, issues, groups);
             for (_, value) in dict.iter() {
-                scan_tree(value, depth + 1, max_depth, object_id, level, issues, groups)?;
+                scan_tree(
+                    value,
+                    depth + 1,
+                    max_depth,
+                    object_id,
+                    level,
+                    issues,
+                    groups,
+                )?;
             }
         }
         PdfObject::Stream(stream) => {
             note_dict(&stream.dict, level, issues, groups);
             for (_, value) in stream.dict.iter() {
-                scan_tree(value, depth + 1, max_depth, object_id, level, issues, groups)?;
+                scan_tree(
+                    value,
+                    depth + 1,
+                    max_depth,
+                    object_id,
+                    level,
+                    issues,
+                    groups,
+                )?;
             }
         }
         PdfObject::Array(items) => {
@@ -1092,12 +1176,25 @@ fn note_dict(
     if dict.contains_key("EmbeddedFiles") || dict.contains_key("EF") {
         push_issue(issues, EMBEDDED_FILE);
     }
-    let type_name = dict.get("Type").and_then(|item| item.as_name()).map(str::to_string);
-    let subtype = dict.get("Subtype").and_then(|item| item.as_name()).map(str::to_string);
+    let type_name = dict
+        .get("Type")
+        .and_then(|item| item.as_name())
+        .map(str::to_string);
+    let subtype = dict
+        .get("Subtype")
+        .and_then(|item| item.as_name())
+        .map(str::to_string);
     if type_name.as_deref() == Some("EmbeddedFile") || subtype.as_deref() == Some("EmbeddedFile") {
         push_issue(issues, EMBEDDED_FILE);
     }
-    for key in ["JavaScript", "JS", "Launch", "SubmitForm", "OpenAction", "AA"] {
+    for key in [
+        "JavaScript",
+        "JS",
+        "Launch",
+        "SubmitForm",
+        "OpenAction",
+        "AA",
+    ] {
         if dict.contains_key(key) {
             push_issue(issues, ACTIVE);
         }
@@ -1113,7 +1210,11 @@ fn note_dict(
     }
 }
 
-fn check_font(dict: &PdfDictionary, doc: &mut PdfDocument, issues: &mut Vec<String>) -> PdfResult<()> {
+fn check_font(
+    dict: &PdfDictionary,
+    doc: &mut PdfDocument,
+    issues: &mut Vec<String>,
+) -> PdfResult<()> {
     if is_composite_font(dict) {
         if !composite_has_program(dict, doc)? {
             push_issue(issues, COMPOSITE);
@@ -1130,7 +1231,10 @@ fn check_font(dict: &PdfDictionary, doc: &mut PdfDocument, issues: &mut Vec<Stri
 }
 
 fn check_annotation(dict: &PdfDictionary, issues: &mut Vec<String>) {
-    let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
+    let subtype = dict
+        .get("Subtype")
+        .and_then(|value| value.as_name())
+        .map(str::to_string);
     if is_disallowed_annot(subtype.as_deref()) {
         push_issue(issues, ANNOT_FORBIDDEN);
     }
@@ -1145,7 +1249,10 @@ fn check_annotation(dict: &PdfDictionary, issues: &mut Vec<String>) {
 }
 
 fn metadata_present(doc: &mut PdfDocument, catalog: &PdfDictionary, part: u8) -> PdfResult<bool> {
-    let Some(id) = catalog.get("Metadata").and_then(|value| value.as_reference()) else {
+    let Some(id) = catalog
+        .get("Metadata")
+        .and_then(|value| value.as_reference())
+    else {
         return Ok(false);
     };
     let PdfObject::Stream(stream) = doc.get_object(id)? else {
@@ -1166,7 +1273,11 @@ fn metadata_matches(bytes: &[u8], part: u8) -> bool {
 }
 
 fn output_intent_present(doc: &mut PdfDocument, catalog: &PdfDictionary) -> PdfResult<bool> {
-    let Some(entries) = catalog.get("OutputIntents").and_then(|value| value.as_array()).map(|items| items.to_vec()) else {
+    let Some(entries) = catalog
+        .get("OutputIntents")
+        .and_then(|value| value.as_array())
+        .map(|items| items.to_vec())
+    else {
         return Ok(false);
     };
     for item in entries {
@@ -1176,7 +1287,10 @@ fn output_intent_present(doc: &mut PdfDocument, catalog: &PdfDictionary) -> PdfR
         if dict.get("S").and_then(|value| value.as_name()) != Some("GTS_PDFA1") {
             continue;
         }
-        let Some(profile_id) = dict.get("DestOutputProfile").and_then(|value| value.as_reference()) else {
+        let Some(profile_id) = dict
+            .get("DestOutputProfile")
+            .and_then(|value| value.as_reference())
+        else {
             continue;
         };
         let PdfObject::Stream(stream) = doc.get_object(profile_id)? else {
@@ -1201,10 +1315,18 @@ fn profile_bytes_match(bytes: &[u8]) -> bool {
 }
 
 fn trailer_id_present(doc: &PdfDocument) -> bool {
-    let Some(array) = doc.xref.trailer.get("ID").and_then(|value| value.as_array()) else {
+    let Some(array) = doc
+        .xref
+        .trailer
+        .get("ID")
+        .and_then(|value| value.as_array())
+    else {
         return false;
     };
-    array.len() == 2 && array.iter().all(|item| matches!(item, PdfObject::String(_)))
+    array.len() == 2
+        && array
+            .iter()
+            .all(|item| matches!(item, PdfObject::String(_)))
 }
 
 fn is_font_dict(dict: &PdfDictionary) -> bool {
@@ -1215,7 +1337,13 @@ fn is_font_dict(dict: &PdfDictionary) -> bool {
     matches!(
         dict.get("Subtype").and_then(|value| value.as_name()),
         Some(
-            "Type0" | "Type1" | "MMType1" | "Type3" | "TrueType" | "CIDFontType0" | "CIDFontType2"
+            "Type0"
+                | "Type1"
+                | "MMType1"
+                | "Type3"
+                | "TrueType"
+                | "CIDFontType0"
+                | "CIDFontType2"
                 | "Type1C"
         )
     )
@@ -1232,10 +1360,32 @@ fn known_annot(name: Option<&str>) -> bool {
     matches!(
         name,
         Some(
-            "Text" | "Link" | "FreeText" | "Line" | "Square" | "Circle" | "Polygon" | "PolyLine"
-                | "Highlight" | "Underline" | "StrikeOut" | "Squiggly" | "Stamp" | "Caret" | "Ink"
-                | "Popup" | "FileAttachment" | "Widget" | "Screen" | "PrinterMark" | "TrapNet"
-                | "Watermark" | "Sound" | "Movie" | "RichMedia" | "Redact"
+            "Text"
+                | "Link"
+                | "FreeText"
+                | "Line"
+                | "Square"
+                | "Circle"
+                | "Polygon"
+                | "PolyLine"
+                | "Highlight"
+                | "Underline"
+                | "StrikeOut"
+                | "Squiggly"
+                | "Stamp"
+                | "Caret"
+                | "Ink"
+                | "Popup"
+                | "FileAttachment"
+                | "Widget"
+                | "Screen"
+                | "PrinterMark"
+                | "TrapNet"
+                | "Watermark"
+                | "Sound"
+                | "Movie"
+                | "RichMedia"
+                | "Redact"
         )
     )
 }
@@ -1248,8 +1398,14 @@ fn is_disallowed_annot(name: Option<&str>) -> bool {
 }
 
 fn is_structural(dict: &PdfDictionary) -> bool {
-    let type_name = dict.get("Type").and_then(|value| value.as_name()).map(str::to_string);
-    let subtype = dict.get("Subtype").and_then(|value| value.as_name()).map(str::to_string);
+    let type_name = dict
+        .get("Type")
+        .and_then(|value| value.as_name())
+        .map(str::to_string);
+    let subtype = dict
+        .get("Subtype")
+        .and_then(|value| value.as_name())
+        .map(str::to_string);
     structural_name(type_name.as_deref()) || structural_name(subtype.as_deref())
 }
 
@@ -1257,8 +1413,19 @@ fn structural_name(name: Option<&str>) -> bool {
     matches!(
         name,
         Some(
-            "Catalog" | "Pages" | "Page" | "Font" | "FontDescriptor" | "XObject" | "Metadata"
-                | "OutputIntent" | "ObjStm" | "XRef" | "Annot" | "ExtGState" | "Encoding"
+            "Catalog"
+                | "Pages"
+                | "Page"
+                | "Font"
+                | "FontDescriptor"
+                | "XObject"
+                | "Metadata"
+                | "OutputIntent"
+                | "ObjStm"
+                | "XRef"
+                | "Annot"
+                | "ExtGState"
+                | "Encoding"
         )
     )
 }

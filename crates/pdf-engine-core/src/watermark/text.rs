@@ -11,7 +11,10 @@ use crate::watermark::types::{TextWatermarkConfig, WatermarkPlacement};
 /// Applies a semi-transparent rotated text watermark across target pages.
 ///
 /// Returns the number of pages successfully stamped.
-pub fn apply_text_watermark(doc: &mut PdfDocument, config: &TextWatermarkConfig) -> PdfResult<usize> {
+pub fn apply_text_watermark(
+    doc: &mut PdfDocument,
+    config: &TextWatermarkConfig,
+) -> PdfResult<usize> {
     let pages = doc.get_pages()?;
     if pages.is_empty() {
         return Ok(0);

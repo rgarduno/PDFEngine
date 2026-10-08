@@ -38,12 +38,13 @@ pub fn add_link_uri(
 ) -> PdfResult<ObjectId> {
     require_web_link(uri)?;
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     let mut action_dict = PdfDictionary::new();
     action_dict.insert("S", PdfObject::Name("URI".into()));
@@ -107,19 +108,22 @@ pub fn add_link_goto(
     target_page_index: usize,
 ) -> PdfResult<ObjectId> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
-    let target_page_id = pages.get(target_page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
-            page: target_page_index + 1,
-            total: pages.len(),
-        }
-    })?;
+    let target_page_id =
+        pages
+            .get(target_page_index)
+            .copied()
+            .ok_or_else(|| PdfError::InvalidPageNumber {
+                page: target_page_index + 1,
+                total: pages.len(),
+            })?;
 
     let mut action_dict = PdfDictionary::new();
     action_dict.insert("S", PdfObject::Name("GoTo".into()));

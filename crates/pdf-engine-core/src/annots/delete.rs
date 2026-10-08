@@ -13,12 +13,13 @@ pub fn delete_annotation(
     annot_id: ObjectId,
 ) -> PdfResult<bool> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     let page_obj = doc.get_object(page_id)?;
     let mut page_dict = match page_obj {
@@ -55,7 +56,8 @@ pub fn delete_annotation(
 
     if removed {
         // Collect appearance stream object IDs to clean up
-        let ap_stream_ids = if let Ok(PdfObject::Dictionary(annot_dict)) = doc.get_object(annot_id) {
+        let ap_stream_ids = if let Ok(PdfObject::Dictionary(annot_dict)) = doc.get_object(annot_id)
+        {
             collect_appearance_stream_ids(&annot_dict)
         } else {
             Vec::new()
@@ -80,11 +82,11 @@ pub fn delete_annotation(
 fn collect_appearance_stream_ids(dict: &crate::cos::object::PdfDictionary) -> Vec<ObjectId> {
     let mut ids = Vec::new();
     if let Some(PdfObject::Dictionary(ap_dict)) = dict.get("AP") {
-        for (_k, v) in ap_dict.0.iter() {
+        for v in ap_dict.0.values() {
             match v {
                 PdfObject::Reference(id) => ids.push(*id),
                 PdfObject::Dictionary(sub_dict) => {
-                    for (_sub_k, sub_v) in sub_dict.0.iter() {
+                    for sub_v in sub_dict.0.values() {
                         if let PdfObject::Reference(sub_id) = sub_v {
                             ids.push(*sub_id);
                         }

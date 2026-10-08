@@ -18,12 +18,13 @@ pub fn add_stamp(
     date_str: Option<&str>,
 ) -> PdfResult<ObjectId> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     // Default dimensions: 160 x 50 pt located in upper region of page
     let final_rect = rect.unwrap_or_else(|| Rect::new(400.0, 700.0, 560.0, 750.0));
@@ -166,9 +167,13 @@ fn build_stamp_appearance_stream(
     // Text Font Sizing & Centering
     let char_count = text.len().max(1) as f64;
     let main_font_size = if date_str.is_some() {
-        (height * 0.42).min((width * 0.85) / (char_count * 0.65)).clamp(8.0, 22.0)
+        (height * 0.42)
+            .min((width * 0.85) / (char_count * 0.65))
+            .clamp(8.0, 22.0)
     } else {
-        (height * 0.52).min((width * 0.85) / (char_count * 0.65)).clamp(10.0, 26.0)
+        (height * 0.52)
+            .min((width * 0.85) / (char_count * 0.65))
+            .clamp(10.0, 26.0)
     };
 
     let est_text_width = char_count * main_font_size * 0.58;

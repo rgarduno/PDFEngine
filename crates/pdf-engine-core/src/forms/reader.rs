@@ -1,11 +1,11 @@
 //! Reader and parser for ISO 32000-1 §12.7 AcroForm dictionaries and field hierarchies.
 
-use std::collections::HashMap;
 use crate::cos::object::{ObjectId, PdfDictionary, PdfObject};
 use crate::cos::PdfDocument;
 use crate::error::PdfResult;
 use crate::forms::types::{FormField, FormFieldType};
 use crate::layout::geometry::Rect;
+use std::collections::HashMap;
 
 /// Extracts all interactive form fields from the document's `/AcroForm` catalog entry.
 pub fn extract_document_forms(doc: &mut PdfDocument) -> PdfResult<Vec<FormField>> {
@@ -137,7 +137,10 @@ fn extract_field_recursive(
     };
 
     // Check if this field has Kids
-    let kids = field_dict.get("Kids").and_then(|k| k.as_array()).map(|arr| arr.to_vec());
+    let kids = field_dict
+        .get("Kids")
+        .and_then(|k| k.as_array())
+        .map(|arr| arr.to_vec());
 
     // A field is non-terminal if it has Kids that are themselves fields (not just widget annotations)
     // In PDF, if a field has kids with /T, they are child fields. If kids have no /T, they are multiple widget instances of this field.
@@ -299,7 +302,8 @@ fn resolve_field_geometry_and_page(
 ) -> (Rect, usize, ObjectId) {
     // 1. Try finding /Rect directly on field
     if let Some(rect) = parse_rect(dict.get("Rect")) {
-        let (page_num, page_id) = resolve_page_for_dict(dict, field_id, page_id_to_num, annot_to_page, default_page);
+        let (page_num, page_id) =
+            resolve_page_for_dict(dict, field_id, page_id_to_num, annot_to_page, default_page);
         return (rect, page_num, page_id);
     }
 

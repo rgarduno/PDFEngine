@@ -17,15 +17,13 @@ pub mod limits;
 pub mod permissions;
 pub mod signatures;
 
+pub use cms::{cms_timestamp_request, embed_cms_timestamp, sign_document_cms, CmsSigningMaterial};
 pub use handler::{
     authenticate_document, decrypt_document, encrypt_document, EncryptionOptions,
     EncryptionRevision,
 };
 pub use limits::SecurityLimits;
 pub use permissions::PdfPermissions;
-pub use cms::{
-    cms_timestamp_request, embed_cms_timestamp, sign_document_cms, CmsSigningMaterial,
-};
 pub use signatures::{
     sign_document, verify_document_signatures, DigitalSignatureConfig, VerifiedSignature,
 };

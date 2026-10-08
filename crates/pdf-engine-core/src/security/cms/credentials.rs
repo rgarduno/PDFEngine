@@ -8,6 +8,7 @@
 use der::asn1::{ContextSpecific, OctetString};
 use der::{Any, Decode, Encode, TagNumber, Tagged};
 use hmac::{Hmac, Mac};
+use p256::pkcs8::DecodePrivateKey as DecodeP256Key;
 use pkcs12::kdf::Pkcs12KeyType;
 use pkcs12::pfx::{Pfx, Version};
 use pkcs12::safe_bag::SafeBag;
@@ -15,7 +16,6 @@ use pkcs12::{
     PKCS_12_CERT_BAG_OID, PKCS_12_KEY_BAG_OID, PKCS_12_PKCS8_KEY_BAG_OID,
     PKCS_12_SAFE_CONTENTS_BAG_OID, PKCS_12_X509_CERT_OID,
 };
-use p256::pkcs8::DecodePrivateKey as DecodeP256Key;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use rsa::RsaPrivateKey;
@@ -37,10 +37,12 @@ const MAX_BAGS: usize = 64;
 const MAX_PLAIN: usize = 256 * 1024;
 const MAX_KDF_ITERATIONS: i32 = 250_000;
 const MAX_SALT: usize = 64;
-const SHA1_OID: der::asn1::ObjectIdentifier = der::asn1::ObjectIdentifier::new_unwrap("1.3.14.3.2.26");
+const SHA1_OID: der::asn1::ObjectIdentifier =
+    der::asn1::ObjectIdentifier::new_unwrap("1.3.14.3.2.26");
 const RSA_OID: der::asn1::ObjectIdentifier =
     der::asn1::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
-const EC_OID: der::asn1::ObjectIdentifier = der::asn1::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+const EC_OID: der::asn1::ObjectIdentifier =
+    der::asn1::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 const P256_OID: der::asn1::ObjectIdentifier =
     der::asn1::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 
@@ -174,7 +176,9 @@ fn load_pkcs12(der: &[u8], password: &[u8]) -> PdfResult<Loaded> {
     if keys.len() > 1 {
         return Err(crypto("PKCS#12 contains more than one private key."));
     }
-    let key = keys.pop().ok_or_else(|| crypto("PKCS#12 does not contain a private key."))?;
+    let key = keys
+        .pop()
+        .ok_or_else(|| crypto("PKCS#12 does not contain a private key."))?;
     reject_weak_rsa(&key)?;
     let mut matched = None;
     let mut chain = Vec::new();
@@ -200,9 +204,13 @@ fn load_pkcs12(der: &[u8], password: &[u8]) -> PdfResult<Loaded> {
     Ok(Loaded { key, leaf, chain })
 }
 
-fn safe_contents(info: &::cms::content_info::ContentInfo, password: &[u8]) -> PdfResult<Vec<SafeBag>> {
+fn safe_contents(
+    info: &::cms::content_info::ContentInfo,
+    password: &[u8],
+) -> PdfResult<Vec<SafeBag>> {
     if info.content_type == const_oid::db::rfc5911::ID_DATA {
-        let octet = OctetString::from_der(&info.content.to_der().map_err(|_| open())?).map_err(|_| open())?;
+        let octet = OctetString::from_der(&info.content.to_der().map_err(|_| open())?)
+            .map_err(|_| open())?;
         return Vec::<SafeBag>::from_der(octet.as_bytes()).map_err(|_| open());
     }
     if info.content_type == const_oid::db::rfc5911::ID_ENCRYPTED_DATA {
@@ -316,7 +324,9 @@ fn reject_unsupported_scheme(scheme: &pkcs5::EncryptionScheme<'_>) -> PdfResult<
                 || kdf.iteration_count > MAX_KDF_ITERATIONS as u32
                 || kdf.salt.is_empty()
                 || kdf.salt.len() > MAX_SALT
-                || kdf.key_length.is_some_and(|len| len == 0 || usize::from(len) > MAX_SALT)
+                || kdf
+                    .key_length
+                    .is_some_and(|len| len == 0 || usize::from(len) > MAX_SALT)
             {
                 return Err(cipher());
             }
@@ -331,7 +341,11 @@ fn reject_unsupported_scheme(scheme: &pkcs5::EncryptionScheme<'_>) -> PdfResult<
     }
 }
 
-fn verify_mac(authenticated: &[u8], password: &str, mac: &pkcs12::mac_data::MacData) -> PdfResult<()> {
+fn verify_mac(
+    authenticated: &[u8],
+    password: &str,
+    mac: &pkcs12::mac_data::MacData,
+) -> PdfResult<()> {
     if mac.iterations < 1 || mac.iterations > MAX_KDF_ITERATIONS {
         return Err(open());
     }
@@ -342,8 +356,14 @@ fn verify_mac(authenticated: &[u8], password: &str, mac: &pkcs12::mac_data::MacD
     let digest = mac.mac.digest.as_bytes();
     if mac.mac.algorithm.oid == const_oid::db::rfc5912::ID_SHA_256 && digest.len() == 32 {
         let key = Zeroizing::new(
-            pkcs12::kdf::derive_key_utf8::<Sha256>(password, salt, Pkcs12KeyType::Mac, mac.iterations, 32)
-                .map_err(|_| open())?,
+            pkcs12::kdf::derive_key_utf8::<Sha256>(
+                password,
+                salt,
+                Pkcs12KeyType::Mac,
+                mac.iterations,
+                32,
+            )
+            .map_err(|_| open())?,
         );
         let mut hasher = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| open())?;
         hasher.update(authenticated);
@@ -352,8 +372,14 @@ fn verify_mac(authenticated: &[u8], password: &str, mac: &pkcs12::mac_data::MacD
     }
     if mac.mac.algorithm.oid == SHA1_OID && digest.len() == 20 {
         let key = Zeroizing::new(
-            pkcs12::kdf::derive_key_utf8::<Sha1>(password, salt, Pkcs12KeyType::Mac, mac.iterations, 20)
-                .map_err(|_| open())?,
+            pkcs12::kdf::derive_key_utf8::<Sha1>(
+                password,
+                salt,
+                Pkcs12KeyType::Mac,
+                mac.iterations,
+                20,
+            )
+            .map_err(|_| open())?,
         );
         let mut hasher = Hmac::<Sha1>::new_from_slice(&key).map_err(|_| open())?;
         hasher.update(authenticated);
@@ -386,7 +412,10 @@ fn push_chain(chain: &mut Vec<Certificate>, leaf_der: &[u8], extra: Certificate)
     if der.as_slice() == leaf_der {
         return Ok(());
     }
-    if chain.iter().any(|cert| cert.to_der().ok().as_deref() == Some(der.as_slice())) {
+    if chain
+        .iter()
+        .any(|cert| cert.to_der().ok().as_deref() == Some(der.as_slice()))
+    {
         return Ok(());
     }
     if chain.len() >= MAX_CHAIN {

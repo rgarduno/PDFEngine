@@ -43,7 +43,10 @@ fn test_pattern_detection_rfc_and_curp() {
 
     let curp_matches = find_curp(sample);
     assert_eq!(curp_matches.len(), 1);
-    assert_eq!(&sample[curp_matches[0].0..curp_matches[0].1], "GARM850101HDFRRN01");
+    assert_eq!(
+        &sample[curp_matches[0].0..curp_matches[0].1],
+        "GARM850101HDFRRN01"
+    );
 }
 
 #[test]
@@ -72,8 +75,7 @@ fn test_surgical_ast_redaction_text_purged() {
     // Define a redaction rectangle precisely over "123-45-6789"
     // glyphs for "123-45-6789" start around x=148 and end around x=214
     let redact_rect = Rect::new(145.0, 495.0, 216.0, 515.0);
-    let redaction = RedactionRect::new(redact_rect)
-        .with_overlay_text("[REDACTADO]", None);
+    let redaction = RedactionRect::new(redact_rect).with_overlay_text("[REDACTADO]", None);
 
     let summary = apply_redaction_to_ast(&mut ast, &[redaction], &metrics).unwrap();
 
@@ -85,7 +87,10 @@ fn test_surgical_ast_redaction_text_purged() {
     let output_str = String::from_utf8_lossy(&output_bytes);
 
     // CRITICAL ASSERTION: The sensitive string MUST NOT exist in output bytes!
-    assert!(!output_str.contains("123-45-6789"), "Sensitive text leaked in output bytes!");
+    assert!(
+        !output_str.contains("123-45-6789"),
+        "Sensitive text leaked in output bytes!"
+    );
 
     // Non-redacted text MUST be preserved!
     assert!(output_str.contains("(Secret: ) Tj") || output_str.contains("Secret:"));
@@ -117,7 +122,9 @@ fn create_test_pdf_with_email() -> Vec<u8> {
     // Object 4: Contents
     let offset4 = pdf.len();
     let stream_content = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Client Email: confidential@corp.com Verified) Tj\nET\n";
-    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", stream_content.len()).as_bytes());
+    pdf.extend_from_slice(
+        format!("4 0 obj\n<< /Length {} >>\nstream\n", stream_content.len()).as_bytes(),
+    );
     pdf.extend_from_slice(stream_content);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
 
@@ -129,9 +136,7 @@ fn create_test_pdf_with_email() -> Vec<u8> {
 
     // Object 6: Info
     let offset6 = pdf.len();
-    pdf.extend_from_slice(
-        b"6 0 obj\n<< /Author (Secret Agent) /Title (Classified) >>\nendobj\n",
-    );
+    pdf.extend_from_slice(b"6 0 obj\n<< /Author (Secret Agent) /Title (Classified) >>\nendobj\n");
 
     let xref_offset = pdf.len();
     pdf.extend_from_slice(b"xref\n0 7\n");
@@ -160,7 +165,8 @@ fn test_full_document_redaction_workflow() {
     config.scrub_metadata = true;
     config.prune_annotations = true;
 
-    let summaries = redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &config).unwrap();
+    let summaries =
+        redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &config).unwrap();
 
     assert_eq!(summaries.len(), 1);
     assert!(summaries[0].purged_glyphs_count > 0);
@@ -180,12 +186,20 @@ fn test_full_document_redaction_workflow() {
     }
 
     // Verify metadata was scrubbed
-    let info_id = doc.xref.trailer.get("Info").and_then(|i| i.as_reference()).unwrap();
+    let info_id = doc
+        .xref
+        .trailer
+        .get("Info")
+        .and_then(|i| i.as_reference())
+        .unwrap();
     let updated_info = doc.get_object(info_id).unwrap().as_dict().unwrap().clone();
     assert!(!updated_info.contains_key("Author"));
     assert!(!updated_info.contains_key("Title"));
     assert_eq!(
-        updated_info.get("Producer").and_then(|p| p.as_string()).map(|s| s.to_string_lossy()),
+        updated_info
+            .get("Producer")
+            .and_then(|p| p.as_string())
+            .map(|s| s.to_string_lossy()),
         Some("PDFEngine Sanitizer".to_string())
     );
 }

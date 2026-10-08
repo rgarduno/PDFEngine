@@ -3,8 +3,8 @@
 //! Extracts glyph metrics, bounding boxes, and Unicode-to-GlyphID character mappings
 //! from embedded `head`, `hhea`, `hmtx`, and `cmap` tables.
 
-use std::collections::BTreeMap;
 use crate::error::{PdfError, PdfResult};
+use std::collections::BTreeMap;
 
 /// Represents an offset and length slice of an SFNT table within a font binary.
 #[derive(Debug, Clone, Copy)]
@@ -62,7 +62,13 @@ impl SfntFont {
                 font_data[offset + 15],
             ]) as usize;
 
-            tables.insert(tag, TableRecord { offset: tbl_offset, length: tbl_len });
+            tables.insert(
+                tag,
+                TableRecord {
+                    offset: tbl_offset,
+                    length: tbl_len,
+                },
+            );
             offset += 16;
         }
 
@@ -71,10 +77,8 @@ impl SfntFont {
         if let Some(head) = tables.get(b"head") {
             if head.offset + 54 <= font_data.len() {
                 // unitsPerEm is at offset 18 within head table
-                units_per_em = u16::from_be_bytes([
-                    font_data[head.offset + 18],
-                    font_data[head.offset + 19],
-                ]);
+                units_per_em =
+                    u16::from_be_bytes([font_data[head.offset + 18], font_data[head.offset + 19]]);
             }
         }
 
@@ -83,10 +87,8 @@ impl SfntFont {
         if let Some(hhea) = tables.get(b"hhea") {
             if hhea.offset + 36 <= font_data.len() {
                 // numberOfHMetrics is at offset 34 within hhea table
-                num_h_metrics = u16::from_be_bytes([
-                    font_data[hhea.offset + 34],
-                    font_data[hhea.offset + 35],
-                ]);
+                num_h_metrics =
+                    u16::from_be_bytes([font_data[hhea.offset + 34], font_data[hhea.offset + 35]]);
             }
         }
 

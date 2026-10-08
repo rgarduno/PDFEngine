@@ -21,18 +21,19 @@ pub fn add_text_markup(
     contents: Option<&str>,
 ) -> PdfResult<ObjectId> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     // Determine colors and opacities according to subtype defaults
     let (default_color, default_opacity) = match subtype {
         AnnotationSubtype::Highlight => ([1.0, 0.92, 0.23], 0.45), // Classic highlighter yellow
-        AnnotationSubtype::Underline => ([0.15, 0.45, 0.90], 1.0),  // Crisp blue
-        AnnotationSubtype::StrikeOut => ([0.85, 0.15, 0.15], 1.0),  // Clear red
+        AnnotationSubtype::Underline => ([0.15, 0.45, 0.90], 1.0), // Crisp blue
+        AnnotationSubtype::StrikeOut => ([0.85, 0.15, 0.15], 1.0), // Clear red
         _ => ([1.0, 1.0, 0.0], 0.5),
     };
 
@@ -122,7 +123,10 @@ pub fn add_text_markup(
     annot_dict.insert("P", PdfObject::Reference(page_id));
 
     if let Some(txt) = contents {
-        annot_dict.insert("Contents", PdfObject::String(PdfString::literal(txt.as_bytes())));
+        annot_dict.insert(
+            "Contents",
+            PdfObject::String(PdfString::literal(txt.as_bytes())),
+        );
     }
 
     let mut ap_sub_dict = PdfDictionary::new();
@@ -166,20 +170,29 @@ fn build_markup_appearance_stream(
     match subtype {
         AnnotationSubtype::Highlight => {
             // Filled rectangle
-            ops.push_str(&format!("{:.3} {:.3} {:.3} rg\n", color[0], color[1], color[2]));
+            ops.push_str(&format!(
+                "{:.3} {:.3} {:.3} rg\n",
+                color[0], color[1], color[2]
+            ));
             ops.push_str(&format!("0 0 {:.2} {:.2} re\n", width, height));
             ops.push_str("f\n");
         }
         AnnotationSubtype::Underline => {
             // Line along bottom edge
-            ops.push_str(&format!("{:.3} {:.3} {:.3} RG\n", color[0], color[1], color[2]));
+            ops.push_str(&format!(
+                "{:.3} {:.3} {:.3} RG\n",
+                color[0], color[1], color[2]
+            ));
             ops.push_str("1.5 w\n");
             ops.push_str(&format!("0 1 m {:.2} 1 l S\n", width));
         }
         AnnotationSubtype::StrikeOut => {
             // Line centered vertically
             let y_mid = height / 2.0;
-            ops.push_str(&format!("{:.3} {:.3} {:.3} RG\n", color[0], color[1], color[2]));
+            ops.push_str(&format!(
+                "{:.3} {:.3} {:.3} RG\n",
+                color[0], color[1], color[2]
+            ));
             ops.push_str("1.5 w\n");
             ops.push_str(&format!("0 {:.2} m {:.2} {:.2} l S\n", y_mid, width, y_mid));
         }

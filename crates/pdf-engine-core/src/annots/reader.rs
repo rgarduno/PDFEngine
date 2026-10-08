@@ -12,12 +12,13 @@ pub fn extract_page_annotations(
     page_index: usize,
 ) -> PdfResult<Vec<Annotation>> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     let page_obj = doc.get_object(page_id)?;
     let page_dict = match page_obj {
@@ -80,14 +81,13 @@ pub fn extract_page_annotations(
         });
 
         // Parse Opacity /CA
-        let opacity = annot_dict
-            .get("CA")
-            .and_then(|ca| ca.as_f64())
-            .unwrap_or(if subtype == AnnotationSubtype::Highlight {
+        let opacity = annot_dict.get("CA").and_then(|ca| ca.as_f64()).unwrap_or(
+            if subtype == AnnotationSubtype::Highlight {
                 0.4
             } else {
                 1.0
-            });
+            },
+        );
 
         // Parse Contents /Contents
         let contents = annot_dict.get("Contents").and_then(|c| match c {
@@ -177,7 +177,10 @@ fn border_width_of(dict: &PdfDictionary) -> f64 {
         PdfObject::Dictionary(inner) => inner,
         _ => return 1.0,
     };
-    style.get("W").and_then(|width| width.as_f64()).unwrap_or(1.0)
+    style
+        .get("W")
+        .and_then(|width| width.as_f64())
+        .unwrap_or(1.0)
 }
 
 fn pair_list(obj: &PdfObject) -> Vec<[f64; 2]> {

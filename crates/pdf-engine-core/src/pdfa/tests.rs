@@ -5,7 +5,9 @@
 //! this crate writes.
 
 use crate::annots::{add_shape, ShapeKind, ShapeStyle};
-use crate::cos::{decode_stream, ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, XRefEntry};
+use crate::cos::{
+    decode_stream, ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, XRefEntry,
+};
 use crate::error::PdfError;
 
 use super::face::{build_face, font_checksum, glyph_outline, table_length};
@@ -34,7 +36,10 @@ fn one_page() -> PdfDocument {
         PdfObject::Dictionary(dict) => dict,
         _ => panic!("pages root"),
     };
-    pages.insert("Kids", PdfObject::Array(vec![PdfObject::Reference(page_id)]));
+    pages.insert(
+        "Kids",
+        PdfObject::Array(vec![PdfObject::Reference(page_id)]),
+    );
     pages.insert("Count", 1i64);
     doc.set_object(pages_id, PdfObject::Dictionary(pages));
     doc
@@ -122,14 +127,14 @@ fn assert_forced_opaque(object: &PdfObject) {
 fn check_opaque_dict(dict: &PdfDictionary) {
     for key in ["ca", "CA"] {
         if let Some(value) = dict.get(key).and_then(|item| item.as_f64()) {
-            assert!(
-                (value - 1.0).abs() <= 0.001,
-                "{key} stayed at {value}"
-            );
+            assert!((value - 1.0).abs() <= 0.001, "{key} stayed at {value}");
         }
     }
     if dict.contains_key("BM") {
-        assert_eq!(dict.get("BM").and_then(|item| item.as_name()), Some("Normal"));
+        assert_eq!(
+            dict.get("BM").and_then(|item| item.as_name()),
+            Some("Normal")
+        );
     }
     assert!(dict.get("SMask").is_none());
     for (_, value) in dict.iter() {
@@ -259,8 +264,13 @@ fn courier_width_is_kept_and_archive_markers_round_trip() {
     let widths = true_type_widths(&doc);
     assert_eq!(widths.len(), 224);
     assert_eq!(widths[33], 777);
-    assert!(widths.iter().enumerate().all(|(index, width)| index == 33 || *width == 600));
-    assert!(validate_pdfa(&mut doc, PdfALevel::A1b).expect("issues").is_empty());
+    assert!(widths
+        .iter()
+        .enumerate()
+        .all(|(index, width)| index == 33 || *width == 600));
+    assert!(validate_pdfa(&mut doc, PdfALevel::A1b)
+        .expect("issues")
+        .is_empty());
 
     let bytes = doc.save_to_vec().expect("save");
     let text = String::from_utf8_lossy(&bytes);
@@ -278,7 +288,9 @@ fn courier_width_is_kept_and_archive_markers_round_trip() {
     assert_eq!(font_checksum(&program), 0xB1B0AFBA);
     let letter_a = glyph_outline(&program, 34).expect("reloaded A");
     assert!(letter_a.contours > 0);
-    assert!(validate_pdfa(&mut reloaded, PdfALevel::A1b).expect("reloaded issues").is_empty());
+    assert!(validate_pdfa(&mut reloaded, PdfALevel::A1b)
+        .expect("reloaded issues")
+        .is_empty());
 }
 
 #[test]
@@ -352,7 +364,10 @@ fn custom_encoding_is_refused() {
     let before_mac = mac.catalog().expect("catalog");
     put_font(
         &mut mac,
-        simple_font("Helvetica", PdfObject::Name(PdfName::new("MacRomanEncoding"))),
+        simple_font(
+            "Helvetica",
+            PdfObject::Name(PdfName::new("MacRomanEncoding")),
+        ),
     );
     let error = convert_to_pdfa(&mut mac, PdfALevel::A1b).expect_err("mac");
     assert!(error_text(error).contains("A custom font encoding cannot be archived."));
@@ -435,5 +450,7 @@ fn missing_appearance_is_refused_and_a_link_receives_one() {
     convert_to_pdfa(&mut links, PdfALevel::A2b).expect("links");
     let streams = link_streams(&links);
     assert!(streams.iter().any(|content| content == "q\nQ\n"));
-    assert!(streams.iter().any(|content| content.contains(" re\n") && content.contains(" RG\n") && content.contains("\nS\n")));
+    assert!(streams.iter().any(|content| content.contains(" re\n")
+        && content.contains(" RG\n")
+        && content.contains("\nS\n")));
 }

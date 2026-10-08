@@ -18,12 +18,13 @@ pub fn normalize_rotation(degrees: i32) -> i32 {
 /// Resolves inheritance from the `/Pages` tree if not specified directly on the page dictionary.
 pub fn get_page_rotation(doc: &mut PdfDocument, page_index: usize) -> PdfResult<i32> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     let page_obj = doc.get_object(page_id)?;
     if let PdfObject::Dictionary(dict) = page_obj {
@@ -56,12 +57,13 @@ pub fn set_page_rotation(
 ) -> PdfResult<i32> {
     let canonical = normalize_rotation(rotation);
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     let page_obj = doc.get_object(page_id)?;
     let mut page_dict = match page_obj {
@@ -83,11 +85,7 @@ pub fn set_page_rotation(
 }
 
 /// Rotates a page relatively by adding `delta_degrees` (e.g. +90 or -90 clockwise).
-pub fn rotate_page(
-    doc: &mut PdfDocument,
-    page_index: usize,
-    delta_degrees: i32,
-) -> PdfResult<i32> {
+pub fn rotate_page(doc: &mut PdfDocument, page_index: usize, delta_degrees: i32) -> PdfResult<i32> {
     let current = get_page_rotation(doc, page_index)?;
     let new_rotation = normalize_rotation(current + delta_degrees);
     set_page_rotation(doc, page_index, new_rotation)

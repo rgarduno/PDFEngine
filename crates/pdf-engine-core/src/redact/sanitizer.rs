@@ -18,12 +18,13 @@ pub fn redact_page(
     config: &RedactionConfig,
 ) -> PdfResult<RedactionSummary> {
     let pages = doc.get_pages()?;
-    let page_id = pages.get(page_index).copied().ok_or_else(|| {
-        PdfError::InvalidPageNumber {
+    let page_id = pages
+        .get(page_index)
+        .copied()
+        .ok_or_else(|| PdfError::InvalidPageNumber {
             page: page_index + 1,
             total: pages.len(),
-        }
-    })?;
+        })?;
 
     if redactions.is_empty() {
         return Ok(RedactionSummary {
@@ -143,8 +144,11 @@ pub fn redact_document_pattern(
         let redactions: Vec<RedactionRect> = detected_boxes
             .into_iter()
             .map(|rect| {
-                let mut r = RedactionRect::new(rect)
-                    .with_fill_color(config.fill_color[0], config.fill_color[1], config.fill_color[2]);
+                let mut r = RedactionRect::new(rect).with_fill_color(
+                    config.fill_color[0],
+                    config.fill_color[1],
+                    config.fill_color[2],
+                );
                 if let Some(ref text) = config.overlay_text {
                     r = r.with_overlay_text(text, Some(config.text_color));
                 }
@@ -176,8 +180,11 @@ pub fn redact_document_rectangles(
     let redactions: Vec<RedactionRect> = rects
         .iter()
         .map(|&rect| {
-            let mut r = RedactionRect::new(rect)
-                .with_fill_color(config.fill_color[0], config.fill_color[1], config.fill_color[2]);
+            let mut r = RedactionRect::new(rect).with_fill_color(
+                config.fill_color[0],
+                config.fill_color[1],
+                config.fill_color[2],
+            );
             if let Some(ref text) = config.overlay_text {
                 r = r.with_overlay_text(text, Some(config.text_color));
             }
@@ -223,7 +230,10 @@ pub fn prune_page_annotations(
 
     for annot_id in annot_refs {
         if let Ok(PdfObject::Dictionary(annot_dict)) = doc.get_object(annot_id) {
-            let subtype = annot_dict.get("Subtype").and_then(|s| s.as_name()).unwrap_or("");
+            let subtype = annot_dict
+                .get("Subtype")
+                .and_then(|s| s.as_name())
+                .unwrap_or("");
 
             // Always remove /Redact annotations
             if subtype == "Redact" {

@@ -43,10 +43,7 @@ pub enum ContentNode {
         children: Vec<ContentNode>,
     },
     /// Standalone path, color, or XObject operator outside text blocks.
-    Instruction {
-        id: NodeId,
-        operation: Operation,
-    },
+    Instruction { id: NodeId, operation: Operation },
 }
 
 /// A parsed content stream tree representing the entire visual display list of a page.

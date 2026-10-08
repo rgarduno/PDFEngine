@@ -40,10 +40,18 @@ impl RedactionRect {
     }
 
     /// Sets the overlay text and its color.
-    pub fn with_overlay_text(mut self, text: impl Into<String>, text_color: Option<[f64; 3]>) -> Self {
+    pub fn with_overlay_text(
+        mut self,
+        text: impl Into<String>,
+        text_color: Option<[f64; 3]>,
+    ) -> Self {
         self.overlay_text = Some(text.into());
         if let Some(c) = text_color {
-            self.text_color = [c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0)];
+            self.text_color = [
+                c[0].clamp(0.0, 1.0),
+                c[1].clamp(0.0, 1.0),
+                c[2].clamp(0.0, 1.0),
+            ];
         }
         self
     }
@@ -71,10 +79,7 @@ pub enum RedactionPattern {
     /// Mexican CURP (Unique Population Registry Code, 18 chars).
     Curp,
     /// Exact substring match with optional case sensitivity.
-    Text {
-        query: String,
-        case_sensitive: bool,
-    },
+    Text { query: String, case_sensitive: bool },
 }
 
 impl RedactionPattern {
@@ -87,12 +92,10 @@ impl RedactionPattern {
             "credit_card" | "tarjeta" | "card" => Some(Self::CreditCard),
             "rfc" => Some(Self::Rfc),
             "curp" => Some(Self::Curp),
-            "text" | "string" | "query" => {
-                custom_query.map(|q| Self::Text {
-                    query: q.to_string(),
-                    case_sensitive,
-                })
-            }
+            "text" | "string" | "query" => custom_query.map(|q| Self::Text {
+                query: q.to_string(),
+                case_sensitive,
+            }),
             _ => None,
         }
     }

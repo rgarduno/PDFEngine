@@ -2,7 +2,9 @@
 
 use crate::cos::PdfDocument;
 use crate::error::PdfResult;
-use crate::watermark::helpers::{append_content_ops, ensure_font_resource, escape_pdf, get_page_mediabox};
+use crate::watermark::helpers::{
+    append_content_ops, ensure_font_resource, escape_pdf, get_page_mediabox,
+};
 use crate::watermark::types::{PaginationConfig, PaginationPosition};
 
 /// Injects dynamic headers, footers, or page numbers across target document pages.
@@ -63,9 +65,7 @@ pub fn apply_pagination(doc: &mut PdfDocument, config: &PaginationConfig) -> Pdf
         let est_text_width = formatted.len() as f64 * est_char_width;
 
         let x = match config.position {
-            PaginationPosition::TopLeft | PaginationPosition::BottomLeft => {
-                bbox.min_x + margin
-            }
+            PaginationPosition::TopLeft | PaginationPosition::BottomLeft => bbox.min_x + margin,
             PaginationPosition::TopCenter | PaginationPosition::BottomCenter => {
                 bbox.min_x + ((bbox.width() - est_text_width) / 2.0).max(margin)
             }
@@ -75,12 +75,12 @@ pub fn apply_pagination(doc: &mut PdfDocument, config: &PaginationConfig) -> Pdf
         };
 
         let y = match config.position {
-            PaginationPosition::TopLeft | PaginationPosition::TopCenter | PaginationPosition::TopRight => {
-                bbox.max_y - margin - font_size
-            }
-            PaginationPosition::BottomLeft | PaginationPosition::BottomCenter | PaginationPosition::BottomRight => {
-                bbox.min_y + margin
-            }
+            PaginationPosition::TopLeft
+            | PaginationPosition::TopCenter
+            | PaginationPosition::TopRight => bbox.max_y - margin - font_size,
+            PaginationPosition::BottomLeft
+            | PaginationPosition::BottomCenter
+            | PaginationPosition::BottomRight => bbox.min_y + margin,
         };
 
         // 4. Synthesize graphics content operations
@@ -90,9 +90,12 @@ pub fn apply_pagination(doc: &mut PdfDocument, config: &PaginationConfig) -> Pdf
 
         let ops = format!(
             "\nq\n{:.3} {:.3} {:.3} rg\nBT\n/F_PAG {:.2} Tf\n{:.2} {:.2} Td\n({}) Tj\nET\nQ\n",
-            r, g, b,
+            r,
+            g,
+            b,
             font_size,
-            x, y,
+            x,
+            y,
             escape_pdf(&formatted)
         );
 

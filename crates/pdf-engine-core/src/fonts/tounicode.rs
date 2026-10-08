@@ -3,8 +3,8 @@
 //! Provides two-way translation between raw PDF character codes / CIDs and canonical Unicode strings.
 //! Accurately decodes `beginbfchar ... endbfchar` and `beginbfrange ... endbfrange` blocks.
 
-use std::collections::BTreeMap;
 use crate::error::PdfResult;
+use std::collections::BTreeMap;
 
 /// Bidirectional mapping between PDF character codes and Unicode text.
 #[derive(Debug, Clone, Default, PartialEq)]

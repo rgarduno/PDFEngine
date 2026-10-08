@@ -109,10 +109,10 @@ mod tests {
         // SOF0 marker: length=11, precision=8, height=480, width=640, components=3
         jpeg.extend_from_slice(&[0xFF, 0xC0]);
         jpeg.extend_from_slice(&8u16.to_be_bytes()); // length = 8
-        jpeg.push(8);                                // 8 bits precision
+        jpeg.push(8); // 8 bits precision
         jpeg.extend_from_slice(&480u16.to_be_bytes());
         jpeg.extend_from_slice(&640u16.to_be_bytes());
-        jpeg.push(3);                                // 3 components (RGB)
+        jpeg.push(3); // 3 components (RGB)
 
         jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
 

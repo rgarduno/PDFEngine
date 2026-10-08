@@ -52,7 +52,11 @@ impl SecurityLimits {
     /// # Arguments
     /// * `compressed_size` - Size in bytes of the compressed stream source.
     /// * `decompressed_size` - Size in bytes of the expanded stream output.
-    pub fn validate_decompression(&self, compressed_size: usize, decompressed_size: usize) -> PdfResult<()> {
+    pub fn validate_decompression(
+        &self,
+        compressed_size: usize,
+        decompressed_size: usize,
+    ) -> PdfResult<()> {
         if decompressed_size > self.max_stream_decompressed_bytes {
             return Err(PdfError::SecurityLimitExceeded(format!(
                 "Decompressed stream size ({} bytes) exceeds maximum allowable limit ({} bytes)",
@@ -113,7 +117,9 @@ mod tests {
     #[test]
     fn small_stream_may_exceed_the_ratio_under_one_mebibyte() {
         let limits = SecurityLimits::default();
-        limits.validate_decompression(100, 50 * 1024).expect("50 KiB from 100 bytes");
+        limits
+            .validate_decompression(100, 50 * 1024)
+            .expect("50 KiB from 100 bytes");
         limits
             .validate_decompression(SMALL_STREAM_BYTES, SMALL_STREAM_OUTPUT_FLOOR)
             .expect("the floor itself is still accepted");
@@ -149,7 +155,10 @@ mod tests {
             .validate_decompression(compressed, compressed * limits.max_decompression_ratio)
             .expect("the ratio boundary is accepted");
         let err = limits
-            .validate_decompression(compressed, compressed * (limits.max_decompression_ratio + 1))
+            .validate_decompression(
+                compressed,
+                compressed * (limits.max_decompression_ratio + 1),
+            )
             .expect_err("one step past the ratio is rejected");
         assert!(matches!(err, PdfError::SecurityLimitExceeded(_)));
     }

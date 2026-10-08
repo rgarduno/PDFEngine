@@ -4,10 +4,10 @@
 //! `ASCIIHexDecode`, and `ASCII85Decode`.
 //! All decoders enforce bounded memory allocation to prevent decompression bomb attacks.
 
-use std::io::{Read, Write};
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 pub use flate2::Compression;
+use std::io::{Read, Write};
 
 use crate::cos::object::PdfDictionary;
 use crate::error::{PdfError, PdfResult};
@@ -104,10 +104,12 @@ fn predictor_dimension(params: &PdfDictionary, key: &str, default: i64) -> PdfRe
             message: format!("Predictor /{} must be positive", key),
         });
     }
-    usize::try_from(value).map_err(|_| PdfError::SecurityLimitExceeded(format!(
-        "Predictor /{} exceeds the decompression ceiling",
-        key
-    )))
+    usize::try_from(value).map_err(|_| {
+        PdfError::SecurityLimitExceeded(format!(
+            "Predictor /{} exceeds the decompression ceiling",
+            key
+        ))
+    })
 }
 
 /// Applies PNG or TIFF predictor reconstruction (ISO 32000-1 §7.4.4.4).
@@ -121,11 +123,11 @@ fn apply_predictor(
 ) -> PdfResult<Vec<u8>> {
     let pixel_bits = colors
         .checked_mul(bits_per_component)
-        .ok_or_else(|| predictor_overflow())?;
+        .ok_or_else(predictor_overflow)?;
     let bytes_per_pixel = pixel_bits.saturating_add(7) / 8;
     let row_bits = columns
         .checked_mul(pixel_bits)
-        .ok_or_else(|| predictor_overflow())?;
+        .ok_or_else(predictor_overflow)?;
     let row_len = row_bits.saturating_add(7) / 8;
     if row_len == 0 || bytes_per_pixel == 0 {
         return Err(PdfError::DecompressionError {
@@ -176,9 +178,9 @@ fn apply_predictor(
                 };
 
                 let val = match filter_type {
-                    0 => raw_row[i],                                     // PNG None
-                    1 => raw_row[i].wrapping_add(left),                  // PNG Sub
-                    2 => raw_row[i].wrapping_add(up),                    // PNG Up
+                    0 => raw_row[i],                                                     // PNG None
+                    1 => raw_row[i].wrapping_add(left),                                  // PNG Sub
+                    2 => raw_row[i].wrapping_add(up),                                    // PNG Up
                     3 => raw_row[i].wrapping_add(((left as u16 + up as u16) / 2) as u8), // PNG Average
                     4 => raw_row[i].wrapping_add(paeth_predictor(left, up, up_left)), // PNG Paeth
                     _ => {

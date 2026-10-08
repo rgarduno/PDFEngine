@@ -3,9 +3,9 @@
 //! Preserves object graph topology, prevents cycles, deduplicates shared resources
 //! (fonts, images, color spaces), and re-parents pages to the destination document.
 
-use std::collections::{HashMap, HashSet};
 use crate::cos::{ObjectId, PdfDictionary, PdfDocument, PdfObject, PdfStream};
 use crate::error::{PdfError, PdfResult};
+use std::collections::{HashMap, HashSet};
 
 /// Manages transitive object graph cloning between a source and destination `PdfDocument`.
 pub struct ObjectCloner {
@@ -179,7 +179,8 @@ impl ObjectCloner {
                 self.id_map.insert(*src_id, dest_id);
 
                 let src_referenced_obj = src_doc.get_object(*src_id)?;
-                let cloned_referenced_obj = self.clone_object(&src_referenced_obj, src_doc, dest_doc)?;
+                let cloned_referenced_obj =
+                    self.clone_object(&src_referenced_obj, src_doc, dest_doc)?;
 
                 dest_doc.set_object(dest_id, cloned_referenced_obj);
                 self.active_stack.remove(src_id);

@@ -149,9 +149,8 @@ pub fn apply_redaction_to_ast(
         for line in paragraph.lines {
             for span in line.spans {
                 for glyph in span.glyphs {
-                    let intersects_redaction = redactions
-                        .iter()
-                        .any(|r| r.rect.intersects(&glyph.bbox));
+                    let intersects_redaction =
+                        redactions.iter().any(|r| r.rect.intersects(&glyph.bbox));
 
                     let is_redacted = intersects_redaction;
                     if is_redacted {
@@ -159,10 +158,11 @@ pub fn apply_redaction_to_ast(
                         dirty_node_ids.insert(glyph.ast_node_id);
                     }
 
-                    node_glyphs
-                        .entry(glyph.ast_node_id)
-                        .or_default()
-                        .push((global_glyph_idx, glyph, is_redacted));
+                    node_glyphs.entry(glyph.ast_node_id).or_default().push((
+                        global_glyph_idx,
+                        glyph,
+                        is_redacted,
+                    ));
 
                     global_glyph_idx += 1;
                 }
@@ -203,8 +203,10 @@ fn synthesize_redacted_text_operations(
     glyphs: &[(usize, PositionedGlyph, bool)],
 ) -> Vec<Operation> {
     // Collect non-redacted glyphs
-    let kept_glyphs: Vec<&(usize, PositionedGlyph, bool)> =
-        glyphs.iter().filter(|(_, _, is_redacted)| !*is_redacted).collect();
+    let kept_glyphs: Vec<&(usize, PositionedGlyph, bool)> = glyphs
+        .iter()
+        .filter(|(_, _, is_redacted)| !*is_redacted)
+        .collect();
 
     if kept_glyphs.is_empty() {
         // Entire block was redacted: emit empty BT ... ET
@@ -356,9 +358,7 @@ fn synthesize_blackout_patch(group_id: NodeId, red: &RedactionRect) -> ContentNo
     // 5. Draw overlay text if specified
     if let Some(ref label) = red.overlay_text {
         if !label.is_empty() {
-            let font_size = red.font_size.unwrap_or_else(|| {
-                (h * 0.65).clamp(6.0, 11.0)
-            });
+            let font_size = red.font_size.unwrap_or_else(|| (h * 0.65).clamp(6.0, 11.0));
 
             // Center calculation
             let approx_width = (label.len() as f64) * font_size * 0.52;
@@ -416,7 +416,11 @@ fn synthesize_blackout_patch(group_id: NodeId, red: &RedactionRect) -> ContentNo
 }
 
 /// Recursively replaces a node by `NodeId` within the AST node tree.
-fn replace_ast_node(nodes: &mut [ContentNode], target_id: NodeId, replacement: ContentNode) -> bool {
+fn replace_ast_node(
+    nodes: &mut [ContentNode],
+    target_id: NodeId,
+    replacement: ContentNode,
+) -> bool {
     for node in nodes.iter_mut() {
         match node {
             ContentNode::TextBlock { id, .. } => {

@@ -20,8 +20,8 @@ pub use types::{FormField, FormFieldType};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::cos::PdfDocument;
+    use std::collections::HashMap;
 
     /// Constructs a valid minimal PDF with an AcroForm containing text, checkbox, and choice fields.
     fn create_test_acroform_pdf() -> Vec<u8> {
@@ -30,7 +30,9 @@ mod tests {
 
         // Object 1: Catalog
         let offset1 = pdf.len();
-        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>\nendobj\n");
+        pdf.extend_from_slice(
+            b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>\nendobj\n",
+        );
 
         // Object 2: Pages
         let offset2 = pdf.len();
@@ -100,18 +102,27 @@ mod tests {
         let fields = extract_document_forms(&mut doc).expect("Failed to extract forms");
         assert_eq!(fields.len(), 3);
 
-        let text_field = fields.iter().find(|f| f.name == "CustomerName").expect("CustomerName not found");
+        let text_field = fields
+            .iter()
+            .find(|f| f.name == "CustomerName")
+            .expect("CustomerName not found");
         assert_eq!(text_field.field_type, FormFieldType::Text);
         assert_eq!(text_field.value, "Initial Name");
         assert_eq!(text_field.page_number, 1);
         assert_eq!(text_field.rect.min_x, 72.0);
         assert_eq!(text_field.rect.min_y, 650.0);
 
-        let check_field = fields.iter().find(|f| f.name == "AcceptTerms").expect("AcceptTerms not found");
+        let check_field = fields
+            .iter()
+            .find(|f| f.name == "AcceptTerms")
+            .expect("AcceptTerms not found");
         assert_eq!(check_field.field_type, FormFieldType::Checkbox);
         assert!(!check_field.is_checked());
 
-        let choice_field = fields.iter().find(|f| f.name == "Country").expect("Country not found");
+        let choice_field = fields
+            .iter()
+            .find(|f| f.name == "Country")
+            .expect("Country not found");
         assert_eq!(choice_field.field_type, FormFieldType::Choice);
         assert_eq!(choice_field.value, "Mexico");
         assert_eq!(choice_field.options, vec!["USA", "Mexico", "Canada"]);
@@ -132,11 +143,18 @@ mod tests {
         assert_eq!(updated_count, 3);
 
         // Verify values were updated in the AST
-        let fields_after_fill = extract_document_forms(&mut doc).expect("Failed to re-extract forms");
-        let name_field = fields_after_fill.iter().find(|f| f.name == "CustomerName").unwrap();
+        let fields_after_fill =
+            extract_document_forms(&mut doc).expect("Failed to re-extract forms");
+        let name_field = fields_after_fill
+            .iter()
+            .find(|f| f.name == "CustomerName")
+            .unwrap();
         assert_eq!(name_field.value, "Acme Corporation");
 
-        let terms_field = fields_after_fill.iter().find(|f| f.name == "AcceptTerms").unwrap();
+        let terms_field = fields_after_fill
+            .iter()
+            .find(|f| f.name == "AcceptTerms")
+            .unwrap();
         assert!(terms_field.is_checked());
 
         // 2. Flatten document forms
@@ -154,7 +172,9 @@ mod tests {
         assert!(!page_dict.contains_key("Annots"));
 
         // Verify page contents now contains the burned text
-        let content_bytes = doc.get_page_content_bytes(page_ids[0]).expect("Failed to get page content");
+        let content_bytes = doc
+            .get_page_content_bytes(page_ids[0])
+            .expect("Failed to get page content");
         let content_str = String::from_utf8_lossy(&content_bytes);
         assert!(content_str.contains("Acme Corporation"));
         assert!(content_str.contains("Flattened AcroForm Fields"));
@@ -174,7 +194,9 @@ mod tests {
         let off3 = pdf.len();
         pdf.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
         let off4 = pdf.len();
-        pdf.extend_from_slice(b"4 0 obj\n<< /Length 12 >>\nstream\nq\n(Blank) Tj\nQ\nendstream\nendobj\n");
+        pdf.extend_from_slice(
+            b"4 0 obj\n<< /Length 12 >>\nstream\nq\n(Blank) Tj\nQ\nendstream\nendobj\n",
+        );
 
         let xref_off = pdf.len();
         pdf.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
@@ -202,7 +224,8 @@ mod tests {
             max_length: Some(100),
             font_size: Some(11.0),
         };
-        let created_text = create_form_field(&mut doc, 1, &text_opts).expect("Failed to create text field");
+        let created_text =
+            create_form_field(&mut doc, 1, &text_opts).expect("Failed to create text field");
         assert_eq!(created_text.name, "UserEmail");
         assert_eq!(created_text.value, "dev@example.com");
         assert!(created_text.is_required);
@@ -222,7 +245,8 @@ mod tests {
             max_length: None,
             font_size: None,
         };
-        let created_check = create_form_field(&mut doc, 1, &check_opts).expect("Failed to create checkbox");
+        let created_check =
+            create_form_field(&mut doc, 1, &check_opts).expect("Failed to create checkbox");
         assert!(created_check.is_checked());
 
         // 3. Create a Choice dropdown field
@@ -233,14 +257,19 @@ mod tests {
             value: Some("Engineering".to_string()),
             default_value: None,
             alt_name: Some("Work department".to_string()),
-            options: Some(vec!["Sales".to_string(), "Engineering".to_string(), "Legal".to_string()]),
+            options: Some(vec![
+                "Sales".to_string(),
+                "Engineering".to_string(),
+                "Legal".to_string(),
+            ]),
             is_read_only: false,
             is_required: false,
             is_multiline: false,
             max_length: None,
             font_size: Some(10.0),
         };
-        let created_choice = create_form_field(&mut doc, 1, &choice_opts).expect("Failed to create choice field");
+        let created_choice =
+            create_form_field(&mut doc, 1, &choice_opts).expect("Failed to create choice field");
         assert_eq!(created_choice.options.len(), 3);
         assert_eq!(created_choice.value, "Engineering");
 
@@ -265,7 +294,8 @@ mod tests {
         assert!(!updated.is_required);
 
         // 6. Delete a field
-        let deleted = delete_form_field(&mut doc, "OptInNewsletter").expect("Failed to delete field");
+        let deleted =
+            delete_form_field(&mut doc, "OptInNewsletter").expect("Failed to delete field");
         assert!(deleted);
 
         // Verify count dropped to 2
@@ -276,4 +306,3 @@ mod tests {
         assert!(fields_remaining.iter().any(|f| f.name == "Department"));
     }
 }
-

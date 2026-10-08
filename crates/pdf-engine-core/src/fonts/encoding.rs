@@ -4,8 +4,8 @@
 //! encodings, providing metric-compatible fallback and synthetic transliteration for
 //! characters missing from embedded font subsets.
 
-use std::collections::HashMap;
 use crate::fonts::tounicode::ToUnicodeMap;
+use std::collections::HashMap;
 
 /// Standard WinAnsiEncoding translation table (ISO 32000-1 Annex D.2).
 pub struct WinAnsiEncoding;

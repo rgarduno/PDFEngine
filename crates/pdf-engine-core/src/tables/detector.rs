@@ -154,7 +154,9 @@ pub fn detect_lattice_tables(
             continue; // At least 2 cells needed to qualify as a table
         }
 
-        if let Some(table) = build_table_from_cell_boxes(cluster, paragraphs, table_idx, page_number) {
+        if let Some(table) =
+            build_table_from_cell_boxes(cluster, paragraphs, table_idx, page_number)
+        {
             results.push(table);
         }
     }
@@ -236,7 +238,9 @@ fn process_path_operation(
                 let d = op.operands[3].as_f64().unwrap_or(1.0);
                 let e = op.operands[4].as_f64().unwrap_or(0.0);
                 let f = op.operands[5].as_f64().unwrap_or(0.0);
-                state_stack.current.concat_matrix(&Matrix::new(a, b, c, d, e, f));
+                state_stack
+                    .current
+                    .concat_matrix(&Matrix::new(a, b, c, d, e, f));
             }
         }
         "m" => {
@@ -309,10 +313,26 @@ fn process_path_operation(
                 } else if width >= 8.0 && height >= 6.0 {
                     // Explicit rectangle: add outer borders as segments and store as potential cell
                     ensure_vector_budget(vector_budget(horiz, vert, rects), 5)?;
-                    horiz.push(HorizSegment { y: min_y, min_x, max_x });
-                    horiz.push(HorizSegment { y: max_y, min_x, max_x });
-                    vert.push(VertSegment { x: min_x, min_y, max_y });
-                    vert.push(VertSegment { x: max_x, min_y, max_y });
+                    horiz.push(HorizSegment {
+                        y: min_y,
+                        min_x,
+                        max_x,
+                    });
+                    horiz.push(HorizSegment {
+                        y: max_y,
+                        min_x,
+                        max_x,
+                    });
+                    vert.push(VertSegment {
+                        x: min_x,
+                        min_y,
+                        max_y,
+                    });
+                    vert.push(VertSegment {
+                        x: max_x,
+                        min_y,
+                        max_y,
+                    });
                     rects.push(Rect::new(min_x, min_y, max_x, max_y));
                 }
             }
@@ -359,7 +379,11 @@ fn merge_collinear_horiz_segments(segments: &mut Vec<HorizSegment>) {
     segments.sort_by(|a, b| {
         a.y.partial_cmp(&b.y)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.min_x
+                    .partial_cmp(&b.min_x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     let mut merged: Vec<HorizSegment> = Vec::new();
@@ -387,7 +411,11 @@ fn merge_collinear_vert_segments(segments: &mut Vec<VertSegment>) {
     segments.sort_by(|a, b| {
         a.x.partial_cmp(&b.x)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.min_y.partial_cmp(&b.min_y).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.min_y
+                    .partial_cmp(&b.min_y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     let mut merged: Vec<VertSegment> = Vec::new();
@@ -460,7 +488,10 @@ fn find_lattice_cells(horiz: &[HorizSegment], vert: &[VertSegment]) -> PdfResult
                 (v.x - right_x).abs() <= 2.5 && v.min_y <= bot_y + 3.0 && v.max_y >= top_y - 3.0
             });
 
-            let edge_count = (has_top as usize) + (has_bot as usize) + (has_left as usize) + (has_right as usize);
+            let edge_count = (has_top as usize)
+                + (has_bot as usize)
+                + (has_left as usize)
+                + (has_right as usize);
             if edge_count >= 3 {
                 cells.push(Rect::new(left_x, bot_y, right_x, top_y));
             }
@@ -521,8 +552,10 @@ fn cluster_cells_into_tables(cells: Vec<Rect>) -> PdfResult<Vec<Vec<Rect>>> {
                 if !visited[j] {
                     let other = cells[j];
                     // Check adjacency: horizontal or vertical distance <= 5.0 pt
-                    let x_overlap = cell.min_x < other.max_x + 3.0 && cell.max_x > other.min_x - 3.0;
-                    let y_overlap = cell.min_y < other.max_y + 3.0 && cell.max_y > other.min_y - 3.0;
+                    let x_overlap =
+                        cell.min_x < other.max_x + 3.0 && cell.max_x > other.min_x - 3.0;
+                    let y_overlap =
+                        cell.min_y < other.max_y + 3.0 && cell.max_y > other.min_y - 3.0;
 
                     if (x_overlap && (cell.min_y - other.max_y).abs() <= 5.0)
                         || (x_overlap && (other.min_y - cell.max_y).abs() <= 5.0)
@@ -578,9 +611,14 @@ fn build_table_from_cell_boxes(
 
     // Sort boxes top-to-bottom, left-to-right
     boxes.sort_by(|a, b| {
-        b.max_y.partial_cmp(&a.max_y)
+        b.max_y
+            .partial_cmp(&a.max_y)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.min_x
+                    .partial_cmp(&b.min_x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     let mut cells = Vec::new();
@@ -621,7 +659,10 @@ fn build_table_from_cell_boxes(
 
     // Verify if table has any non-empty text content
     let has_content = table.headers.iter().any(|h| !h.trim().is_empty())
-        || table.rows.iter().any(|r| r.iter().any(|c| !c.trim().is_empty()));
+        || table
+            .rows
+            .iter()
+            .any(|r| r.iter().any(|c| !c.trim().is_empty()));
 
     if has_content || table.row_count * table.col_count >= 4 {
         Some(table)
@@ -652,7 +693,11 @@ pub fn detect_borderless_tables(
     }
 
     // Sort lines top to bottom (descending baseline_y)
-    all_lines.sort_by(|a, b| b.baseline_y.partial_cmp(&a.baseline_y).unwrap_or(std::cmp::Ordering::Equal));
+    all_lines.sort_by(|a, b| {
+        b.baseline_y
+            .partial_cmp(&a.baseline_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Analyze lines for tabbed or multi-column layout
     // A line with at least 2 spans separated by > 12 pt whitespace is a candidate table row
@@ -662,7 +707,11 @@ pub fn detect_borderless_tables(
             candidate_rows.push(line);
         } else {
             // Check if text has multiple space-separated columns
-            let parts: Vec<&str> = line.text.split("   ").filter(|s| !s.trim().is_empty()).collect();
+            let parts: Vec<&str> = line
+                .text
+                .split("   ")
+                .filter(|s| !s.trim().is_empty())
+                .collect();
             if parts.len() >= 2 {
                 candidate_rows.push(line);
             }
@@ -747,8 +796,10 @@ fn extract_text_for_box(bbox: &Rect, paragraphs: &[ParagraphBlock]) -> String {
                     && mid_y >= bbox.min_y - 0.5
                     && mid_y <= bbox.max_y + 0.5;
 
-                let overlaps = span.bbox.min_x < bbox.max_x && span.bbox.max_x > bbox.min_x
-                    && span.bbox.min_y < bbox.max_y && span.bbox.max_y > bbox.min_y;
+                let overlaps = span.bbox.min_x < bbox.max_x
+                    && span.bbox.max_x > bbox.min_x
+                    && span.bbox.min_y < bbox.max_y
+                    && span.bbox.max_y > bbox.min_y;
 
                 let overlap_ratio = if overlaps {
                     let ox1 = span.bbox.min_x.max(bbox.min_x);

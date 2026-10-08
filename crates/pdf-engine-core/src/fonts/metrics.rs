@@ -4,6 +4,8 @@
 //! `/FontDescriptor` metrics, character spacing ($T_c$), word spacing ($T_w$),
 //! and horizontal kerning adjustments from `TJ` arrays.
 
+use std::collections::BTreeMap;
+
 use crate::stream::graphics_state::TextState;
 
 /// Font metrics specifying character advance widths and baseline geometry.
@@ -13,9 +15,11 @@ pub struct FontMetrics {
     pub first_char: u32,
     /// Last character code defined in `/Widths` array.
     pub last_char: u32,
-    /// Glyphs advance widths in 1/1000 units of text space.
+    /// Glyphs advance widths in 1/1000 units of text space (for simple 8-bit fonts).
     pub widths: Vec<f64>,
-    /// Fallback width used for glyphs not present in `/Widths` (from `/MissingWidth`).
+    /// Sparse CID glyph advance widths (for composite Type0/CID fonts, ISO 32000-1 §9.7.4.3).
+    pub cid_widths: Option<BTreeMap<u32, f64>>,
+    /// Fallback width used for glyphs not present in `/Widths` (from `/MissingWidth` or `/DW`).
     pub default_width: f64,
     /// Ascender height in 1/1000 units above baseline.
     pub ascent: f64,
@@ -29,6 +33,7 @@ impl Default for FontMetrics {
             first_char: 0,
             last_char: 255,
             widths: Vec::new(),
+            cid_widths: None,
             default_width: 1000.0,
             ascent: 750.0,
             descent: -250.0,
@@ -37,12 +42,26 @@ impl Default for FontMetrics {
 }
 
 impl FontMetrics {
-    /// Creates a new font metrics descriptor.
+    /// Creates a new font metrics descriptor for a simple 8-bit font.
     pub fn new(first_char: u32, last_char: u32, widths: Vec<f64>, default_width: f64) -> Self {
         Self {
             first_char,
             last_char,
             widths,
+            cid_widths: None,
+            default_width,
+            ascent: 750.0,
+            descent: -250.0,
+        }
+    }
+
+    /// Creates a new font metrics descriptor for a composite Type0/CIDFont.
+    pub fn new_cid(cid_widths: BTreeMap<u32, f64>, default_width: f64) -> Self {
+        Self {
+            first_char: 0,
+            last_char: 65535,
+            widths: Vec::new(),
+            cid_widths: Some(cid_widths),
             default_width,
             ascent: 750.0,
             descent: -250.0,
@@ -51,6 +70,12 @@ impl FontMetrics {
 
     /// Looks up the unscaled glyph advance width (in 1/1000 of a text unit) for a character code.
     pub fn get_glyph_width(&self, char_code: u32) -> f64 {
+        if let Some(cids) = &self.cid_widths {
+            if let Some(&w) = cids.get(&char_code) {
+                return w;
+            }
+            return self.default_width;
+        }
         if char_code >= self.first_char && char_code <= self.last_char {
             let index = (char_code - self.first_char) as usize;
             if index < self.widths.len() {

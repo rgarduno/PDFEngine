@@ -63,7 +63,9 @@ pub struct DetectedTable {
 impl DetectedTable {
     /// Returns the cell at the given (row, col) coordinates, if present.
     pub fn get_cell(&self, row_idx: usize, col_idx: usize) -> Option<&TableCell> {
-        self.cells.iter().find(|c| c.row_idx == row_idx && c.col_idx == col_idx)
+        self.cells
+            .iter()
+            .find(|c| c.row_idx == row_idx && c.col_idx == col_idx)
     }
 
     /// Rebuilds the 2D rows matrix and headers from the contained cells.

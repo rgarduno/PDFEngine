@@ -5,9 +5,9 @@ use crate::layout::geometry::Rect;
 use crate::security::SecurityLimits;
 use crate::stream::Matrix;
 
+use super::add_searchable_text_layer;
 use super::layer::map_word;
 use super::recognize::{accept_language, parse_tsv, OcrWord};
-use super::add_searchable_text_layer;
 
 #[test]
 fn tsv_keeps_word_rows_and_drops_blocks() {
@@ -108,7 +108,8 @@ fn scanned_page_gains_invisible_text_and_a_text_page_does_not() {
     assert_eq!(again.pages_seen, 0);
     assert_eq!(again.words_inserted, 0);
 
-    let mut textual = PdfDocument::load(&image_pdf(&pixels, width, height, true)).expect("text pdf");
+    let mut textual =
+        PdfDocument::load(&image_pdf(&pixels, width, height, true)).expect("text pdf");
     let text_pages = textual.get_pages().expect("pages");
     let before = textual
         .get_page_content_bytes(text_pages[0])
@@ -124,7 +125,7 @@ fn scanned_page_gains_invisible_text_and_a_text_page_does_not() {
 
 fn image_pdf(pixels: &[u8], width: u32, height: u32, with_text: bool) -> Vec<u8> {
     let content = if with_text {
-        format!("q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ\nBT\n/F1 12 Tf\n(Already) Tj\nET\n")
+        "q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ\nBT\n/F1 12 Tf\n(Already) Tj\nET\n".to_string()
     } else {
         "q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ\n".to_string()
     };
@@ -158,9 +159,7 @@ fn write_obj(pdf: &mut Vec<u8>, bytes: &[u8]) -> usize {
 
 fn write_stream(pdf: &mut Vec<u8>, content: &[u8]) -> usize {
     let offset = pdf.len();
-    pdf.extend_from_slice(
-        format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes(),
-    );
+    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes());
     pdf.extend_from_slice(content);
     pdf.extend_from_slice(b"endstream\nendobj\n");
     offset

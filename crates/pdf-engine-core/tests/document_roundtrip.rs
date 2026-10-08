@@ -23,11 +23,7 @@ fn create_test_pdf_bytes() -> Vec<u8> {
     let off4 = pdf.len();
     let stream_content = b"BT\n/F1 24 Tf\n100 700 Td\n(Hello ISO 32000 PDF) Tj\nET\n";
     pdf.extend_from_slice(
-        format!(
-            "4 0 obj\n<< /Length {} >>\nstream\n",
-            stream_content.len()
-        )
-        .as_bytes(),
+        format!("4 0 obj\n<< /Length {} >>\nstream\n", stream_content.len()).as_bytes(),
     );
     pdf.extend_from_slice(stream_content);
     pdf.extend_from_slice(b"endstream\nendobj\n");
@@ -68,14 +64,19 @@ fn test_pdf_document_load_and_traverse_pages() {
     // Verify Page Object
     let page_obj = doc.get_object(pages[0]).expect("Failed to get page object");
     let page_dict = page_obj.as_dict().expect("Page must be a dictionary");
-    assert_eq!(page_dict.get("Type").and_then(|t| t.as_name()), Some("Page"));
+    assert_eq!(
+        page_dict.get("Type").and_then(|t| t.as_name()),
+        Some("Page")
+    );
 
     // Verify Content Stream
     let contents_ref = page_dict
         .get("Contents")
         .and_then(|c| c.as_reference())
         .expect("Page missing /Contents reference");
-    let contents_obj = doc.get_object(contents_ref).expect("Failed to get contents");
+    let contents_obj = doc
+        .get_object(contents_ref)
+        .expect("Failed to get contents");
     match contents_obj {
         PdfObject::Stream(s) => {
             let text = String::from_utf8_lossy(&s.content);

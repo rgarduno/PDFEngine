@@ -28,7 +28,12 @@ impl TextLine {
         }
 
         // Sort spans horizontally by start x
-        spans.sort_by(|a, b| a.bbox.min_x.partial_cmp(&b.bbox.min_x).unwrap_or(std::cmp::Ordering::Equal));
+        spans.sort_by(|a, b| {
+            a.bbox
+                .min_x
+                .partial_cmp(&b.bbox.min_x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let baseline_y = spans[0].baseline_y;
         let mut bbox = spans[0].bbox;

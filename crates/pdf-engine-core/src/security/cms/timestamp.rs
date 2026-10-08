@@ -15,8 +15,8 @@ use spki::AlgorithmIdentifierOwned;
 #[cfg(test)]
 use x509_cert::Certificate;
 
-use super::signed;
 use super::rejected;
+use super::signed;
 use crate::error::PdfResult;
 
 const TST_INFO: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.1.4");

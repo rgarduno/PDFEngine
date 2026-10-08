@@ -19,9 +19,15 @@ pub enum XRefEntry {
     /// Normal uncompressed object located at an absolute byte offset in the PDF file.
     InUse { offset: u64, generation: u16 },
     /// Object stored compressed within an Object Stream (`/ObjStm`) (ISO 32000-1 §7.5.7).
-    Compressed { container_id: u32, index_in_stream: u16 },
+    Compressed {
+        container_id: u32,
+        index_in_stream: u16,
+    },
     /// Free object slot in the linked list of deleted objects.
-    Free { next_free_object: u32, generation: u16 },
+    Free {
+        next_free_object: u32,
+        generation: u16,
+    },
 }
 
 /// Aggregated cross-reference index mapping `ObjectId` to its physical or stream location.
@@ -62,7 +68,10 @@ impl XRefTable {
                 Some(Token::Integer(offset)) => Ok(offset as usize),
                 other => Err(PdfError::InvalidXRef {
                     offset: offset_start,
-                    message: format!("Expected integer offset after startxref, found: {:?}", other),
+                    message: format!(
+                        "Expected integer offset after startxref, found: {:?}",
+                        other
+                    ),
                 }),
             }
         } else {
@@ -74,7 +83,11 @@ impl XRefTable {
     }
 
     /// Loads the complete cross-reference chain starting from `startxref` offset.
-    pub fn load_chain(data: &[u8], start_offset: usize, limits: &SecurityLimits) -> PdfResult<Self> {
+    pub fn load_chain(
+        data: &[u8],
+        start_offset: usize,
+        limits: &SecurityLimits,
+    ) -> PdfResult<Self> {
         let mut table = XRefTable::new();
         let mut current_offset = Some(start_offset);
         let mut visited_offsets = std::collections::HashSet::new();
@@ -189,7 +202,10 @@ impl XRefTable {
                 other => {
                     return Err(PdfError::InvalidXRef {
                         offset: lexer.cursor(),
-                        message: format!("Expected subsection start or 'trailer', found: {:?}", other),
+                        message: format!(
+                            "Expected subsection start or 'trailer', found: {:?}",
+                            other
+                        ),
                     });
                 }
             };
@@ -215,10 +231,12 @@ impl XRefTable {
             let count = count_i as u32;
 
             for i in 0..count {
-                let number = first_id.checked_add(i).ok_or_else(|| PdfError::InvalidXRef {
-                    offset: lexer.cursor(),
-                    message: "XRef subsection object number overflow".to_string(),
-                })?;
+                let number = first_id
+                    .checked_add(i)
+                    .ok_or_else(|| PdfError::InvalidXRef {
+                        offset: lexer.cursor(),
+                        message: "XRef subsection object number overflow".to_string(),
+                    })?;
                 let current_id = ObjectId::new(number);
 
                 let offset_val = match lexer.next_token()? {
@@ -236,7 +254,10 @@ impl XRefTable {
                     other => {
                         return Err(PdfError::InvalidXRef {
                             offset: lexer.cursor(),
-                            message: format!("Expected generation in xref entry, found: {:?}", other),
+                            message: format!(
+                                "Expected generation in xref entry, found: {:?}",
+                                other
+                            ),
                         });
                     }
                 };
@@ -325,35 +346,38 @@ impl XRefTable {
         }
 
         // Read /Index array: pairs of [first_object count ...]
-        let index_pairs: Vec<(u32, u32)> = if let Some(idx_arr) =
-            stream.dict.get("Index").and_then(|i| i.as_array())
-        {
-            let mut pairs = Vec::new();
-            for pair in idx_arr.chunks_exact(2) {
-                let first = pair[0].as_i64().unwrap_or(0);
-                let count = pair[1].as_i64().unwrap_or(0);
-                if first < 0 || count < 0 {
+        let index_pairs: Vec<(u32, u32)> =
+            if let Some(idx_arr) = stream.dict.get("Index").and_then(|i| i.as_array()) {
+                let mut pairs = Vec::new();
+                for pair in idx_arr.chunks_exact(2) {
+                    let first = pair[0].as_i64().unwrap_or(0);
+                    let count = pair[1].as_i64().unwrap_or(0);
+                    if first < 0 || count < 0 {
+                        return Err(PdfError::InvalidXRef {
+                            offset: 0,
+                            message: "XRef stream /Index values cannot be negative".to_string(),
+                        });
+                    }
+                    limits.validate_object_count(count as usize)?;
+                    pairs.push((first as u32, count as u32));
+                }
+                pairs
+            } else {
+                // Default: single subsection [0 /Size]
+                let size = stream
+                    .dict
+                    .get("Size")
+                    .and_then(|s| s.as_i64())
+                    .unwrap_or(0);
+                if size < 0 {
                     return Err(PdfError::InvalidXRef {
                         offset: 0,
-                        message: "XRef stream /Index values cannot be negative".to_string(),
+                        message: "XRef stream /Size cannot be negative".to_string(),
                     });
                 }
-                limits.validate_object_count(count as usize)?;
-                pairs.push((first as u32, count as u32));
-            }
-            pairs
-        } else {
-            // Default: single subsection [0 /Size]
-            let size = stream.dict.get("Size").and_then(|s| s.as_i64()).unwrap_or(0);
-            if size < 0 {
-                return Err(PdfError::InvalidXRef {
-                    offset: 0,
-                    message: "XRef stream /Size cannot be negative".to_string(),
-                });
-            }
-            limits.validate_object_count(size as usize)?;
-            vec![(0, size as u32)]
-        };
+                limits.validate_object_count(size as usize)?;
+                vec![(0, size as u32)]
+            };
 
         let mut byte_offset = 0;
         for (first_id, count) in index_pairs {
@@ -454,8 +478,9 @@ mod tests {
         let mut table = XRefTable::new();
         let mut lexer = Lexer::new(input);
         let _ = lexer.next_token();
-        let error = XRefTable::parse_classic_xref(&mut lexer, &mut table, &SecurityLimits::default())
-            .unwrap_err();
+        let error =
+            XRefTable::parse_classic_xref(&mut lexer, &mut table, &SecurityLimits::default())
+                .unwrap_err();
         assert!(error.to_string().contains("cannot be negative"));
         assert!(table.entries.is_empty());
     }

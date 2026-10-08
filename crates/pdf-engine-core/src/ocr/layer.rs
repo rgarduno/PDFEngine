@@ -3,7 +3,7 @@
 use crate::cos::{ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString};
 use crate::error::{PdfError, PdfResult};
 use crate::images::{get_image_binary, ImageInfo};
-use crate::stream::{ContentAst, ContentNode, ContentParser, Operation, serialize_ast};
+use crate::stream::{serialize_ast, ContentAst, ContentNode, ContentParser, Operation};
 
 use super::recognize::{accept_language, recognize_image, OcrReport, OcrWord};
 use super::scan::painted_scan_image;
@@ -91,7 +91,10 @@ fn inject_words(
                 PdfObject::Real(mapped.font_size),
             ],
         ));
-        operations.push(Operation::new("Tz", vec![PdfObject::Real(mapped.horizontal_scale)]));
+        operations.push(Operation::new(
+            "Tz",
+            vec![PdfObject::Real(mapped.horizontal_scale)],
+        ));
         operations.push(Operation::new(
             "Tm",
             mapped

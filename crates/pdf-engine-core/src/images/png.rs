@@ -3,9 +3,9 @@
 //! Handles chunk processing, scanline reconstruction (Sub, Up, Average, Paeth filters),
 //! alpha transparency separation for `/SMask`, and lossless PNG synthesis.
 
-use std::io::Write;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use std::io::Write;
 
 use crate::cos::filters::decode_flate;
 use crate::error::{PdfError, PdfResult};
@@ -67,7 +67,10 @@ pub fn parse_png_pixels(
     if header.bit_depth != 8 {
         return Err(PdfError::ParseError {
             offset: 24,
-            message: format!("Unsupported PNG bit depth: {} (expected 8-bit)", header.bit_depth),
+            message: format!(
+                "Unsupported PNG bit depth: {} (expected 8-bit)",
+                header.bit_depth
+            ),
         });
     }
 
@@ -188,7 +191,11 @@ pub fn parse_png_pixels(
             3 => {
                 // Average: raw + floor((Recon(x - bpp) + Prior(x)) / 2)
                 for x in 0..row_len {
-                    let a = if x >= bpp { current_row[x - bpp] as u16 } else { 0 };
+                    let a = if x >= bpp {
+                        current_row[x - bpp] as u16
+                    } else {
+                        0
+                    };
                     let b = prev_row[x] as u16;
                     let avg = ((a + b) / 2) as u8;
                     current_row[x] = raw_row[x].wrapping_add(avg);
@@ -273,11 +280,11 @@ pub fn encode_png(width: u32, height: u32, pixel_data: &[u8], is_rgb: bool) -> P
     let mut ihdr = Vec::with_capacity(13);
     ihdr.extend_from_slice(&width.to_be_bytes());
     ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.push(8);                              // Bit depth
-    ihdr.push(if is_rgb { 2 } else { 0 });      // Color type: 2=RGB, 0=Grayscale
-    ihdr.push(0);                              // Deflate
-    ihdr.push(0);                              // Filter
-    ihdr.push(0);                              // No interlace
+    ihdr.push(8); // Bit depth
+    ihdr.push(if is_rgb { 2 } else { 0 }); // Color type: 2=RGB, 0=Grayscale
+    ihdr.push(0); // Deflate
+    ihdr.push(0); // Filter
+    ihdr.push(0); // No interlace
     write_chunk(&mut out, b"IHDR", &ihdr);
 
     // Prepare scanlines: Prepend 0x00 (Filter: None) to each row
@@ -341,8 +348,8 @@ mod tests {
         let height = 2;
         // 4x2 RGB pixels (8 pixels * 3 = 24 bytes)
         let original_pixels = vec![
-            255, 0, 0,    0, 255, 0,    0, 0, 255,    255, 255, 0,
-            128, 128, 128, 64, 64, 64,  32, 32, 32,   0, 0, 0,
+            255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 128, 128, 128, 64, 64, 64, 32, 32, 32, 0,
+            0, 0,
         ];
 
         let png_bytes = encode_png(width, height, &original_pixels, true).expect("Encode PNG");
@@ -367,6 +374,8 @@ mod tests {
         let mut limits = SecurityLimits::default();
         limits.max_stream_decompressed_bytes = 8;
         let error = parse_png_pixels(&png_bytes, &limits).unwrap_err();
-        assert!(error.to_string().contains("exceeds maximum allowable limit"));
+        assert!(error
+            .to_string()
+            .contains("exceeds maximum allowable limit"));
     }
 }

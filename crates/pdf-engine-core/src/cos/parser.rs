@@ -188,9 +188,7 @@ impl<'a> Parser<'a> {
 
         if remaining.starts_with(b"\r\n") {
             offset = 2;
-        } else if remaining.starts_with(b"\n") {
-            offset = 1;
-        } else if remaining.starts_with(b"\r") {
+        } else if remaining.starts_with(b"\n") || remaining.starts_with(b"\r") {
             offset = 1;
         }
 
@@ -241,7 +239,8 @@ impl<'a> Parser<'a> {
             }
 
             let content = remaining[..end_pos].to_vec();
-            self.lexer.set_cursor(self.lexer.cursor() + pos + marker.len());
+            self.lexer
+                .set_cursor(self.lexer.cursor() + pos + marker.len());
             Ok(content)
         } else {
             Err(PdfError::UnexpectedEof {

@@ -309,7 +309,10 @@ fn appearance_text(doc: &mut PdfDocument, annot: &Annotation) -> String {
         Some(PdfObject::Dictionary(dict)) => dict,
         other => panic!("appearance was {other:?}"),
     };
-    let normal = appearance.get("N").and_then(|item| item.as_reference()).unwrap();
+    let normal = appearance
+        .get("N")
+        .and_then(|item| item.as_reference())
+        .unwrap();
     match doc.get_object(normal).unwrap() {
         PdfObject::Stream(stream) => String::from_utf8_lossy(&stream.content).into_owned(),
         other => panic!("appearance stream was {other:?}"),
@@ -364,17 +367,32 @@ fn ink_and_vector_shapes_round_trip_and_reject_bad_input() {
 
     let marks = extract_page_annotations(&mut doc, 0).unwrap();
     assert_eq!(marks.len(), 5);
-    let ink = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Ink).unwrap();
+    let ink = marks
+        .iter()
+        .find(|mark| mark.subtype == AnnotationSubtype::Ink)
+        .unwrap();
     assert_eq!(ink.points.len(), 3);
     assert!((ink.points[0][0] - 72.0).abs() < 0.01);
     assert!((ink.border_width - 2.0).abs() < 0.01);
-    let square = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Square).unwrap();
+    let square = marks
+        .iter()
+        .find(|mark| mark.subtype == AnnotationSubtype::Square)
+        .unwrap();
     assert_eq!(square.fill_color, Some([0.95, 0.85, 0.2]));
-    let circle = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Circle).unwrap();
-    let line = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Line).unwrap();
+    let circle = marks
+        .iter()
+        .find(|mark| mark.subtype == AnnotationSubtype::Circle)
+        .unwrap();
+    let line = marks
+        .iter()
+        .find(|mark| mark.subtype == AnnotationSubtype::Line)
+        .unwrap();
     assert_eq!(line.line_ending.as_deref(), Some("OpenArrow"));
     assert_eq!(line.points.len(), 2);
-    let polygon = marks.iter().find(|mark| mark.subtype == AnnotationSubtype::Polygon).unwrap();
+    let polygon = marks
+        .iter()
+        .find(|mark| mark.subtype == AnnotationSubtype::Polygon)
+        .unwrap();
     assert_eq!(polygon.points.len(), 3);
 
     let square_paint = appearance_text(&mut doc, square);
@@ -398,13 +416,24 @@ fn ink_and_vector_shapes_round_trip_and_reject_bad_input() {
 
     let mut reloaded = PdfDocument::load(&saved).unwrap();
     let again = extract_page_annotations(&mut reloaded, 0).unwrap();
-    assert!(again.iter().any(|mark| mark.subtype == AnnotationSubtype::Ink && mark.points.len() == 3));
+    assert!(again
+        .iter()
+        .any(|mark| mark.subtype == AnnotationSubtype::Ink && mark.points.len() == 3));
     assert!(again.iter().any(|mark| {
         mark.subtype == AnnotationSubtype::Line && mark.line_ending.as_deref() == Some("OpenArrow")
     }));
 
-    let short = add_shape(&mut doc, 0, ShapeKind::Ink, &[[10.0, 10.0]], shape_style(None, false));
-    assert!(short.unwrap_err().to_string().contains("A shape needs more points."));
+    let short = add_shape(
+        &mut doc,
+        0,
+        ShapeKind::Ink,
+        &[[10.0, 10.0]],
+        shape_style(None, false),
+    );
+    assert!(short
+        .unwrap_err()
+        .to_string()
+        .contains("A shape needs more points."));
     let mut bad = shape_style(None, false);
     bad.stroke = [1.2, 0.0, 0.0];
     let color = add_shape(
@@ -414,7 +443,10 @@ fn ink_and_vector_shapes_round_trip_and_reject_bad_input() {
         &[[10.0, 10.0], [40.0, 40.0]],
         bad,
     );
-    assert!(color.unwrap_err().to_string().contains("Shape color was rejected."));
+    assert!(color
+        .unwrap_err()
+        .to_string()
+        .contains("Shape color was rejected."));
     let missing = add_shape(
         &mut doc,
         9,
@@ -422,5 +454,8 @@ fn ink_and_vector_shapes_round_trip_and_reject_bad_input() {
         &[[10.0, 10.0], [40.0, 40.0]],
         shape_style(None, false),
     );
-    assert!(matches!(missing, Err(crate::error::PdfError::InvalidPageNumber { .. })));
+    assert!(matches!(
+        missing,
+        Err(crate::error::PdfError::InvalidPageNumber { .. })
+    ));
 }

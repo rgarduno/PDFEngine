@@ -4,12 +4,12 @@
 //! while preserving 100% of surrounding vector paths, images, and graphics states.
 
 use crate::cos::object::{PdfName, PdfObject, PdfString};
+use crate::editor::reflow::ReflowEngine;
 use crate::error::{PdfError, PdfResult};
 use crate::fonts::{FontEncoder, FontMetrics};
 use crate::layout::paragraph::ParagraphBlock;
 use crate::stream::ast::{ContentAst, ContentNode, NodeId, Operation};
 use crate::stream::graphics_state::TextState;
-use crate::editor::reflow::ReflowEngine;
 
 /// Performs surgical in-place text mutations on a page's Content AST.
 pub struct SurgicalEditor;
@@ -161,10 +161,7 @@ impl SurgicalEditor {
 
             // Reset word spacing if it was altered
             if line.word_spacing > 0.0 {
-                ops.push(Operation::new(
-                    "Tw",
-                    vec![PdfObject::Real(0.0)],
-                ));
+                ops.push(Operation::new("Tw", vec![PdfObject::Real(0.0)]));
             }
         }
 
@@ -199,7 +196,13 @@ impl SurgicalEditor {
                     }
                 }
                 ContentNode::GraphicsGroup { children, .. } => {
-                    Self::mutate_nodes(children, primary_id, prune_ids, replacement.clone(), replaced);
+                    Self::mutate_nodes(
+                        children,
+                        primary_id,
+                        prune_ids,
+                        replacement.clone(),
+                        replaced,
+                    );
                 }
                 ContentNode::Instruction { id, .. } => {
                     if prune_ids.contains(id) {

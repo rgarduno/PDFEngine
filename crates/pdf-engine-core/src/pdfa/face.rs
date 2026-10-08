@@ -58,7 +58,9 @@ pub(crate) fn build_face(widths: &[i32; 224], tag_index: u32) -> BuiltFace {
         glyphs.push(draw_char(code, advance));
     }
 
-    let fixed_pitch = glyphs.iter().all(|glyph| glyph.advance == glyphs[0].advance);
+    let fixed_pitch = glyphs
+        .iter()
+        .all(|glyph| glyph.advance == glyphs[0].advance);
     let mut xmin = i16::MAX;
     let mut ymin = i16::MAX;
     let mut xmax = i16::MIN;
@@ -395,12 +397,7 @@ fn quad(x0: i32, y0: i32, x1: i32, y1: i32) -> [(i32, i32); 4] {
     let right = x0.max(x1);
     let bottom = y0.min(y1);
     let top = y0.max(y1);
-    [
-        (left, bottom),
-        (left, top),
-        (right, top),
-        (right, bottom),
-    ]
+    [(left, bottom), (left, top), (right, top), (right, bottom)]
 }
 
 fn encode_glyph(contours: &[[(i32, i32); 4]], advance: i32, stem: i32) -> GlyphRec {
@@ -537,7 +534,12 @@ fn assemble_font(
         hmtx.extend_from_slice(&glyph.lsb.to_be_bytes());
     }
 
-    let max_points = glyphs.iter().map(|glyph| glyph.points).max().unwrap_or(0).max(256) as u16;
+    let max_points = glyphs
+        .iter()
+        .map(|glyph| glyph.points)
+        .max()
+        .unwrap_or(0)
+        .max(256) as u16;
     let max_contours = glyphs
         .iter()
         .map(|glyph| glyph.contours)
