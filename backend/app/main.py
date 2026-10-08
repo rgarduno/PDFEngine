@@ -428,6 +428,10 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
                 alignment=p.alignment,
                 leading=round(p.leading, 2),
                 line_count=p.line_count,
+                font_size=round(p.font_size, 2),
+                font_family=p.font_family,
+                font_weight=p.font_weight,
+                font_style=p.font_style,
             )
         )
 

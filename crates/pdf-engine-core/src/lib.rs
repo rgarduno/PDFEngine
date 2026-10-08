@@ -39,8 +39,8 @@ pub use cos::{ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject
 pub use editor::{ReflowEngine, ReflowLine, SurgicalEditor};
 pub use error::{PdfError, PdfResult};
 pub use fonts::{
-    compose_ligatures, decompose_ligatures, FontEncoder, FontMetrics, GlyphFallback, ToUnicodeMap,
-    WinAnsiEncoding,
+    compose_ligatures, css_face, decompose_ligatures, resolve_page_fonts, FontEncoder, FontMetrics,
+    GlyphFallback, ResolvedFont, ToUnicodeMap, WinAnsiEncoding,
 };
 pub use forms::{
     extract_document_forms, fill_field_value, fill_fields_batch, flatten_document_forms, FormField,

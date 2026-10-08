@@ -328,6 +328,7 @@ export default function Home() {
 
     try {
       const newSession = await uploadPdf(file);
+      setImages([]);
       setSession(newSession);
 
       const scenegraph = await getPageScenegraph(newSession.document_id, 1);
@@ -572,7 +573,8 @@ export default function Home() {
     try {
       const secondDoc = await uploadPdf(file);
       const res = await mergeDocuments([session.document_id, secondDoc.document_id]);
-      
+
+      setImages([]);
       setSession({
         document_id: res.merged_document_id,
         filename: `${session.filename.replace('.pdf', '')}_merged.pdf`,

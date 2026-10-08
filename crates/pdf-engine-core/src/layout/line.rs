@@ -40,7 +40,8 @@ impl TextLine {
                 let prev_end = spans[i - 1].bbox.max_x;
                 let cur_start = span.bbox.min_x;
                 let gap = cur_start - prev_end;
-                let space_threshold = span.font_size * 0.25;
+                let visual = span.rendered_size.max(span.font_size);
+                let space_threshold = visual * 0.25;
 
                 if gap > space_threshold && !text.ends_with(' ') && !span.text.starts_with(' ') {
                     text.push(' ');

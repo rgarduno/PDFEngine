@@ -16,8 +16,10 @@ export interface Paragraph {
   alignment: TextAlignment;
   leading: number;
   line_count: number;
-  fontSize?: number;
-  fontFamily?: string;
+  font_size?: number;
+  font_family?: string;
+  font_weight?: number;
+  font_style?: string;
 }
 
 export interface ImageElement {

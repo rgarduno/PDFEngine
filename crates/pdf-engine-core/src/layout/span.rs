@@ -12,8 +12,10 @@ pub struct TextSpan {
     pub bbox: Rect,
     /// Active font identifier resource name (e.g. `/F1`).
     pub font_name: String,
-    /// Active font size in points.
+    /// Active font size operand of `Tf`, in text space.
     pub font_size: f64,
+    /// Visual size in page points, copied from the first glyph.
+    pub rendered_size: f64,
     /// Baseline y-coordinate in page space.
     pub baseline_y: f64,
     /// The individual positioned glyphs forming this span.
@@ -30,6 +32,7 @@ impl TextSpan {
         let first = &glyphs[0];
         let font_name = first.font_name.clone();
         let font_size = first.font_size;
+        let rendered_size = first.rendered_size;
         let baseline_y = first.origin.y;
 
         let mut text = String::new();
@@ -45,6 +48,7 @@ impl TextSpan {
             bbox,
             font_name,
             font_size,
+            rendered_size,
             baseline_y,
             glyphs,
         })

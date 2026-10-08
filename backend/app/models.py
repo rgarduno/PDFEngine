@@ -26,6 +26,10 @@ class ParagraphModel(BaseModel):
     alignment: str = Field(description="left, center, right, or justified")
     leading: float
     line_count: int
+    font_size: float = 0
+    font_family: str = ""
+    font_weight: int = 400
+    font_style: str = "normal"
 
 
 class PageSceneGraph(BaseModel):

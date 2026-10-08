@@ -72,6 +72,24 @@ impl ParagraphBlock {
         })
     }
 
+    /// Resource name of the first span, without a leading slash.
+    pub fn font_resource(&self) -> String {
+        self.lines
+            .first()
+            .and_then(|line| line.spans.first())
+            .map(|span| span.font_name.clone())
+            .unwrap_or_default()
+    }
+
+    /// Visual size of the first span, in page points.
+    pub fn rendered_size(&self) -> f64 {
+        self.lines
+            .first()
+            .and_then(|line| line.spans.first())
+            .map(|span| span.rendered_size)
+            .unwrap_or(0.0)
+    }
+
     /// Combines all line texts into a single string separated by newlines.
     pub fn text(&self) -> String {
         self.lines

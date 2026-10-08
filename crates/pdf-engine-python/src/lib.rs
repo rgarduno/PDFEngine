@@ -5,6 +5,7 @@
 
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 use std::fs;
 
 use pdf_engine_core::annots::{
@@ -12,7 +13,7 @@ use pdf_engine_core::annots::{
 };
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
 use pdf_engine_core::editor::SurgicalEditor;
-use pdf_engine_core::fonts::FontMetrics;
+use pdf_engine_core::fonts::{resolve_page_fonts, FontMetrics, ResolvedFont};
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
 use pdf_engine_core::stream::{
@@ -53,6 +54,17 @@ pub struct PyParagraph {
     pub leading: f64,
     #[pyo3(get)]
     pub line_count: usize,
+    /// Visual size in page points. Zero when the paragraph has no span.
+    #[pyo3(get)]
+    pub font_size: f64,
+    /// CSS family. Empty when the face is unknown.
+    #[pyo3(get)]
+    pub font_family: String,
+    #[pyo3(get)]
+    pub font_weight: u16,
+    /// `"normal"` or `"italic"`.
+    #[pyo3(get)]
+    pub font_style: String,
 }
 
 #[pymethods]
@@ -710,6 +722,7 @@ pub struct PyPage {
     pub ast: ContentAst,
     pub paragraphs: Vec<ParagraphBlock>,
     pub metrics: FontMetrics,
+    faces: BTreeMap<String, ResolvedFont>,
 }
 
 #[pymethods]
@@ -725,6 +738,8 @@ impl PyPage {
                     TextAlignment::Right => "right",
                     TextAlignment::Justified => "justified",
                 };
+                let (font_size, font_family, font_weight, font_style) =
+                    face_style(p, &self.faces);
                 PyParagraph {
                     id: p.id,
                     text: p.text(),
@@ -735,6 +750,10 @@ impl PyPage {
                     alignment: align_str.to_string(),
                     leading: p.leading,
                     line_count: p.lines.len(),
+                    font_size,
+                    font_family,
+                    font_weight,
+                    font_style,
                 }
             })
             .collect()
@@ -754,12 +773,7 @@ impl PyPage {
         SurgicalEditor::edit_paragraph(&mut self.ast, &target_block, new_text, &self.metrics)
             .map_err(|e| PyRuntimeError::new_err(format!("Surgical edit failed: {}", e)))?;
 
-        // Reconstruct layout after mutation to keep page state synchronized
-        let reconstructor =
-            LayoutReconstructor::new(&self.ast).with_font("F1", self.metrics.clone());
-        self.paragraphs = reconstructor.reconstruct().map_err(|e| {
-            PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e))
-        })?;
+        self.paragraphs = reconstruct_layout(&self.ast, &self.metrics, &self.faces)?;
 
         Ok(())
     }
@@ -781,8 +795,20 @@ impl PyPage {
                 json.push(',');
             }
             json.push_str(&format!(
-                "{{\"id\":{},\"text\":{:?},\"bbox\":{{\"min_x\":{:.2},\"min_y\":{:.2},\"max_x\":{:.2},\"max_y\":{:.2}}},\"alignment\":\"{}\",\"leading\":{:.2},\"lines\":{}}}",
-                p.id, p.text, p.min_x, p.min_y, p.max_x, p.max_y, p.alignment, p.leading, p.line_count
+                "{{\"id\":{},\"text\":{:?},\"bbox\":{{\"min_x\":{:.2},\"min_y\":{:.2},\"max_x\":{:.2},\"max_y\":{:.2}}},\"alignment\":\"{}\",\"leading\":{:.2},\"lines\":{},\"font_size\":{:.2},\"font_family\":{:?},\"font_weight\":{},\"font_style\":{:?}}}",
+                p.id,
+                p.text,
+                p.min_x,
+                p.min_y,
+                p.max_x,
+                p.max_y,
+                p.alignment,
+                p.leading,
+                p.line_count,
+                p.font_size,
+                p.font_family,
+                p.font_weight,
+                p.font_style
             ));
         }
 
@@ -803,6 +829,33 @@ pub struct PyPdfDocument {
 ///
 /// Operators are read from the inflated stream. Reading the stored bytes of a
 /// Flate stream treats compressed data as operators and can sit on one delimiter.
+fn face_style(
+    block: &ParagraphBlock,
+    faces: &BTreeMap<String, ResolvedFont>,
+) -> (f64, String, u16, String) {
+    match faces.get(&block.font_resource()) {
+        Some(face) => (
+            block.rendered_size(),
+            face.family.clone(),
+            face.weight,
+            face.style.clone(),
+        ),
+        None => (block.rendered_size(), String::new(), 400, "normal".to_string()),
+    }
+}
+
+fn reconstruct_layout(
+    ast: &ContentAst,
+    metrics: &FontMetrics,
+    faces: &BTreeMap<String, ResolvedFont>,
+) -> PyResult<Vec<ParagraphBlock>> {
+    LayoutReconstructor::new(ast)
+        .with_font("F1", metrics.clone())
+        .with_resolved(faces)
+        .reconstruct()
+        .map_err(|e| PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e)))
+}
+
 fn tokenize_decoded_page(doc: &mut PdfDocument, page_id: ObjectId) -> PyResult<Vec<Operation>> {
     let decoded = doc
         .get_page_content_bytes(page_id)
@@ -822,6 +875,8 @@ impl PyPdfDocument {
         let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
 
         for (idx, &page_id) in page_ids.iter().enumerate() {
+            let faces = resolve_page_fonts(&mut doc, page_id)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e)))?;
             let page_obj = doc
                 .get_object(page_id)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to load page: {}", e)))?;
@@ -836,11 +891,7 @@ impl PyPdfDocument {
                     if let PdfObject::Stream(_) = contents_obj {
                         let ops = tokenize_decoded_page(&mut doc, page_id)?;
                         let ast = build_ast_from_operations(ops);
-                        let reconstructor =
-                            LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-                        let paragraphs = reconstructor.reconstruct().map_err(|e| {
-                            PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e))
-                        })?;
+                        let paragraphs = reconstruct_layout(&ast, &metrics, &faces)?;
                         (Some(contents_ref), ast, paragraphs)
                     } else {
                         (None, ContentAst::new(), Vec::new())
@@ -859,6 +910,7 @@ impl PyPdfDocument {
                 ast,
                 paragraphs,
                 metrics: metrics.clone(),
+                faces,
             });
         }
 
@@ -876,6 +928,9 @@ impl PyPdfDocument {
         let mut reloaded_pages = Vec::with_capacity(page_ids.len());
 
         for (idx, &page_id) in page_ids.iter().enumerate() {
+            let faces = resolve_page_fonts(&mut self.doc, page_id).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e))
+            })?;
             if let Ok(page_obj) = self.doc.get_object(page_id) {
                 if let Some(dict) = page_obj.as_dict() {
                     let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
@@ -884,14 +939,7 @@ impl PyPdfDocument {
                             let ops = tokenize_decoded_page(&mut self.doc, page_id)
                                 .unwrap_or_default();
                             let ast = build_ast_from_operations(ops);
-                            let reconstructor =
-                                LayoutReconstructor::new(&ast).with_font("F1", metrics.clone());
-                            let paragraphs = reconstructor.reconstruct().map_err(|e| {
-                                PyRuntimeError::new_err(format!(
-                                    "Layout reconstruction failed: {}",
-                                    e
-                                ))
-                            })?;
+                            let paragraphs = reconstruct_layout(&ast, &metrics, &faces)?;
                             (ast, paragraphs)
                         } else {
                             (ContentAst::new(), Vec::new())
@@ -907,6 +955,7 @@ impl PyPdfDocument {
                         ast,
                         paragraphs,
                         metrics: metrics.clone(),
+                        faces,
                     });
                 }
             }
@@ -1003,6 +1052,7 @@ impl PyPdfDocument {
                 ast: page.ast.clone(),
                 paragraphs: page.paragraphs.clone(),
                 metrics: page.metrics.clone(),
+                faces: page.faces.clone(),
             })
         } else {
             Err(PyValueError::new_err(format!(
@@ -1038,6 +1088,7 @@ impl PyPdfDocument {
                 ast: page.ast.clone(),
                 paragraphs: page.paragraphs.clone(),
                 metrics: page.metrics.clone(),
+                faces: page.faces.clone(),
             };
         }
 

@@ -129,52 +129,52 @@ impl ToUnicodeMap {
     }
 
     /// Parses a single `<srcCode> <dstHex>` bfchar line.
+    ///
+    /// Whitespace between hex strings is optional, so `<0001><0041>` and
+    /// `<0001> <0041>` are the same entry.
     fn parse_bfchar_line(line: &str) -> Option<(u32, String)> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
+        let hexes = Self::hex_tokens(line);
+        if hexes.len() < 2 {
             return None;
         }
 
-        let src_hex = parts[0].trim_matches(|c| c == '<' || c == '>');
-        let dst_hex = parts[1].trim_matches(|c| c == '<' || c == '>');
-
-        let src_code = u32::from_str_radix(src_hex, 16).ok()?;
-        let dst_str = Self::hex_to_unicode_string(dst_hex)?;
+        let src_code = u32::from_str_radix(&hexes[0], 16).ok()?;
+        let dst_str = Self::hex_to_unicode_string(&hexes[1])?;
 
         Some((src_code, dst_str))
     }
 
     /// Parses `<src1> <src2> <dstStart>` or `<src1> <src2> [ ... ]` bfrange line.
+    ///
+    /// Writers such as Quartz emit `<21><21><0052>` with no space between the
+    /// hex strings. Both forms are read by scanning `<...>` tokens.
     fn parse_bfrange_line(line: &str, map: &mut ToUnicodeMap) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
+        let hexes = Self::hex_tokens(line);
+        if hexes.len() < 3 {
             return;
         }
 
-        let start_code = u32::from_str_radix(parts[0].trim_matches(|c| c == '<' || c == '>'), 16).unwrap_or(0);
-        let end_code = u32::from_str_radix(parts[1].trim_matches(|c| c == '<' || c == '>'), 16).unwrap_or(0);
+        let start_code = u32::from_str_radix(&hexes[0], 16).unwrap_or(0);
+        let end_code = u32::from_str_radix(&hexes[1], 16).unwrap_or(0);
+        if start_code > end_code {
+            return;
+        }
 
-        if parts[2].starts_with('[') {
-            // Form 2: Array of destination hex values
-            let array_str = line[line.find('[').unwrap_or(0)..].trim_matches(|c| c == '[' || c == ']');
-            let dst_tokens: Vec<&str> = array_str.split_whitespace().collect();
-
+        if line.contains('[') {
+            // Form 2: one destination string per source code.
             let mut code = start_code;
-            for dst_hex in dst_tokens {
+            for dst_hex in hexes.iter().skip(2) {
                 if code > end_code {
                     break;
                 }
-                let clean_hex = dst_hex.trim_matches(|c| c == '<' || c == '>');
-                if let Some(unicode_str) = Self::hex_to_unicode_string(clean_hex) {
+                if let Some(unicode_str) = Self::hex_to_unicode_string(dst_hex) {
                     map.insert(code, unicode_str);
                 }
                 code += 1;
             }
         } else {
-            // Form 1: Incremental destination starting code
-            let dst_hex = parts[2].trim_matches(|c| c == '<' || c == '>');
-            let mut dst_code = u32::from_str_radix(dst_hex, 16).unwrap_or(0);
-
+            // Form 1: the destination is one UTF-16BE string and the last unit increments.
+            let mut dst_code = u32::from_str_radix(&hexes[2], 16).unwrap_or(0);
             for code in start_code..=end_code {
                 if let Some(ch) = char::from_u32(dst_code) {
                     map.insert(code, ch.to_string());
@@ -182,6 +182,30 @@ impl ToUnicodeMap {
                 dst_code += 1;
             }
         }
+    }
+
+    /// Hex digit runs inside `<...>`, ignoring whitespace inside each string.
+    fn hex_tokens(line: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '<' {
+                continue;
+            }
+            let mut hex = String::new();
+            for inner in chars.by_ref() {
+                if inner == '>' {
+                    break;
+                }
+                if inner.is_ascii_hexdigit() {
+                    hex.push(inner);
+                }
+            }
+            if !hex.is_empty() {
+                tokens.push(hex);
+            }
+        }
+        tokens
     }
 
     /// Decodes a hexadecimal string into UTF-8 representation (UTF-16BE code units).
@@ -237,5 +261,34 @@ end
         // Reverse lookup
         assert_eq!(map.encode_char("A"), Some(1));
         assert_eq!(map.encode_char("C"), Some(3));
+    }
+
+    #[test]
+    fn parses_quartz_bfrange_without_spaces() {
+        let cmap = b"
+19 beginbfrange
+<21><21><0052>
+<22><22><0061>
+<26><26><0020>
+<2d><2e><0063>
+<2f><2f><00F1>
+endbfrange
+1 beginbfchar
+<0030><0045>
+endbfchar
+1 beginbfrange
+<10><11>[<0041><0042>]
+endbfrange
+";
+        let map = ToUnicodeMap::parse(cmap).unwrap();
+        assert_eq!(map.decode_code(0x21), Some("R"));
+        assert_eq!(map.decode_code(0x22), Some("a"));
+        assert_eq!(map.decode_code(0x26), Some(" "));
+        assert_eq!(map.decode_code(0x2d), Some("c"));
+        assert_eq!(map.decode_code(0x2e), Some("d"));
+        assert_eq!(map.decode_code(0x2f), Some("ñ"));
+        assert_eq!(map.decode_code(0x30), Some("E"));
+        assert_eq!(map.decode_code(0x10), Some("A"));
+        assert_eq!(map.decode_code(0x11), Some("B"));
     }
 }

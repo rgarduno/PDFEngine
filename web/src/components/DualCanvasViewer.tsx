@@ -282,8 +282,8 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
               style={{
                 left: `${left}px`,
                 top: `${top}px`,
-                width: `${Math.max(width, 32 * zoom)}px`,
-                height: `${Math.max(height, 32 * zoom)}px`,
+                width: `${width}px`,
+                height: `${height}px`,
               }}
               className={`absolute transition-all group overflow-hidden border cursor-pointer ${
                 isSelected
@@ -723,9 +723,11 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                   onChange={handleTextChange}
                   onBlur={handleFinishEditing}
                   style={{
-                    fontSize: `${(p.fontSize || 12) * zoom}px`,
+                    fontSize: `${(p.font_size || 12) * zoom}px`,
                     lineHeight: `${(p.leading || 16) * zoom}px`,
-                    fontFamily: p.fontFamily ? `"${p.fontFamily}", sans-serif` : 'sans-serif',
+                    fontFamily: p.font_family ? `"${p.font_family}", sans-serif` : 'sans-serif',
+                    fontWeight: p.font_weight ?? 400,
+                    fontStyle: p.font_style || 'normal',
                   }}
                   className={`w-full h-full resize-none p-1 bg-white/95 dark:bg-neutral-900/95 text-neutral-900 dark:text-neutral-100 outline-none border-none ${alignClass} focus:ring-0`}
                 />
@@ -733,9 +735,11 @@ export const DualCanvasViewer: React.FC<DualCanvasViewerProps> = ({
                 /* Rendered Text with precise typography */
                 <div
                   style={{
-                    fontSize: `${(p.fontSize || 12) * zoom}px`,
+                    fontSize: `${(p.font_size || 12) * zoom}px`,
                     lineHeight: `${(p.leading || 16) * zoom}px`,
-                    fontFamily: p.fontFamily ? `"${p.fontFamily}", sans-serif` : 'sans-serif',
+                    fontFamily: p.font_family ? `"${p.font_family}", sans-serif` : 'sans-serif',
+                    fontWeight: p.font_weight ?? 400,
+                    fontStyle: p.font_style || 'normal',
                   }}
                   className={`w-full h-full p-1 whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 ${alignClass}`}
                 >

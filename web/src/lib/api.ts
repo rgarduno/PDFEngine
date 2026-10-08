@@ -195,8 +195,10 @@ export const MOCK_SCENEGRAPH: PageSceneGraph = {
       alignment: 'center',
       leading: 20,
       line_count: 1,
-      fontSize: 16,
-      fontFamily: 'Helvetica-Bold',
+      font_size: 16,
+      font_family: 'Helvetica',
+      font_weight: 700,
+      font_style: 'normal',
     },
     {
       id: 1,
@@ -205,8 +207,10 @@ export const MOCK_SCENEGRAPH: PageSceneGraph = {
       alignment: 'left',
       leading: 16,
       line_count: 3,
-      fontSize: 11,
-      fontFamily: 'Helvetica',
+      font_size: 11,
+      font_family: 'Helvetica',
+      font_weight: 400,
+      font_style: 'normal',
     },
     {
       id: 2,
@@ -215,8 +219,10 @@ export const MOCK_SCENEGRAPH: PageSceneGraph = {
       alignment: 'left',
       leading: 15,
       line_count: 4,
-      fontSize: 10,
-      fontFamily: 'Helvetica',
+      font_size: 10,
+      font_family: 'Helvetica',
+      font_weight: 400,
+      font_style: 'normal',
     },
     {
       id: 3,
@@ -225,8 +231,10 @@ export const MOCK_SCENEGRAPH: PageSceneGraph = {
       alignment: 'left',
       leading: 15,
       line_count: 4,
-      fontSize: 10,
-      fontFamily: 'Helvetica',
+      font_size: 10,
+      font_family: 'Helvetica',
+      font_weight: 400,
+      font_style: 'normal',
     },
     {
       id: 4,
@@ -235,8 +243,10 @@ export const MOCK_SCENEGRAPH: PageSceneGraph = {
       alignment: 'left',
       leading: 16,
       line_count: 4,
-      fontSize: 10,
-      fontFamily: 'Helvetica',
+      font_size: 10,
+      font_family: 'Helvetica',
+      font_weight: 400,
+      font_style: 'normal',
     },
   ],
 };
@@ -347,13 +357,23 @@ export async function getPageImages(
       `${API_BASE_URL}/api/documents/${docId}/pages/${pageIdx}/images`
     );
     if (!res.ok) {
-      return { page_number: pageIdx, images: MOCK_IMAGES, count: MOCK_IMAGES.length };
+      return imagesOrEmpty(docId, pageIdx);
     }
     return await res.json();
   } catch (e) {
     console.warn('Backend unavailable, using mock image data:', e);
+    return imagesOrEmpty(docId, pageIdx);
+  }
+}
+
+function imagesOrEmpty(
+  docId: string,
+  pageIdx: number
+): { page_number: number; images: ImageElement[]; count: number } {
+  if (docId === MOCK_SESSION.document_id) {
     return { page_number: pageIdx, images: MOCK_IMAGES, count: MOCK_IMAGES.length };
   }
+  return { page_number: pageIdx, images: [], count: 0 };
 }
 
 export function getImageBinaryUrl(docId: string, imageId: number): string {

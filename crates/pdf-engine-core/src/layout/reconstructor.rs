@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::{PdfError, PdfResult};
-use crate::fonts::{FontMetrics, ToUnicodeMap};
+use crate::fonts::{FontMetrics, ResolvedFont, ToUnicodeMap};
 use crate::layout::geometry::Point;
 use crate::layout::glyph::PositionedGlyph;
 use crate::layout::line::TextLine;
@@ -41,6 +41,19 @@ impl<'a> LayoutReconstructor<'a> {
     /// Registers a /ToUnicode CMap under a resource name (e.g. "F1").
     pub fn with_cmap(mut self, font_name: impl Into<String>, cmap: ToUnicodeMap) -> Self {
         self.cmaps.insert(font_name.into(), cmap);
+        self
+    }
+
+    /// Registers metrics and `/ToUnicode` maps from a page font dictionary.
+    ///
+    /// Applied after `with_font`, so a real resource named `F1` replaces the fallback.
+    pub fn with_resolved(mut self, faces: &BTreeMap<String, ResolvedFont>) -> Self {
+        for (name, face) in faces {
+            self.fonts.insert(name.clone(), face.metrics.clone());
+            if let Some(cmap) = &face.cmap {
+                self.cmaps.insert(name.clone(), cmap.clone());
+            }
+        }
         self
     }
 
@@ -221,33 +234,35 @@ impl<'a> LayoutReconstructor<'a> {
                 (b as char).to_string()
             };
 
-            // Calculate advance
-            let advance = if let Some(m) = metrics {
+            let font_size = state_stack.current.text_state.font_size;
+            let text_advance = if let Some(m) = metrics {
                 m.compute_char_advance(char_code, &state_stack.current.text_state)
             } else {
-                // Default fallback: 500/1000 width
-                (500.0 / 1000.0) * state_stack.current.text_state.font_size
+                (500.0 / 1000.0) * font_size
             };
 
-            // Transform origin to page device space
-            let (origin_x, origin_y) = state_stack.current.ctm.transform_point(
-                state_stack.current.text_matrix.e,
-                state_stack.current.text_matrix.f,
-            );
+            // Origins are already in page space. The stored advance has to use
+            // that same unit, or a scaled text matrix looks like a gap between letters.
+            let tm = state_stack.current.text_matrix;
+            let ctm = state_stack.current.ctm;
+            let page_advance = text_advance * (tm.a * ctm.a + tm.b * ctm.c);
+            let trm = state_stack.current.text_rendering_matrix();
+            let rendered_size = trm.c.hypot(trm.d);
 
+            let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
             let origin = Point::new(origin_x, origin_y);
             glyphs.push(PositionedGlyph::new(
                 char_code,
                 unicode,
                 origin,
-                advance,
+                page_advance,
                 font_name.clone(),
-                state_stack.current.text_state.font_size,
+                font_size,
+                rendered_size,
                 node_id,
             ));
 
-            // Advance text matrix
-            state_stack.current.advance_text(advance);
+            state_stack.current.advance_text(text_advance);
         }
     }
 
@@ -278,7 +293,8 @@ impl<'a> LayoutReconstructor<'a> {
             let same_size = (prev.font_size - glyph.font_size).abs() < 0.5;
             let same_node = prev.ast_node_id == glyph.ast_node_id;
             let horiz_dist = glyph.origin.x - (prev.origin.x + prev.advance);
-            let not_huge_gap = horiz_dist < prev.font_size * 2.5;
+            let visual = prev.rendered_size.max(prev.font_size);
+            let not_huge_gap = horiz_dist < visual * 2.5;
 
             if same_baseline && same_font && same_size && same_node && not_huge_gap {
                 cur_span_glyphs.push(glyph);
@@ -311,7 +327,8 @@ impl<'a> LayoutReconstructor<'a> {
             }
 
             let line_base = cur_line_spans[0].baseline_y;
-            let tolerance = cur_line_spans[0].font_size * 0.2;
+            let visual = cur_line_spans[0].rendered_size.max(cur_line_spans[0].font_size);
+            let tolerance = visual * 0.2;
 
             if (span.baseline_y - line_base).abs() <= tolerance {
                 cur_line_spans.push(span);
@@ -343,12 +360,14 @@ impl<'a> LayoutReconstructor<'a> {
             let dy = prev_line.baseline_y - line.baseline_y;
             let avg_height = prev_line.bbox.height().max(line.bbox.height());
 
-            // A normal line break is between 0.9x and 2.2x font line height
+            // A normal line break is between 0.9x and 2.2x font line height.
+            // A size or font change starts a new block so each block keeps one face.
             let is_consecutive = dy > 0.0 && dy <= avg_height * 2.2;
+            let same_face = Self::same_typographic_face(prev_line, &line);
             let horizontal_overlap = prev_line.bbox.intersects(&line.bbox)
                 || (line.bbox.min_x <= prev_line.bbox.max_x && line.bbox.max_x >= prev_line.bbox.min_x);
 
-            if is_consecutive && (horizontal_overlap || cur_para_lines.len() < 2) {
+            if is_consecutive && same_face && (horizontal_overlap || cur_para_lines.len() < 2) {
                 cur_para_lines.push(line);
             } else {
                 let source_nodes = Self::collect_source_node_ids(&cur_para_lines);
@@ -370,6 +389,17 @@ impl<'a> LayoutReconstructor<'a> {
         Ok(paragraphs)
     }
 
+    /// Lines share a face when the first span's resource and visual size match.
+    fn same_typographic_face(left: &TextLine, right: &TextLine) -> bool {
+        match (left.spans.first(), right.spans.first()) {
+            (Some(before), Some(after)) => {
+                before.font_name == after.font_name
+                    && (before.rendered_size - after.rendered_size).abs() < 0.5
+            }
+            _ => false,
+        }
+    }
+
     fn collect_source_node_ids(lines: &[TextLine]) -> Vec<NodeId> {
         let mut set = std::collections::BTreeSet::new();
         for line in lines {
@@ -380,5 +410,79 @@ impl<'a> LayoutReconstructor<'a> {
             }
         }
         set.into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fonts::ToUnicodeMap;
+    use crate::stream::{build_ast_from_operations, ContentStreamTokenizer};
+
+    fn reconstruct_with(stream: &str, builder: impl FnOnce(LayoutReconstructor) -> LayoutReconstructor) -> Vec<ParagraphBlock> {
+        let mut tokenizer = ContentStreamTokenizer::new(stream.as_bytes());
+        let ops = tokenizer.tokenize_all().expect("content stream tokenizes");
+        let ast = build_ast_from_operations(ops);
+        builder(LayoutReconstructor::new(&ast))
+            .reconstruct()
+            .expect("layout reconstructs")
+    }
+
+    #[test]
+    fn font_size_change_starts_a_new_paragraph() {
+        let paragraphs = reconstruct_with(
+            "BT\n/F1 16 Tf\n50 700 Tm\n(Rafael) Tj\n0 -20 Td\n/F2 9 Tf\n(Skills) Tj\nET\n",
+            |recon| {
+                let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+                recon.with_font("F1", metrics.clone()).with_font("F2", metrics)
+            },
+        );
+        assert_eq!(paragraphs.len(), 2);
+        assert_eq!(paragraphs[0].text(), "Rafael");
+        assert_eq!(paragraphs[1].text(), "Skills");
+        assert!((paragraphs[0].rendered_size() - 16.0).abs() < 0.01);
+        assert!((paragraphs[1].rendered_size() - 9.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn scaled_subset_font_decodes_without_inserted_spaces() {
+        let mut cmap = ToUnicodeMap::new();
+        cmap.insert(0x21, "R".to_string());
+        cmap.insert(0x22, "a".to_string());
+        cmap.insert(0x23, "f".to_string());
+        cmap.insert(0x24, "e".to_string());
+        cmap.insert(0x25, "l".to_string());
+        let metrics = FontMetrics::new(33, 37, vec![500.0; 5], 500.0);
+        let letters = std::str::from_utf8(&[0x21, 0x22, 0x23, 0x22, 0x24, 0x25]).expect("latin-1 bytes");
+        let stream = format!(
+            "0.2577778 0 0 0.24 -14.33629 601.92 cm\nBT\n67 0 0 67 806.4168 578 Tm\n/TT2 1 Tf\n({letters}) Tj\nET\n"
+        );
+
+        let paragraphs = reconstruct_with(&stream, |recon| {
+            recon.with_font("TT2", metrics).with_cmap("TT2", cmap)
+        });
+
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Rafael");
+        let glyph = &paragraphs[0].lines[0].spans[0].glyphs[0];
+        assert_eq!(glyph.char_code, 0x21);
+        assert_eq!(glyph.font_size, 1.0);
+        assert!((glyph.rendered_size - 16.08).abs() < 0.01);
+        let expected_advance = 0.5 * 67.0 * 0.2577778;
+        assert!((glyph.advance - expected_advance).abs() < 0.001);
+        assert_eq!(paragraphs[0].lines[0].spans.len(), 1);
+    }
+
+    #[test]
+    fn identity_ascii_keeps_latin1_and_text_space_advance() {
+        let paragraphs = reconstruct_with("BT /F1 12 Tf (Hello) Tj ET\n", |recon| recon);
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Hello");
+        let span = &paragraphs[0].lines[0].spans[0];
+        assert_eq!(span.glyphs.len(), 5);
+        assert_eq!(span.font_size, 12.0);
+        assert!((span.rendered_size - 12.0).abs() < 0.001);
+        assert!((span.glyphs[0].advance - 6.0).abs() < 0.001);
+        assert_eq!(span.glyphs[0].char_code, b'H' as u32);
     }
 }

@@ -21,8 +21,10 @@ pub struct PositionedGlyph {
     pub bbox: Rect,
     /// Active font identifier resource name (e.g. `/F1`).
     pub font_name: String,
-    /// Font size in points ($T_{fs}$).
+    /// Font size operand of `Tf`, in text space. Surgery writes this value back.
     pub font_size: f64,
+    /// Visual size in page points: the length of the text rendering matrix's y basis.
+    pub rendered_size: f64,
     /// Source AST node ID in the content stream where this glyph originated.
     pub ast_node_id: NodeId,
 }
@@ -36,9 +38,14 @@ impl PositionedGlyph {
         advance: f64,
         font_name: impl Into<String>,
         font_size: f64,
+        rendered_size: f64,
         ast_node_id: NodeId,
     ) -> Self {
-        let height = font_size;
+        let height = if rendered_size.abs() < 1e-6 {
+            font_size.abs()
+        } else {
+            rendered_size.abs()
+        };
         let bbox = Rect::from_origin_size(origin.x, origin.y, advance, height);
         Self {
             char_code,
@@ -48,6 +55,7 @@ impl PositionedGlyph {
             bbox,
             font_name: font_name.into(),
             font_size,
+            rendered_size,
             ast_node_id,
         }
     }
