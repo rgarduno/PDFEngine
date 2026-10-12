@@ -839,6 +839,134 @@ impl PyOptimizationStats {
     }
 }
 
+/// Hierarchical bookmark / Table of Contents item in Python (`/Outlines`).
+#[pyclass(name = "OutlineItem")]
+#[derive(Debug, Clone)]
+pub struct PyOutlineItem {
+    #[pyo3(get, set)]
+    pub title: String,
+    #[pyo3(get, set)]
+    pub page_number: Option<usize>,
+    #[pyo3(get, set)]
+    pub top: Option<f64>,
+    #[pyo3(get, set)]
+    pub left: Option<f64>,
+    #[pyo3(get, set)]
+    pub zoom: Option<f64>,
+    #[pyo3(get, set)]
+    pub uri: Option<String>,
+    #[pyo3(get, set)]
+    pub is_open: bool,
+    #[pyo3(get, set)]
+    pub bold: bool,
+    #[pyo3(get, set)]
+    pub italic: bool,
+    #[pyo3(get, set)]
+    pub color: Option<Vec<f64>>,
+    #[pyo3(get, set)]
+    pub children: Vec<PyOutlineItem>,
+}
+
+#[pymethods]
+impl PyOutlineItem {
+    #[new]
+    #[pyo3(signature = (
+        title,
+        page_number=None,
+        top=None,
+        left=None,
+        zoom=None,
+        uri=None,
+        is_open=true,
+        bold=false,
+        italic=false,
+        color=None,
+        children=None
+    ))]
+    pub fn new(
+        title: String,
+        page_number: Option<usize>,
+        top: Option<f64>,
+        left: Option<f64>,
+        zoom: Option<f64>,
+        uri: Option<String>,
+        is_open: bool,
+        bold: bool,
+        italic: bool,
+        color: Option<Vec<f64>>,
+        children: Option<Vec<PyOutlineItem>>,
+    ) -> Self {
+        Self {
+            title,
+            page_number,
+            top,
+            left,
+            zoom,
+            uri,
+            is_open,
+            bold,
+            italic,
+            color,
+            children: children.unwrap_or_default(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<OutlineItem title='{}' page={:?} uri={:?} children={}>",
+            self.title,
+            self.page_number,
+            self.uri,
+            self.children.len()
+        )
+    }
+}
+
+impl PyOutlineItem {
+    pub fn from_core(item: pdf_engine_core::ops::OutlineItem) -> Self {
+        Self {
+            title: item.title,
+            page_number: item.page_number,
+            top: item.top,
+            left: item.left,
+            zoom: item.zoom,
+            uri: item.uri,
+            is_open: item.is_open,
+            bold: item.bold,
+            italic: item.italic,
+            color: item.color.map(|c| c.to_vec()),
+            children: item
+                .children
+                .into_iter()
+                .map(PyOutlineItem::from_core)
+                .collect(),
+        }
+    }
+
+    pub fn to_core(&self) -> pdf_engine_core::ops::OutlineItem {
+        let color = self.color.as_ref().and_then(|c| {
+            if c.len() == 3 {
+                Some([c[0], c[1], c[2]])
+            } else {
+                None
+            }
+        });
+        pdf_engine_core::ops::OutlineItem {
+            title: self.title.clone(),
+            page_number: self.page_number,
+            top: self.top,
+            left: self.left,
+            zoom: self.zoom,
+            uri: self.uri.clone(),
+            is_open: self.is_open,
+            bold: self.bold,
+            italic: self.italic,
+            color,
+            children: self.children.iter().map(PyOutlineItem::to_core).collect(),
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -2642,6 +2770,42 @@ impl PyPdfDocument {
         let json_mod = py.import("json")?;
         json_mod.call_method1("loads", (json_str,))
     }
+
+    /// Extracts the hierarchical Document Outline (`/Outlines` / Table of Contents) tree.
+    pub fn get_outlines(&mut self) -> PyResult<Vec<PyOutlineItem>> {
+        let items = self
+            .doc
+            .get_outlines()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract outlines: {}", e)))?;
+        Ok(items.into_iter().map(PyOutlineItem::from_core).collect())
+    }
+
+    /// Replaces the Document Outline (`/Outlines` / Table of Contents) tree and returns total items written.
+    pub fn set_outlines(&mut self, items: Vec<PyOutlineItem>) -> PyResult<usize> {
+        let core_items: Vec<pdf_engine_core::ops::OutlineItem> =
+            items.iter().map(PyOutlineItem::to_core).collect();
+        self.doc
+            .set_outlines(&core_items)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to update outlines: {}", e)))
+    }
+
+    /// Appends a single outline item at root or under `parent_indices` and returns total items written.
+    #[pyo3(signature = (item, parent_indices=None))]
+    pub fn add_outline_item(
+        &mut self,
+        item: PyOutlineItem,
+        parent_indices: Option<Vec<usize>>,
+    ) -> PyResult<usize> {
+        let indices = parent_indices.unwrap_or_default();
+        pdf_engine_core::ops::add_outline_item(&mut self.doc, item.to_core(), &indices)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to add outline item: {}", e)))
+    }
+
+    /// Removes the entire `/Outlines` tree from the document.
+    pub fn clear_outlines(&mut self) -> PyResult<bool> {
+        pdf_engine_core::ops::clear_outlines(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to clear outlines: {}", e)))
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -2706,6 +2870,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTableCell>()?;
     m.add_class::<PyDetectedTable>()?;
     m.add_class::<PyOptimizationStats>()?;
+    m.add_class::<PyOutlineItem>()?;
     m.add_function(wrap_pyfunction!(compare_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;

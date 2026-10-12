@@ -8,6 +8,7 @@ pub mod diff;
 pub mod merge;
 pub mod metadata;
 pub mod optimize;
+pub mod outlines;
 pub mod reorder;
 pub mod rotation;
 pub mod split;
@@ -26,6 +27,7 @@ pub use optimize::{
     collect_garbage, deduplicate_streams, optimize_document, recompress_streams,
     save_optimized_to_vec, OptimizationOptions, OptimizationStats,
 };
+pub use outlines::{add_outline_item, clear_outlines, extract_outlines, set_outlines, OutlineItem};
 pub use reorder::{delete_pages, reorder_pages};
 pub use rotation::{
     get_page_rotation, normalize_rotation, rotate_all_pages, rotate_page, set_page_rotation,

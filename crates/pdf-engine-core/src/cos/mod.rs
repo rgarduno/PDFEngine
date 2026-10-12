@@ -666,6 +666,19 @@ impl PdfDocument {
     pub fn set_metadata(&mut self, meta: &crate::ops::metadata::DocumentMetadata) -> PdfResult<()> {
         crate::ops::metadata::update_metadata(self, meta)
     }
+
+    /// Extracts the hierarchical Document Outline (`/Outlines` / Table of Contents) tree.
+    pub fn get_outlines(&mut self) -> PdfResult<Vec<crate::ops::outlines::OutlineItem>> {
+        crate::ops::outlines::extract_outlines(self)
+    }
+
+    /// Replaces the Document Outline (`/Outlines` / Table of Contents) tree.
+    pub fn set_outlines(
+        &mut self,
+        items: &[crate::ops::outlines::OutlineItem],
+    ) -> PdfResult<usize> {
+        crate::ops::outlines::set_outlines(self, items)
+    }
 }
 
 #[cfg(test)]
