@@ -214,6 +214,42 @@ pub struct PyDetectedFormFieldCandidate {
 
 #[pymethods]
 impl PyDetectedFormFieldCandidate {
+    #[new]
+    #[pyo3(signature = (
+        candidate_id=1,
+        field_type="Text".to_string(),
+        suggested_name="Field".to_string(),
+        label=None,
+        min_x=0.0,
+        min_y=0.0,
+        max_x=100.0,
+        max_y=20.0,
+        confidence=1.0
+    ))]
+    pub fn new(
+        candidate_id: usize,
+        field_type: String,
+        suggested_name: String,
+        label: Option<String>,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        confidence: f64,
+    ) -> Self {
+        Self {
+            candidate_id,
+            field_type,
+            suggested_name,
+            label,
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+            confidence,
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "<DetectedFormFieldCandidate id={} type='{}' name='{}' label={:?} confidence={:.2} bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
