@@ -4,6 +4,8 @@ pub mod aes;
 pub mod md5;
 pub mod sha256;
 
-pub use aes::{aes_cbc_decrypt, aes_cbc_encrypt, AesKey};
+pub use aes::{
+    aes_cbc_decrypt, aes_cbc_decrypt_nopad, aes_cbc_encrypt, aes_cbc_encrypt_nopad, AesKey,
+};
 pub use md5::md5;
 pub use sha256::sha256;

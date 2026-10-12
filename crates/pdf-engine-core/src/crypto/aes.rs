@@ -361,6 +361,66 @@ pub fn aes_cbc_decrypt(key: &[u8], ciphertext_with_iv: &[u8]) -> PdfResult<Vec<u
     }
 }
 
+/// Encrypts plaintext with AES-CBC without PKCS#7 padding and without prepending the IV.
+/// The plaintext length must be a multiple of 16 bytes.
+/// Required by ISO 32000-2 §7.6.4.3 Algorithm 2.B, `/UE`, `/OE`, and `/Perms`.
+pub fn aes_cbc_encrypt_nopad(key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> PdfResult<Vec<u8>> {
+    if plaintext.len() % 16 != 0 {
+        return Err(PdfError::CryptographyError(format!(
+            "Invalid unpadded AES CBC plaintext length: {} bytes (must be multiple of 16)",
+            plaintext.len()
+        )));
+    }
+
+    let cipher = AesKey::new(key)?;
+    let mut buffer = Vec::with_capacity(plaintext.len());
+    let mut current_block = *iv;
+
+    for chunk in plaintext.chunks_exact(16) {
+        let mut block = [0u8; 16];
+        for i in 0..16 {
+            block[i] = chunk[i] ^ current_block[i];
+        }
+        cipher.encrypt_block(&mut block);
+        current_block = block;
+        buffer.extend_from_slice(&block);
+    }
+
+    Ok(buffer)
+}
+
+/// Decrypts ciphertext with AES-CBC without PKCS#7 padding and with an explicit 16-byte IV.
+/// The ciphertext length must be a multiple of 16 bytes.
+/// Required by ISO 32000-2 §7.6.4.4 for decrypting `/UE`, `/OE`, and `/Perms`.
+pub fn aes_cbc_decrypt_nopad(key: &[u8], iv: &[u8; 16], ciphertext: &[u8]) -> PdfResult<Vec<u8>> {
+    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+        return Err(PdfError::CryptographyError(format!(
+            "Invalid unpadded AES CBC ciphertext length: {} bytes (must be non-empty multiple of 16)",
+            ciphertext.len()
+        )));
+    }
+
+    let cipher = AesKey::new(key)?;
+    let mut plaintext = Vec::with_capacity(ciphertext.len());
+    let mut prev_block = *iv;
+
+    for chunk in ciphertext.chunks_exact(16) {
+        let mut block = [0u8; 16];
+        block.copy_from_slice(chunk);
+
+        let mut decrypted = block;
+        cipher.decrypt_block(&mut decrypted);
+
+        for i in 0..16 {
+            decrypted[i] ^= prev_block[i];
+        }
+        prev_block = block;
+        plaintext.extend_from_slice(&decrypted);
+    }
+
+    Ok(plaintext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

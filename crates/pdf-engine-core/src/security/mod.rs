@@ -19,7 +19,8 @@ pub mod signatures;
 
 pub use cms::{cms_timestamp_request, embed_cms_timestamp, sign_document_cms, CmsSigningMaterial};
 pub use handler::{
-    authenticate_document, decrypt_document, encrypt_document, EncryptionOptions,
+    authenticate_document, compute_hash_rev5, compute_hash_rev6, decrypt_document,
+    encrypt_document, get_encryption_revision, prepare_utf8_password, EncryptionOptions,
     EncryptionRevision,
 };
 pub use limits::SecurityLimits;

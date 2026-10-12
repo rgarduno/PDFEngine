@@ -2268,22 +2268,29 @@ impl PyPdfDocument {
         Ok(modified)
     }
 
-    /// Encrypts the PDF with the standard security handler, revision 4 (AES-128).
+    /// Encrypts the PDF with the standard security handler (Revision 4 AES-128 or Revisions 5/6 AES-256).
     /// `owner_password` is required. An empty owner password is rejected.
-    #[pyo3(signature = (user_password="", owner_password="", permissions=None, encrypt_metadata=true))]
+    #[pyo3(signature = (user_password="", owner_password="", permissions=None, encrypt_metadata=true, algorithm="aes128"))]
     pub fn encrypt(
         &mut self,
         user_password: &str,
         owner_password: &str,
         permissions: Option<PyPdfPermissions>,
         encrypt_metadata: bool,
+        algorithm: &str,
     ) -> PyResult<()> {
+        let revision = EncryptionRevision::from_name(algorithm).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Unsupported encryption algorithm '{}'. Use 'aes128', 'aes256', or 'aes256-r5'.",
+                algorithm
+            ))
+        })?;
         let perms = permissions.map(|p| p.to_core()).unwrap_or_default();
         let options = EncryptionOptions {
             user_password: user_password.to_string(),
             owner_password: owner_password.to_string(),
             permissions: perms,
-            revision: EncryptionRevision::Aes128,
+            revision,
             encrypt_metadata,
         };
         pdf_engine_core::security::encrypt_document(&mut self.doc, &options)
@@ -2302,6 +2309,12 @@ impl PyPdfDocument {
     /// Returns true if the document has an `/Encrypt` trailer dictionary.
     pub fn is_encrypted(&self) -> bool {
         self.doc.xref.trailer.contains_key("Encrypt")
+    }
+
+    /// Returns the encryption algorithm label (`"AES-128-R4"`, `"AES-256-R5"`, or `"AES-256-R6"`) if encrypted.
+    pub fn encryption_algorithm(&mut self) -> Option<String> {
+        pdf_engine_core::security::get_encryption_revision(&mut self.doc)
+            .map(|r| r.as_str().to_string())
     }
 
     /// Stamps a signature on one page.
