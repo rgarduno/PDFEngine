@@ -967,6 +967,93 @@ impl PyOutlineItem {
     }
 }
 
+/// Metadata describing an embedded file attachment in a PDF document (`/Names /EmbeddedFiles` or `/FileAttachment`).
+#[pyclass(name = "EmbeddedAttachmentInfo")]
+#[derive(Debug, Clone)]
+pub struct PyEmbeddedAttachmentInfo {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub filename: String,
+    #[pyo3(get)]
+    pub mime_type: String,
+    #[pyo3(get)]
+    pub size: usize,
+    #[pyo3(get)]
+    pub description: Option<String>,
+    #[pyo3(get)]
+    pub creation_date: Option<String>,
+    #[pyo3(get)]
+    pub modification_date: Option<String>,
+    #[pyo3(get)]
+    pub checksum_md5: Option<String>,
+    #[pyo3(get)]
+    pub checksum_sha256: String,
+    #[pyo3(get)]
+    pub source: String,
+    #[pyo3(get)]
+    pub page_number: Option<usize>,
+}
+
+#[pymethods]
+impl PyEmbeddedAttachmentInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "<EmbeddedAttachmentInfo name='{}' mime='{}' size={} sha256='{}'>",
+            self.name, self.mime_type, self.size, self.checksum_sha256
+        )
+    }
+}
+
+impl PyEmbeddedAttachmentInfo {
+    pub fn from_core(info: pdf_engine_core::ops::EmbeddedAttachmentInfo) -> Self {
+        Self {
+            name: info.name,
+            filename: info.filename,
+            mime_type: info.mime_type,
+            size: info.size,
+            description: info.description,
+            creation_date: info.creation_date,
+            modification_date: info.modification_date,
+            checksum_md5: info.checksum_md5,
+            checksum_sha256: info.checksum_sha256,
+            source: info.source,
+            page_number: info.page_number,
+        }
+    }
+}
+
+/// Extracted embedded file attachment including metadata and raw uncompressed bytes.
+#[pyclass(name = "EmbeddedAttachment")]
+#[derive(Debug, Clone)]
+pub struct PyEmbeddedAttachment {
+    #[pyo3(get)]
+    pub info: PyEmbeddedAttachmentInfo,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+}
+
+#[pymethods]
+impl PyEmbeddedAttachment {
+    fn __repr__(&self) -> String {
+        format!(
+            "<EmbeddedAttachment name='{}' mime='{}' bytes={}>",
+            self.info.name,
+            self.info.mime_type,
+            self.data.len()
+        )
+    }
+}
+
+impl PyEmbeddedAttachment {
+    pub fn from_core(att: pdf_engine_core::ops::EmbeddedAttachment) -> Self {
+        Self {
+            info: PyEmbeddedAttachmentInfo::from_core(att.info),
+            data: att.data,
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -2806,6 +2893,44 @@ impl PyPdfDocument {
         pdf_engine_core::ops::clear_outlines(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to clear outlines: {}", e)))
     }
+
+    /// Lists all embedded file attachments in the document (`/Names /EmbeddedFiles` and `/FileAttachment` annotations).
+    pub fn list_attachments(&mut self) -> PyResult<Vec<PyEmbeddedAttachmentInfo>> {
+        let items = pdf_engine_core::ops::list_attachments(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to list attachments: {}", e)))?;
+        Ok(items
+            .into_iter()
+            .map(PyEmbeddedAttachmentInfo::from_core)
+            .collect())
+    }
+
+    /// Extracts a specific embedded file attachment by logical name or filename.
+    pub fn extract_attachment(&mut self, name: &str) -> PyResult<PyEmbeddedAttachment> {
+        let att = pdf_engine_core::ops::extract_attachment(&mut self.doc, name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract attachment: {}", e)))?;
+        Ok(PyEmbeddedAttachment::from_core(att))
+    }
+
+    /// Embeds a file into the document's `/Names /EmbeddedFiles` name tree (ISO 32000-1 §7.11.4).
+    #[pyo3(signature = (name, data, mime_type=None, description=None))]
+    pub fn add_attachment(
+        &mut self,
+        name: &str,
+        data: &[u8],
+        mime_type: Option<&str>,
+        description: Option<&str>,
+    ) -> PyResult<PyEmbeddedAttachmentInfo> {
+        let info =
+            pdf_engine_core::ops::add_attachment(&mut self.doc, name, data, mime_type, description)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to add attachment: {}", e)))?;
+        Ok(PyEmbeddedAttachmentInfo::from_core(info))
+    }
+
+    /// Deletes an embedded file attachment by logical name or filename.
+    pub fn delete_attachment(&mut self, name: &str) -> PyResult<bool> {
+        pdf_engine_core::ops::delete_attachment(&mut self.doc, name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete attachment: {}", e)))
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -2871,6 +2996,8 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDetectedTable>()?;
     m.add_class::<PyOptimizationStats>()?;
     m.add_class::<PyOutlineItem>()?;
+    m.add_class::<PyEmbeddedAttachmentInfo>()?;
+    m.add_class::<PyEmbeddedAttachment>()?;
     m.add_function(wrap_pyfunction!(compare_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;

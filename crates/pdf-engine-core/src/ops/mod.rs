@@ -3,6 +3,7 @@
 //! Provides zero-loss document merging, page splitting/extraction, page rotation,
 //! reordering, and deletion with topological reference graph preservation.
 
+pub mod attachments;
 pub mod cloner;
 pub mod diff;
 pub mod merge;
@@ -13,6 +14,10 @@ pub mod reorder;
 pub mod rotation;
 pub mod split;
 
+pub use attachments::{
+    add_attachment, delete_attachment, extract_attachment, list_attachments, EmbeddedAttachment,
+    EmbeddedAttachmentInfo,
+};
 pub use cloner::ObjectCloner;
 pub use diff::{
     compare_documents, compute_word_diffs, DiffKind, DiffOptions, DiffReport, DiffSummary,
