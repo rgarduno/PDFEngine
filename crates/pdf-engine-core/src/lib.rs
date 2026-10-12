@@ -74,8 +74,10 @@ pub use fonts::{
     GlyphFallback, ResolvedFont, ToUnicodeMap, WinAnsiEncoding,
 };
 pub use forms::{
-    extract_document_forms, fill_field_value, fill_fields_batch, flatten_document_forms, FormField,
-    FormFieldType,
+    apply_detected_form_fields, create_form_field, delete_form_field, detect_form_field_candidates,
+    extract_document_forms, fill_field_value, fill_fields_batch, flatten_document_forms,
+    update_form_field, DetectedFormFieldCandidate, FormField, FormFieldCreateOptions,
+    FormFieldType, FormFieldUpdateOptions,
 };
 pub use images::{
     create_image_xobject, encode_png, extract_page_images, get_image_binary, parse_jpeg,

@@ -188,6 +188,88 @@ impl PyFormField {
     }
 }
 
+/// A detected form field candidate before being converted into an interactive AcroForm widget.
+#[pyclass(name = "DetectedFormFieldCandidate")]
+#[derive(Debug, Clone)]
+pub struct PyDetectedFormFieldCandidate {
+    #[pyo3(get)]
+    pub candidate_id: usize,
+    #[pyo3(get)]
+    pub field_type: String,
+    #[pyo3(get)]
+    pub suggested_name: String,
+    #[pyo3(get)]
+    pub label: Option<String>,
+    #[pyo3(get)]
+    pub min_x: f64,
+    #[pyo3(get)]
+    pub min_y: f64,
+    #[pyo3(get)]
+    pub max_x: f64,
+    #[pyo3(get)]
+    pub max_y: f64,
+    #[pyo3(get)]
+    pub confidence: f64,
+}
+
+#[pymethods]
+impl PyDetectedFormFieldCandidate {
+    fn __repr__(&self) -> String {
+        format!(
+            "<DetectedFormFieldCandidate id={} type='{}' name='{}' label={:?} confidence={:.2} bbox=({:.1}, {:.1}, {:.1}, {:.1})>",
+            self.candidate_id,
+            self.field_type,
+            self.suggested_name,
+            self.label,
+            self.confidence,
+            self.min_x,
+            self.min_y,
+            self.max_x,
+            self.max_y
+        )
+    }
+
+    /// Returns spatial bounding box coordinates as a tuple (min_x, min_y, max_x, max_y).
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        (self.min_x, self.min_y, self.max_x, self.max_y)
+    }
+}
+
+impl PyDetectedFormFieldCandidate {
+    pub fn from_core(c: pdf_engine_core::forms::DetectedFormFieldCandidate) -> Self {
+        Self {
+            candidate_id: c.candidate_id,
+            field_type: c.field_type.as_str().to_string(),
+            suggested_name: c.suggested_name,
+            label: c.label,
+            min_x: c.rect.min_x,
+            min_y: c.rect.min_y,
+            max_x: c.rect.max_x,
+            max_y: c.rect.max_y,
+            confidence: c.confidence,
+        }
+    }
+
+    pub fn to_core(&self) -> pdf_engine_core::forms::DetectedFormFieldCandidate {
+        let ft = match self.field_type.to_lowercase().as_str() {
+            "checkbox" | "btn" => pdf_engine_core::forms::FormFieldType::Checkbox,
+            "signature" | "sig" => pdf_engine_core::forms::FormFieldType::Signature,
+            "choice" | "ch" => pdf_engine_core::forms::FormFieldType::Choice,
+            _ => pdf_engine_core::forms::FormFieldType::Text,
+        };
+        pdf_engine_core::forms::DetectedFormFieldCandidate {
+            candidate_id: self.candidate_id,
+            field_type: ft,
+            suggested_name: self.suggested_name.clone(),
+            label: self.label.clone(),
+            rect: pdf_engine_core::layout::geometry::Rect::new(
+                self.min_x, self.min_y, self.max_x, self.max_y,
+            ),
+            confidence: self.confidence,
+        }
+    }
+}
+
 /// High-level representation of a PDF annotation in Python.
 #[pyclass(name = "Annotation")]
 #[derive(Debug, Clone)]
@@ -1389,6 +1471,74 @@ impl PyPdfDocument {
         Ok(count)
     }
 
+    /// Detects smart form field candidates from vector drawings and layout labels on a page (1-indexed).
+    pub fn detect_form_fields(
+        &mut self,
+        page_number: usize,
+    ) -> PyResult<Vec<PyDetectedFormFieldCandidate>> {
+        let candidates =
+            pdf_engine_core::forms::detect_form_field_candidates(&mut self.doc, page_number)
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Form field detection failed: {}", e))
+                })?;
+        Ok(candidates
+            .into_iter()
+            .map(PyDetectedFormFieldCandidate::from_core)
+            .collect())
+    }
+
+    /// Converts detected form field candidates into interactive AcroForm widgets on a page (1-indexed).
+    /// If `candidates` is None, detects candidates automatically and applies them.
+    #[pyo3(signature = (page_number, candidates=None))]
+    pub fn apply_detected_form_fields(
+        &mut self,
+        page_number: usize,
+        candidates: Option<Vec<PyDetectedFormFieldCandidate>>,
+    ) -> PyResult<Vec<PyFormField>> {
+        let core_candidates = match candidates {
+            Some(cands) => cands.into_iter().map(|c| c.to_core()).collect(),
+            None => {
+                pdf_engine_core::forms::detect_form_field_candidates(&mut self.doc, page_number)
+                    .map_err(|e| {
+                        PyRuntimeError::new_err(format!("Form field detection failed: {}", e))
+                    })?
+            }
+        };
+
+        let created = pdf_engine_core::forms::apply_detected_form_fields(
+            &mut self.doc,
+            page_number,
+            &core_candidates,
+        )
+        .map_err(|e| {
+            PyRuntimeError::new_err(format!("Applying detected form fields failed: {}", e))
+        })?;
+
+        self.reload_active_pages()?;
+
+        Ok(created
+            .into_iter()
+            .map(|f| PyFormField {
+                id: f.id.number,
+                name: f.name,
+                alt_name: f.alt_name,
+                field_type: f.field_type.as_str().to_string(),
+                value: f.value,
+                default_value: f.default_value,
+                min_x: f.rect.min_x,
+                min_y: f.rect.min_y,
+                max_x: f.rect.max_x,
+                max_y: f.rect.max_y,
+                page_number: f.page_number,
+                options: f.options,
+                is_read_only: f.is_read_only,
+                is_required: f.is_required,
+                is_multiline: f.is_multiline,
+                max_length: f.max_length,
+            })
+            .collect())
+    }
+
     /// Extracts all non-widget annotations from a specific page.
     pub fn get_page_annotations(&mut self, page_index: usize) -> PyResult<Vec<PyAnnotation>> {
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
@@ -2499,6 +2649,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParagraph>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyFormField>()?;
+    m.add_class::<PyDetectedFormFieldCandidate>()?;
     m.add_class::<PyAnnotation>()?;
     m.add_class::<PyRedactionSummary>()?;
     m.add_class::<PyPdfPermissions>()?;

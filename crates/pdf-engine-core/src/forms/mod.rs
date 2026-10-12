@@ -3,6 +3,7 @@
 //! Provides inspection, filling, and permanent flattening of PDF interactive form fields.
 
 pub mod builder;
+pub mod detect;
 pub mod filler;
 pub mod flatten;
 pub mod reader;
@@ -11,6 +12,9 @@ pub mod types;
 pub use builder::{
     create_form_field, delete_form_field, get_or_create_acroform, update_form_field,
     FormFieldCreateOptions, FormFieldUpdateOptions,
+};
+pub use detect::{
+    apply_detected_form_fields, detect_form_field_candidates, DetectedFormFieldCandidate,
 };
 pub use filler::{fill_field_value, fill_fields_batch};
 pub use flatten::flatten_document_forms;
