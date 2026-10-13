@@ -158,6 +158,17 @@ PDFEngine is decoupled into three dedicated repositories for maximum stability, 
 │    - Attachments and disallowed annotations are removed                     │
 │    - Catalog XMP and an original RGB output intent are written              │
 │    - This is not veraPDF, Acrobat preflight, or a court acceptance          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 17. Page composition, page boxes, and text search                           │
+│    - Insert a blank page, duplicate one, or copy other pages                │
+│    - The index is 0-based. The page count appends                           │
+│    - MediaBox, CropBox, BleedBox, TrimBox, and ArtBox                       │
+│    - Optional boxes inherit /Parent. Clearing drops that key                │
+│    - MediaBox stays. A new box must meet the media box                      │
+│    - Search reads paragraphs: 512 scalars, at most 500 hits                 │
+│    - Parse or layout failure skips the page. Security stops                 │
+│    - Search does not edit the file and is not redaction                     │
+│    - A hit box unions the lines that contain the match                      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -168,44 +179,33 @@ PDFEngine is decoupled into three dedicated repositories for maximum stability, 
 ```
 PDFEngine/
 ├── Cargo.toml                  # Cargo workspace configuration
-├── crates/
-│   ├── pdf-engine-core/        # Pure Rust library: ISO 32000 parsing, layout, editor
-│   │   ├── Cargo.toml
-│   │   ├── src/
-│   │   │   ├── lib.rs          # Public crate API and layer re-exports
-│   │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
-│   │   │   ├── crypto/         # AES-128 CBC, SHA-256, and MD5 primitives
-│   │   │   ├── security/       # Rev 4 handler, SHA-256 attestation, and detached PKCS#7
-│   │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
-│   │   │   ├── stream/         # Content Stream AST & graphics state evaluator
-│   │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
-│   │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
-│   │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
-│   │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
-│   │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
-│   │   │   ├── ops/            # Document operations: cloner, rotation, split, merge, reorder, delete
-│   │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
-│   │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
-│   │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
-│   │   │   └── editor/         # Surgical stream mutator & reflow engine
-│   │   └── tests/              # Conformance and integration test suite
-│   └── pdf-engine-python/      # High-performance PyO3 native Python extension
-│       ├── Cargo.toml
-│       └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation, PyRedaction, PyTable exports
-├── backend/                    # Commercial FastAPI REST & WebSocket service
-│   ├── app/
-│   │   ├── main.py             # REST endpoints & real-time WebSocket reflow channel
-│   │   └── models.py           # Pydantic v2 schemas (SceneGraph, BoundingBox, Edits)
-│   ├── requirements.txt
-│   └── tests/
-│       └── test_api.py         # Full HTTP & WebSocket integration test suite
-└── web/                        # Next.js 16 + React 19 Interactive Studio
-    ├── src/
-    │   ├── app/                # App router studio entrypoint
-    │   ├── components/         # DualCanvasViewer, Toolbar, Sidebar
-    │   └── lib/                # API client, WebSocket stream & TypeScript types
-    └── package.json
+└── crates/
+    ├── pdf-engine-core/        # Pure Rust library: ISO 32000 parsing, layout, editor
+    │   ├── Cargo.toml
+    │   ├── src/
+    │   │   ├── lib.rs          # Public crate API and layer re-exports
+    │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
+    │   │   ├── crypto/         # AES-128 CBC, SHA-256, and MD5 primitives
+    │   │   ├── security/       # Rev 4 handler, SHA-256 attestation, and detached PKCS#7
+    │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
+    │   │   ├── stream/         # Content Stream AST & graphics state evaluator
+    │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
+    │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
+    │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
+    │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
+    │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
+    │   │   ├── ops/            # Page boxes, text search, split, merge, reorder, and delete
+    │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
+    │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
+    │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
+    │   │   └── editor/         # Surgical stream mutator & reflow engine
+    │   └── tests/              # Conformance and integration test suite
+    └── pdf-engine-python/      # High-performance PyO3 native Python extension
+        ├── Cargo.toml
+        └── src/lib.rs          # PyPdfDocument, PyPage, PyParagraph, PyFormField, PyAnnotation, PyRedaction, PyTable exports
 ```
+
+PDFAPI and PDFWeb are sibling repositories. This tree is only the engine.
 
 ---
 

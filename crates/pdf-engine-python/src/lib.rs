@@ -1435,6 +1435,15 @@ impl PyPdfDocument {
         self.active_pages = reloaded_pages;
         Ok(())
     }
+
+    /// Rebuilds page handles after a composition changes the page list.
+    fn refresh_handles(&mut self) -> PyResult<()> {
+        let updated = Self::from_doc(self.doc.clone())?;
+        self.doc = updated.doc;
+        self.page_ids = updated.page_ids;
+        self.active_pages = updated.active_pages;
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -3215,6 +3224,161 @@ impl PyPdfDocument {
         self.reload_active_pages()?;
         pdfua_report_to_py_dict(py, &report)
     }
+
+    /// Inserts an empty page at a 0-based index. The current page count appends.
+    ///
+    /// Width and height are points inside `(0, 14400]`. Returns the landing index.
+    #[pyo3(signature = (index, width=612.0, height=792.0))]
+    pub fn insert_blank_page(&mut self, index: usize, width: f64, height: f64) -> PyResult<usize> {
+        let landed = pdf_engine_core::ops::insert_blank_page(&mut self.doc, index, width, height)
+            .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        Ok(landed)
+    }
+
+    /// Copies one page inside this document. Both indexes are 0-based.
+    ///
+    /// `insert_at` equal to the page count appends. Returns the landing index.
+    pub fn duplicate_page(&mut self, source_index: usize, insert_at: usize) -> PyResult<usize> {
+        let landed =
+            pdf_engine_core::ops::duplicate_page(&mut self.doc, source_index, insert_at)
+                .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        Ok(landed)
+    }
+
+    /// Copies pages from `source` into this document at a 0-based index.
+    ///
+    /// `source` must be a different document. A copy inside this document uses
+    /// `duplicate_page`. Returns how many pages were inserted.
+    pub fn insert_pages(
+        &mut self,
+        source: &PyPdfDocument,
+        source_indices: Vec<usize>,
+        insert_at: usize,
+    ) -> PyResult<usize> {
+        let mut source_doc = source.doc.clone();
+        let inserted = pdf_engine_core::ops::insert_pages(
+            &mut self.doc,
+            &mut source_doc,
+            &source_indices,
+            insert_at,
+        )
+        .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        Ok(inserted)
+    }
+
+    /// Reverses page order. Fewer than two pages leaves the document unchanged.
+    pub fn reverse_pages(&mut self) -> PyResult<()> {
+        pdf_engine_core::ops::reverse_pages(&mut self.doc).map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        Ok(())
+    }
+
+    /// Reads the five ISO 32000-1 page boxes. `page_index` is 0-based.
+    ///
+    /// Missing optional boxes are `None`. A missing MediaBox is reported as US Letter.
+    pub fn page_boxes<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let boxes = pdf_engine_core::ops::page_boxes(&mut self.doc, page_index)
+            .map_err(map_engine_value)?;
+        page_boxes_to_py(py, &boxes)
+    }
+
+    /// Writes or clears one page box on that page. `page_index` is 0-based.
+    ///
+    /// `corners` is `[x0, y0, x1, y1]`. `None` removes crop, bleed, trim, or art
+    /// from this page only. MediaBox cannot be removed.
+    #[pyo3(signature = (page_index, kind, corners=None))]
+    pub fn set_page_box<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+        kind: &str,
+        corners: Option<Vec<f64>>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let boxes = pdf_engine_core::ops::set_page_boundary(
+            &mut self.doc,
+            page_index,
+            kind,
+            corners.as_deref(),
+        )
+        .map_err(map_engine_value)?;
+        page_boxes_to_py(py, &boxes)
+    }
+
+    /// Searches reconstructed paragraph text. The first page is index 0.
+    ///
+    /// Offsets count Unicode scalars in the paragraph. The query is not stored.
+    #[pyo3(signature = (query, ignore_case=false, max_hits=100))]
+    pub fn search_text<'py>(
+        &mut self,
+        py: Python<'py>,
+        query: &str,
+        ignore_case: bool,
+        max_hits: usize,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let report =
+            pdf_engine_core::ops::search_document(&mut self.doc, query, ignore_case, max_hits)
+                .map_err(map_engine_value)?;
+        search_report_to_py(py, &report)
+    }
+}
+
+fn map_engine_value(err: pdf_engine_core::PdfError) -> PyErr {
+    match &err {
+        pdf_engine_core::PdfError::OperationError(_)
+        | pdf_engine_core::PdfError::InvalidPageNumber { .. } => {
+            PyValueError::new_err(err.to_string())
+        }
+        _ => PyRuntimeError::new_err(err.to_string()),
+    }
+}
+
+fn rect_corners(rect: Rect) -> [f64; 4] {
+    [rect.min_x, rect.min_y, rect.max_x, rect.max_y]
+}
+
+fn page_boxes_to_py<'py>(
+    py: Python<'py>,
+    boxes: &pdf_engine_core::ops::PageBoxes,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("media", rect_corners(boxes.media))?;
+    dict.set_item("crop", boxes.crop.map(rect_corners))?;
+    dict.set_item("bleed", boxes.bleed.map(rect_corners))?;
+    dict.set_item("trim", boxes.trim.map(rect_corners))?;
+    dict.set_item("art", boxes.art.map(rect_corners))?;
+    Ok(dict)
+}
+
+fn search_report_to_py<'py>(
+    py: Python<'py>,
+    report: &pdf_engine_core::ops::TextSearchReport,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let hits = pyo3::types::PyList::empty(py);
+    for hit in &report.hits {
+        let item = pyo3::types::PyDict::new(py);
+        item.set_item("page_index", hit.page_index)?;
+        item.set_item("paragraph_id", hit.paragraph_id)?;
+        item.set_item("char_start", hit.char_start)?;
+        item.set_item("char_end", hit.char_end)?;
+        item.set_item("snippet", &hit.snippet)?;
+        item.set_item("min_x", hit.min_x)?;
+        item.set_item("min_y", hit.min_y)?;
+        item.set_item("max_x", hit.max_x)?;
+        item.set_item("max_y", hit.max_y)?;
+        hits.append(item)?;
+    }
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("hits", hits)?;
+    dict.set_item("truncated", report.truncated)?;
+    dict.set_item("pages_skipped", &report.pages_skipped)?;
+    Ok(dict)
 }
 
 fn structure_element_to_py_dict<'py>(

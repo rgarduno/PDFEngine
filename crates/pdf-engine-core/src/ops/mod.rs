@@ -5,6 +5,7 @@
 
 pub mod attachments;
 pub mod cloner;
+pub mod compose;
 pub mod diff;
 pub mod export_docx;
 pub mod flatten;
@@ -15,6 +16,7 @@ pub mod optimize;
 pub mod outlines;
 pub mod reorder;
 pub mod rotation;
+pub mod search;
 pub mod split;
 
 pub use attachments::{
@@ -22,6 +24,10 @@ pub use attachments::{
     EmbeddedAttachmentInfo,
 };
 pub use cloner::ObjectCloner;
+pub use compose::{
+    duplicate_page, insert_blank_page, insert_pages, page_boxes, parse_page_boundary,
+    reverse_pages, set_page_boundary, PageBoundary, PageBoxes,
+};
 pub use diff::{
     compare_documents, compute_word_diffs, DiffKind, DiffOptions, DiffReport, DiffSummary,
     ImageDiffItem, MetadataDiffItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
@@ -45,6 +51,9 @@ pub use outlines::{add_outline_item, clear_outlines, extract_outlines, set_outli
 pub use reorder::{delete_pages, reorder_pages};
 pub use rotation::{
     get_page_rotation, normalize_rotation, rotate_all_pages, rotate_page, set_page_rotation,
+};
+pub use search::{
+    search_document, TextSearchHit, TextSearchReport, MAX_QUERY_SCALARS, MAX_SEARCH_HITS,
 };
 pub use split::{extract_pages, split_by_ranges, split_document};
 

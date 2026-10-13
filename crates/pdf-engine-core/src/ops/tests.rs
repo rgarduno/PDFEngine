@@ -1,8 +1,10 @@
 use crate::cos::{ObjectId, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, Writer};
+use crate::layout::Rect;
 use crate::ops::{
-    delete_pages, extract_pages, get_page_rotation, merge_documents, merge_pdf_bytes,
-    reorder_pages, rotate_all_pages, rotate_page, set_page_rotation, split_by_ranges,
-    split_document,
+    delete_pages, duplicate_page, extract_pages, get_page_rotation, insert_blank_page,
+    insert_pages, merge_documents, merge_pdf_bytes, page_boxes, reorder_pages, reverse_pages,
+    rotate_all_pages, rotate_page, search_document, set_page_boundary, set_page_rotation,
+    split_by_ranges, split_document,
 };
 
 fn create_test_multipage_pdf(page_texts: &[&str]) -> Vec<u8> {
@@ -366,4 +368,196 @@ fn test_compare_documents_metadata_diff() {
     assert!(!report.is_identical);
     assert!(report.summary.metadata_changes >= 1);
     assert!(report.metadata_diffs.iter().any(|m| m.field == "title"));
+}
+
+fn content_object_number(doc: &mut PdfDocument, page_index: usize) -> u32 {
+    let page_id = doc.get_pages().expect("pages")[page_index];
+    let page = doc.get_object(page_id).expect("page");
+    page.as_dict()
+        .and_then(|dict| dict.get("Contents"))
+        .and_then(|contents| contents.as_reference())
+        .expect("contents")
+        .number
+}
+
+fn replace_page_content(doc: &mut PdfDocument, page_index: usize, content: &[u8]) {
+    let contents_id = ObjectId::new(content_object_number(doc, page_index));
+    let mut stream = match doc.get_object(contents_id).expect("stream") {
+        PdfObject::Stream(stream) => stream,
+        _ => panic!("page contents are not a stream"),
+    };
+    stream.content = content.to_vec();
+    stream.dict.insert("Length", stream.content.len() as i64);
+    doc.set_object(contents_id, PdfObject::Stream(stream));
+}
+
+#[test]
+fn test_insert_blank_page_at_front_and_append() {
+    let bytes = create_test_multipage_pdf(&["Alpha", "Beta"]);
+    let mut doc = PdfDocument::load(&bytes).expect("load");
+    let landed = insert_blank_page(&mut doc, 0, 200.0, 300.0).expect("blank");
+    assert_eq!(landed, 0);
+    assert_eq!(doc.get_pages().expect("pages").len(), 3);
+
+    let boxes = page_boxes(&mut doc, 0).expect("boxes");
+    assert_eq!(boxes.media, Rect::new(0.0, 0.0, 200.0, 300.0));
+    let page_id = doc.get_pages().expect("pages")[0];
+    assert!(doc.get_page_content_bytes(page_id).expect("bytes").is_empty());
+
+    let alpha = search_document(&mut doc, "Alpha", false, 10).expect("search");
+    assert_eq!(alpha.hits[0].page_index, 1);
+
+    let count = doc.get_pages().expect("pages").len();
+    let appended = insert_blank_page(&mut doc, count, 100.0, 100.0).expect("append");
+    assert_eq!(appended, count);
+    assert_eq!(doc.get_pages().expect("pages").len(), count + 1);
+
+    assert!(insert_blank_page(&mut doc, 0, f64::NAN, 100.0).is_err());
+    assert!(insert_blank_page(&mut doc, 99, 100.0, 100.0).is_err());
+}
+
+#[test]
+fn test_duplicate_page_does_not_share_the_content_stream() {
+    let bytes = create_test_multipage_pdf(&["Alpha", "Beta"]);
+    let mut doc = PdfDocument::load(&bytes).expect("load");
+    let landed = duplicate_page(&mut doc, 0, 1).expect("duplicate");
+    assert_eq!(landed, 1);
+    assert_eq!(doc.get_pages().expect("pages").len(), 3);
+    assert_ne!(
+        content_object_number(&mut doc, 0),
+        content_object_number(&mut doc, 1)
+    );
+
+    let alpha = search_document(&mut doc, "Alpha", false, 10).expect("search");
+    let pages: Vec<usize> = alpha.hits.iter().map(|hit| hit.page_index).collect();
+    assert_eq!(pages, vec![0, 1]);
+    let beta = search_document(&mut doc, "Beta", false, 10).expect("search");
+    assert_eq!(beta.hits[0].page_index, 2);
+}
+
+#[test]
+fn test_insert_pages_at_index_leaves_the_source_unchanged() {
+    let mut dest = PdfDocument::load(&create_test_multipage_pdf(&["Alpha", "Beta"])).expect("dest");
+    let mut source = PdfDocument::load(&create_test_multipage_pdf(&["Gamma"])).expect("source");
+    let inserted = insert_pages(&mut dest, &mut source, &[0], 1).expect("insert");
+    assert_eq!(inserted, 1);
+    assert_eq!(source.get_pages().expect("source pages").len(), 1);
+    assert_eq!(dest.get_pages().expect("dest pages").len(), 3);
+
+    assert_eq!(
+        search_document(&mut dest, "Alpha", false, 10)
+            .expect("alpha")
+            .hits[0]
+            .page_index,
+        0
+    );
+    assert_eq!(
+        search_document(&mut dest, "Gamma", false, 10)
+            .expect("gamma")
+            .hits[0]
+            .page_index,
+        1
+    );
+    assert_eq!(
+        search_document(&mut dest, "Beta", false, 10)
+            .expect("beta")
+            .hits[0]
+            .page_index,
+        2
+    );
+
+    let repeated = insert_pages(&mut dest, &mut source, &[0, 0], 0).expect_err("repeat");
+    assert!(repeated.to_string().contains("repeated"));
+    let too_many = vec![0usize; 201];
+    let capped = insert_pages(&mut dest, &mut source, &too_many, 0).expect_err("cap");
+    assert!(capped.to_string().contains("200"));
+    assert!(!capped.to_string().contains("Invalid page"));
+}
+
+#[test]
+fn test_reverse_pages_and_round_trip_save() {
+    let mut doc = PdfDocument::load(&create_test_multipage_pdf(&["Alpha", "Beta"])).expect("load");
+    reverse_pages(&mut doc).expect("reverse");
+    assert_eq!(
+        search_document(&mut doc, "Beta", false, 10)
+            .expect("beta")
+            .hits[0]
+            .page_index,
+        0
+    );
+    assert_eq!(
+        search_document(&mut doc, "Alpha", false, 10)
+            .expect("alpha")
+            .hits[0]
+            .page_index,
+        1
+    );
+
+    let saved = doc.save_to_vec().expect("save");
+    let mut loaded = PdfDocument::load(&saved).expect("reload");
+    assert_eq!(loaded.get_pages().expect("pages").len(), 2);
+    assert_eq!(
+        search_document(&mut loaded, "Beta", false, 10)
+            .expect("reloaded")
+            .hits[0]
+            .page_index,
+        0
+    );
+}
+
+#[test]
+fn test_page_boxes_set_clear_and_inherit() {
+    let mut doc = PdfDocument::empty();
+    insert_blank_page(&mut doc, 0, 612.0, 792.0).expect("blank");
+    let pages_id = doc.pages_id().expect("pages id");
+    let mut pages = match doc.get_object(pages_id).expect("pages") {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("pages root"),
+    };
+    pages.insert(
+        "CropBox",
+        vec![
+            PdfObject::Real(10.0),
+            PdfObject::Real(10.0),
+            PdfObject::Real(100.0),
+            PdfObject::Real(100.0),
+        ],
+    );
+    doc.set_object(pages_id, PdfObject::Dictionary(pages));
+
+    let inherited = page_boxes(&mut doc, 0).expect("inherited");
+    assert_eq!(inherited.crop, Some(Rect::new(10.0, 10.0, 100.0, 100.0)));
+
+    let written = set_page_boundary(&mut doc, 0, "crop", Some(&[72.0, 72.0, 400.0, 500.0]))
+        .expect("set crop");
+    assert_eq!(written.crop, Some(Rect::new(72.0, 72.0, 400.0, 500.0)));
+
+    let cleared = set_page_boundary(&mut doc, 0, "CropBox", None).expect("clear");
+    assert_eq!(cleared.crop, Some(Rect::new(10.0, 10.0, 100.0, 100.0)));
+
+    assert!(set_page_boundary(&mut doc, 0, "crop", Some(&[700.0, 700.0, 800.0, 800.0])).is_err());
+    assert!(set_page_boundary(&mut doc, 0, "crop", Some(&[10.0, 10.0, 10.0, 40.0])).is_err());
+    assert!(set_page_boundary(&mut doc, 0, "media", None).is_err());
+}
+
+#[test]
+fn test_search_case_fold_cap_and_skipped_page() {
+    let mut doc = PdfDocument::load(&create_test_multipage_pdf(&["Hello Hello", "Beta"]))
+        .expect("load");
+    let folded = search_document(&mut doc, "hello", true, 10).expect("fold");
+    assert_eq!(folded.hits.len(), 2);
+    assert_eq!(folded.hits[0].char_start, 0);
+    assert_eq!(folded.hits[0].char_end, 5);
+    assert!(!folded.truncated);
+    assert!(folded.hits[0].snippet.contains("Hello"));
+
+    let capped = search_document(&mut doc, "Hello", false, 1).expect("cap");
+    assert_eq!(capped.hits.len(), 1);
+    assert!(capped.truncated);
+    assert!(search_document(&mut doc, "", false, 10).is_err());
+
+    replace_page_content(&mut doc, 1, b"(");
+    let skipped = search_document(&mut doc, "Hello", false, 10).expect("skip");
+    assert_eq!(skipped.pages_skipped, vec![1]);
+    assert_eq!(skipped.hits.len(), 2);
 }
