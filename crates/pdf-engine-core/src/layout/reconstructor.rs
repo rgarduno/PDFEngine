@@ -21,6 +21,7 @@ pub struct LayoutReconstructor<'a> {
     fonts: BTreeMap<String, FontMetrics>,
     cmaps: BTreeMap<String, ToUnicodeMap>,
     composite_fonts: HashSet<String>,
+    hidden_ocg_props: HashSet<String>,
 }
 
 impl<'a> LayoutReconstructor<'a> {
@@ -31,6 +32,7 @@ impl<'a> LayoutReconstructor<'a> {
             fonts: BTreeMap::new(),
             cmaps: BTreeMap::new(),
             composite_fonts: HashSet::new(),
+            hidden_ocg_props: HashSet::new(),
         }
     }
 
@@ -62,12 +64,25 @@ impl<'a> LayoutReconstructor<'a> {
         self
     }
 
+    /// Registers the set of page `/Resources /Properties` keys that map to currently
+    /// hidden Optional Content Groups (OCGs) so `/OC /<Prop> BDC ... EMC` sequences are filtered.
+    pub fn with_hidden_ocg_props(mut self, hidden_props: HashSet<String>) -> Self {
+        self.hidden_ocg_props = hidden_props;
+        self
+    }
+
     /// Reconstructs and returns all paragraph blocks from the AST.
     pub fn reconstruct(&self) -> PdfResult<Vec<ParagraphBlock>> {
         let mut state_stack = GraphicsStateStack::new();
+        let mut mc_stack: Vec<bool> = Vec::new();
         let mut glyphs = Vec::new();
 
-        self.extract_glyphs_from_nodes(&self.ast.nodes, &mut state_stack, &mut glyphs);
+        self.extract_glyphs_from_nodes(
+            &self.ast.nodes,
+            &mut state_stack,
+            &mut mc_stack,
+            &mut glyphs,
+        );
 
         self.cluster_glyphs_into_paragraphs(glyphs)
     }
@@ -77,30 +92,67 @@ impl<'a> LayoutReconstructor<'a> {
         &self,
         nodes: &[ContentNode],
         state_stack: &mut GraphicsStateStack,
+        mc_stack: &mut Vec<bool>,
         glyphs: &mut Vec<PositionedGlyph>,
     ) {
         for node in nodes {
             match node {
                 ContentNode::GraphicsGroup { children, .. } => {
                     state_stack.push();
-                    self.extract_glyphs_from_nodes(children, state_stack, glyphs);
+                    self.extract_glyphs_from_nodes(children, state_stack, mc_stack, glyphs);
                     state_stack.pop();
                 }
                 ContentNode::TextBlock { id, operations } => {
                     state_stack.current.begin_text();
                     for op in operations {
-                        self.process_text_operation(op, *id, state_stack, glyphs);
+                        self.process_text_operation(op, *id, state_stack, mc_stack, glyphs);
                     }
                 }
                 ContentNode::Instruction { operation, .. } => {
-                    self.process_general_operation(operation, state_stack);
+                    self.process_general_operation(operation, state_stack, mc_stack);
                 }
             }
         }
     }
 
-    /// Evaluates graphics state changes outside text blocks (e.g. `cm`).
-    fn process_general_operation(&self, op: &Operation, state_stack: &mut GraphicsStateStack) {
+    /// Updates the marked-content visibility stack for `BMC`, `BDC`, and `EMC` operators.
+    fn update_marked_content_stack(&self, op: &Operation, mc_stack: &mut Vec<bool>) -> bool {
+        match op.operator.as_str() {
+            "BMC" => {
+                mc_stack.push(true);
+                true
+            }
+            "BDC" => {
+                let mut visible = true;
+                if op.operands.len() >= 2 && op.operands[0].as_name() == Some("OC") {
+                    if let Some(prop_name) = op.operands[1].as_name() {
+                        let clean_prop = prop_name.trim_start_matches('/');
+                        if self.hidden_ocg_props.contains(clean_prop) {
+                            visible = false;
+                        }
+                    }
+                }
+                mc_stack.push(visible);
+                true
+            }
+            "EMC" => {
+                let _ = mc_stack.pop();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Evaluates graphics state changes outside text blocks (e.g. `cm`, `BDC`, `BMC`, `EMC`).
+    fn process_general_operation(
+        &self,
+        op: &Operation,
+        state_stack: &mut GraphicsStateStack,
+        mc_stack: &mut Vec<bool>,
+    ) {
+        if self.update_marked_content_stack(op, mc_stack) {
+            return;
+        }
         if op.operator == "cm" && op.operands.len() >= 6 {
             let a = op.operands[0].as_f64().unwrap_or(1.0);
             let b = op.operands[1].as_f64().unwrap_or(0.0);
@@ -119,8 +171,13 @@ impl<'a> LayoutReconstructor<'a> {
         op: &Operation,
         node_id: NodeId,
         state_stack: &mut GraphicsStateStack,
+        mc_stack: &mut Vec<bool>,
         glyphs: &mut Vec<PositionedGlyph>,
     ) {
+        if self.update_marked_content_stack(op, mc_stack) {
+            return;
+        }
+        let is_visible = mc_stack.iter().all(|&v| v);
         match op.operator.as_str() {
             "Tf" => {
                 if op.operands.len() >= 2 {
@@ -193,7 +250,7 @@ impl<'a> LayoutReconstructor<'a> {
             }
             "Tj" => {
                 if let Some(crate::cos::PdfObject::String(s)) = op.operands.first() {
-                    self.show_string_glyphs(&s.bytes, node_id, state_stack, glyphs);
+                    self.show_string_glyphs(&s.bytes, node_id, state_stack, is_visible, glyphs);
                 }
             }
             "TJ" => {
@@ -201,7 +258,13 @@ impl<'a> LayoutReconstructor<'a> {
                     for item in items {
                         match item {
                             crate::cos::PdfObject::String(s) => {
-                                self.show_string_glyphs(&s.bytes, node_id, state_stack, glyphs);
+                                self.show_string_glyphs(
+                                    &s.bytes,
+                                    node_id,
+                                    state_stack,
+                                    is_visible,
+                                    glyphs,
+                                );
                             }
                             crate::cos::PdfObject::Integer(k) => {
                                 let dx = FontMetrics::compute_kerning_displacement(
@@ -232,6 +295,7 @@ impl<'a> LayoutReconstructor<'a> {
         bytes: &[u8],
         node_id: NodeId,
         state_stack: &mut GraphicsStateStack,
+        is_visible: bool,
         glyphs: &mut Vec<PositionedGlyph>,
     ) {
         let font_name = state_stack.current.text_state.font_name.clone();
@@ -277,16 +341,18 @@ impl<'a> LayoutReconstructor<'a> {
 
                 let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
                 let origin = Point::new(origin_x, origin_y);
-                glyphs.push(PositionedGlyph::new(
-                    char_code,
-                    unicode,
-                    origin,
-                    page_advance,
-                    font_name.clone(),
-                    font_size,
-                    rendered_size,
-                    node_id,
-                ));
+                if is_visible {
+                    glyphs.push(PositionedGlyph::new(
+                        char_code,
+                        unicode,
+                        origin,
+                        page_advance,
+                        font_name.clone(),
+                        font_size,
+                        rendered_size,
+                        node_id,
+                    ));
+                }
 
                 state_stack.current.advance_text(text_advance);
             }
@@ -320,16 +386,18 @@ impl<'a> LayoutReconstructor<'a> {
 
                 let (origin_x, origin_y) = ctm.transform_point(tm.e, tm.f);
                 let origin = Point::new(origin_x, origin_y);
-                glyphs.push(PositionedGlyph::new(
-                    char_code,
-                    unicode,
-                    origin,
-                    page_advance,
-                    font_name.clone(),
-                    font_size,
-                    rendered_size,
-                    node_id,
-                ));
+                if is_visible {
+                    glyphs.push(PositionedGlyph::new(
+                        char_code,
+                        unicode,
+                        origin,
+                        page_advance,
+                        font_name.clone(),
+                        font_size,
+                        rendered_size,
+                        node_id,
+                    ));
+                }
 
                 state_stack.current.advance_text(text_advance);
             }

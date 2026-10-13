@@ -1054,6 +1054,59 @@ impl PyEmbeddedAttachment {
     }
 }
 
+/// Represents an Optional Content Group (`/Type /OCG` — PDF Layer, ISO 32000-1 §8.11) in Python.
+#[pyclass(name = "OptionalContentLayer")]
+#[derive(Debug, Clone)]
+pub struct PyOptionalContentLayer {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub object_number: u32,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub visible: bool,
+    #[pyo3(get)]
+    pub intent: Vec<String>,
+    #[pyo3(get)]
+    pub locked: bool,
+}
+
+#[pymethods]
+impl PyOptionalContentLayer {
+    fn __repr__(&self) -> String {
+        format!(
+            "<OptionalContentLayer id='{}' name='{}' visible={} locked={} intent={:?}>",
+            self.id, self.name, self.visible, self.locked, self.intent
+        )
+    }
+
+    /// Converts the layer descriptor to a Python dictionary.
+    pub fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("id", &self.id)?;
+        dict.set_item("object_number", self.object_number)?;
+        dict.set_item("name", &self.name)?;
+        dict.set_item("visible", self.visible)?;
+        dict.set_item("intent", &self.intent)?;
+        dict.set_item("locked", self.locked)?;
+        Ok(dict)
+    }
+}
+
+impl PyOptionalContentLayer {
+    pub fn from_core(layer: pdf_engine_core::ops::OptionalContentLayer) -> Self {
+        Self {
+            id: layer.id,
+            object_number: layer.object_number,
+            name: layer.name,
+            visible: layer.visible,
+            intent: layer.intent,
+            locked: layer.locked,
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -1065,6 +1118,7 @@ pub struct PyPage {
     pub paragraphs: Vec<ParagraphBlock>,
     pub metrics: FontMetrics,
     faces: BTreeMap<String, ResolvedFont>,
+    hidden_ocg_props: std::collections::HashSet<String>,
 }
 
 #[pymethods]
@@ -1114,7 +1168,12 @@ impl PyPage {
         SurgicalEditor::edit_paragraph(&mut self.ast, &target_block, new_text, &self.metrics)
             .map_err(|e| PyRuntimeError::new_err(format!("Surgical edit failed: {}", e)))?;
 
-        self.paragraphs = reconstruct_layout(&self.ast, &self.metrics, &self.faces)?;
+        self.paragraphs = reconstruct_layout(
+            &self.ast,
+            &self.metrics,
+            &self.faces,
+            &self.hidden_ocg_props,
+        )?;
 
         Ok(())
     }
@@ -1194,10 +1253,12 @@ fn reconstruct_layout(
     ast: &ContentAst,
     metrics: &FontMetrics,
     faces: &BTreeMap<String, ResolvedFont>,
+    hidden_ocg_props: &std::collections::HashSet<String>,
 ) -> PyResult<Vec<ParagraphBlock>> {
     LayoutReconstructor::new(ast)
         .with_font("F1", metrics.clone())
         .with_resolved(faces)
+        .with_hidden_ocg_props(hidden_ocg_props.clone())
         .reconstruct()
         .map_err(|e| PyRuntimeError::new_err(format!("Layout reconstruction failed: {}", e)))
 }
@@ -1223,6 +1284,9 @@ impl PyPdfDocument {
         for (idx, &page_id) in page_ids.iter().enumerate() {
             let faces = resolve_page_fonts(&mut doc, page_id)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e)))?;
+            let hidden_ocg_props =
+                pdf_engine_core::ops::resolve_page_hidden_ocg_props(&mut doc, page_id)
+                    .unwrap_or_default();
             let page_obj = doc
                 .get_object(page_id)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to load page: {}", e)))?;
@@ -1237,7 +1301,8 @@ impl PyPdfDocument {
                     if let PdfObject::Stream(_) = contents_obj {
                         let ops = tokenize_decoded_page(&mut doc, page_id)?;
                         let ast = build_ast_from_operations(ops);
-                        let paragraphs = reconstruct_layout(&ast, &metrics, &faces)?;
+                        let paragraphs =
+                            reconstruct_layout(&ast, &metrics, &faces, &hidden_ocg_props)?;
                         (Some(contents_ref), ast, paragraphs)
                     } else {
                         (None, ContentAst::new(), Vec::new())
@@ -1257,6 +1322,7 @@ impl PyPdfDocument {
                 paragraphs,
                 metrics: metrics.clone(),
                 faces,
+                hidden_ocg_props,
             });
         }
 
@@ -1276,6 +1342,9 @@ impl PyPdfDocument {
         for (idx, &page_id) in page_ids.iter().enumerate() {
             let faces = resolve_page_fonts(&mut self.doc, page_id)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve fonts: {}", e)))?;
+            let hidden_ocg_props =
+                pdf_engine_core::ops::resolve_page_hidden_ocg_props(&mut self.doc, page_id)
+                    .unwrap_or_default();
             if let Ok(page_obj) = self.doc.get_object(page_id) {
                 if let Some(dict) = page_obj.as_dict() {
                     let contents_id = dict.get("Contents").and_then(|c| c.as_reference());
@@ -1284,7 +1353,8 @@ impl PyPdfDocument {
                             let ops =
                                 tokenize_decoded_page(&mut self.doc, page_id).unwrap_or_default();
                             let ast = build_ast_from_operations(ops);
-                            let paragraphs = reconstruct_layout(&ast, &metrics, &faces)?;
+                            let paragraphs =
+                                reconstruct_layout(&ast, &metrics, &faces, &hidden_ocg_props)?;
                             (ast, paragraphs)
                         } else {
                             (ContentAst::new(), Vec::new())
@@ -1301,6 +1371,7 @@ impl PyPdfDocument {
                         paragraphs,
                         metrics: metrics.clone(),
                         faces,
+                        hidden_ocg_props,
                     });
                 }
             }
@@ -1397,6 +1468,7 @@ impl PyPdfDocument {
                 paragraphs: page.paragraphs.clone(),
                 metrics: page.metrics.clone(),
                 faces: page.faces.clone(),
+                hidden_ocg_props: page.hidden_ocg_props.clone(),
             })
         } else {
             Err(PyValueError::new_err(format!(
@@ -1433,6 +1505,7 @@ impl PyPdfDocument {
                 paragraphs: page.paragraphs.clone(),
                 metrics: page.metrics.clone(),
                 faces: page.faces.clone(),
+                hidden_ocg_props: page.hidden_ocg_props.clone(),
             };
         }
 
@@ -2931,6 +3004,77 @@ impl PyPdfDocument {
         pdf_engine_core::ops::delete_attachment(&mut self.doc, name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete attachment: {}", e)))
     }
+
+    /// Extracts all Optional Content Groups (`/OCProperties` / PDF Layers, ISO 32000-1 §8.11) from the document.
+    pub fn get_layers(&mut self) -> PyResult<Vec<PyOptionalContentLayer>> {
+        let layers = pdf_engine_core::ops::extract_layers(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract layers: {}", e)))?;
+        Ok(layers
+            .into_iter()
+            .map(PyOptionalContentLayer::from_core)
+            .collect())
+    }
+
+    /// Creates and registers a new Optional Content Group (`/Type /OCG` — PDF Layer) in the document.
+    #[pyo3(signature = (name, visible=true, intent=None, locked=false))]
+    pub fn add_layer(
+        &mut self,
+        name: &str,
+        visible: bool,
+        intent: Option<Vec<String>>,
+        locked: bool,
+    ) -> PyResult<PyOptionalContentLayer> {
+        let layer = pdf_engine_core::ops::add_layer(&mut self.doc, name, visible, intent, locked)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to add layer: {}", e)))?;
+        self.reload_active_pages()?;
+        Ok(PyOptionalContentLayer::from_core(layer))
+    }
+
+    /// Toggles the visibility (`ON` / `OFF`) of an Optional Content Group by `id` (e.g. `"ocg_12"`) or `name`
+    /// and refreshes active page scene graphs so hidden layer content is immediately filtered.
+    pub fn set_layer_visibility(
+        &mut self,
+        target: &str,
+        visible: bool,
+    ) -> PyResult<PyOptionalContentLayer> {
+        let updated = pdf_engine_core::ops::set_layer_visibility(&mut self.doc, target, visible)
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to set layer visibility: {}", e))
+            })?;
+        self.reload_active_pages()?;
+        Ok(PyOptionalContentLayer::from_core(updated))
+    }
+
+    /// Deletes an Optional Content Group (`/Type /OCG`) by `id` or `name` from the document's `/OCProperties`.
+    pub fn delete_layer(&mut self, target: &str) -> PyResult<bool> {
+        let deleted = pdf_engine_core::ops::delete_layer(&mut self.doc, target)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete layer: {}", e)))?;
+        if deleted {
+            self.reload_active_pages()?;
+        }
+        Ok(deleted)
+    }
+
+    /// Binds a marked-content property name (e.g. `"MC0"` or `"L1"` used in `/OC /L1 BDC ... EMC`)
+    /// in a 1-indexed page's `/Resources /Properties` dictionary to an existing OCG layer (`id` or `name`).
+    pub fn register_page_layer_property(
+        &mut self,
+        page_number: usize,
+        prop_name: &str,
+        layer_target: &str,
+    ) -> PyResult<String> {
+        let layer_id = pdf_engine_core::ops::register_page_layer_property(
+            &mut self.doc,
+            page_number,
+            prop_name,
+            layer_target,
+        )
+        .map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to register page layer property: {}", e))
+        })?;
+        self.reload_active_pages()?;
+        Ok(layer_id)
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -2998,6 +3142,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOutlineItem>()?;
     m.add_class::<PyEmbeddedAttachmentInfo>()?;
     m.add_class::<PyEmbeddedAttachment>()?;
+    m.add_class::<PyOptionalContentLayer>()?;
     m.add_function(wrap_pyfunction!(compare_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
