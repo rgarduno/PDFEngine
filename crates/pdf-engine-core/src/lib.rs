@@ -52,6 +52,7 @@ pub mod layout;
 pub mod ocr;
 pub mod ops;
 pub mod pdfa;
+pub mod pdfua;
 pub mod redact;
 pub mod security;
 pub mod stream;
@@ -103,6 +104,10 @@ pub use ops::{
     OutlineItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
 };
 pub use pdfa::{convert_to_pdfa, validate_pdfa, PdfALevel};
+pub use pdfua::{
+    apply_pdfua_structure, inspect_pdfua, PdfUaReport, PdfUaTaggingOptions, PdfUaValidationIssue,
+    StructureElement,
+};
 pub use redact::{
     apply_redaction_to_ast, find_credit_cards, find_curp, find_emails, find_matches,
     find_pattern_boxes_on_page, find_phones, find_rfc, find_ssn, find_substring,

@@ -3179,6 +3179,100 @@ impl PyPdfDocument {
         self.reload_active_pages()?;
         Ok(PyHardFlattenReport::from_core(report))
     }
+
+    /// Inspects the logical structure tree (`/StructTreeRoot`) and validates ISO 14289-1 (PDF/UA-1) accessibility compliance.
+    pub fn inspect_pdfua<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let report = pdf_engine_core::inspect_pdfua(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("PDF/UA inspection failed: {}", e)))?;
+        pdfua_report_to_py_dict(py, &report)
+    }
+
+    /// Automatically generates a `/StructTreeRoot` logical structure hierarchy, `/RoleMap`,
+    /// `/MarkInfo`, `/ViewerPreferences`, `/Lang`, and `pdfuaid:part` XMP metadata stream
+    /// to upgrade the document to ISO 14289-1 (PDF/UA-1) compliance.
+    #[pyo3(signature = (
+        lang = "en-US",
+        title = None,
+        figure_alt_fallback = "Document figure or illustration"
+    ))]
+    pub fn apply_pdfua_structure<'py>(
+        &mut self,
+        py: Python<'py>,
+        lang: &str,
+        title: Option<String>,
+        figure_alt_fallback: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let options = pdf_engine_core::PdfUaTaggingOptions {
+            lang: lang.to_string(),
+            title,
+            figure_alt_fallback: figure_alt_fallback.to_string(),
+        };
+        let report = pdf_engine_core::apply_pdfua_structure(&mut self.doc, &options)
+            .map_err(|e| PyRuntimeError::new_err(format!("PDF/UA tagging failed: {}", e)))?;
+        self.reload_active_pages()?;
+        pdfua_report_to_py_dict(py, &report)
+    }
+}
+
+fn structure_element_to_py_dict<'py>(
+    py: Python<'py>,
+    el: &pdf_engine_core::StructureElement,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("struct_type", &el.struct_type)?;
+    d.set_item("title", &el.title)?;
+    d.set_item("alt_text", &el.alt_text)?;
+    d.set_item("actual_text", &el.actual_text)?;
+    d.set_item("lang", &el.lang)?;
+    d.set_item("page_number", el.page_number)?;
+    d.set_item("mcids", &el.mcids)?;
+
+    let children_list = pyo3::types::PyList::empty(py);
+    for child in &el.children {
+        children_list.append(structure_element_to_py_dict(py, child)?)?;
+    }
+    d.set_item("children", children_list)?;
+    Ok(d)
+}
+
+fn pdfua_report_to_py_dict<'py>(
+    py: Python<'py>,
+    report: &pdf_engine_core::PdfUaReport,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("is_compliant", report.is_compliant)?;
+    d.set_item("is_tagged", report.is_tagged)?;
+    d.set_item("lang", &report.lang)?;
+    d.set_item("title", &report.title)?;
+    d.set_item("display_doc_title", report.display_doc_title)?;
+    d.set_item("has_pdfua_xmp", report.has_pdfua_xmp)?;
+
+    let rm_dict = pyo3::types::PyDict::new(py);
+    for (k, v) in &report.role_map {
+        rm_dict.set_item(k, v)?;
+    }
+    d.set_item("role_map", rm_dict)?;
+    d.set_item("total_elements", report.total_elements)?;
+
+    let elements_list = pyo3::types::PyList::empty(py);
+    for el in &report.elements {
+        elements_list.append(structure_element_to_py_dict(py, el)?)?;
+    }
+    d.set_item("elements", elements_list)?;
+
+    let issues_list = pyo3::types::PyList::empty(py);
+    for issue in &report.issues {
+        let idict = pyo3::types::PyDict::new(py);
+        idict.set_item("code", &issue.code)?;
+        idict.set_item("description", &issue.description)?;
+        idict.set_item("clause", &issue.clause)?;
+        issues_list.append(idict)?;
+    }
+    d.set_item("issues", issues_list)?;
+    Ok(d)
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
