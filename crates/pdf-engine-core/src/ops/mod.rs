@@ -6,6 +6,7 @@
 pub mod attachments;
 pub mod cloner;
 pub mod diff;
+pub mod export_docx;
 pub mod flatten;
 pub mod layers;
 pub mod merge;
@@ -25,6 +26,7 @@ pub use diff::{
     compare_documents, compute_word_diffs, DiffKind, DiffOptions, DiffReport, DiffSummary,
     ImageDiffItem, MetadataDiffItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
 };
+pub use export_docx::{export_document_docx, export_document_markdown};
 pub use flatten::{flatten_document_permanently, HardFlattenReport};
 pub use layers::{
     add_layer, delete_layer, extract_layers, register_page_layer_property,

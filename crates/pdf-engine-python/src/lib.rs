@@ -2889,6 +2889,18 @@ impl PyPdfDocument {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize PDF: {}", e)))
     }
 
+    /// Exports the PDF document into a native Microsoft Word OpenXML (`.docx`) byte buffer.
+    pub fn export_docx(&mut self) -> PyResult<Vec<u8>> {
+        pdf_engine_core::export_document_docx(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to export DOCX: {}", e)))
+    }
+
+    /// Exports the PDF document into structured GitHub-Flavored Markdown (`.md`).
+    pub fn export_markdown(&mut self) -> PyResult<String> {
+        pdf_engine_core::export_document_markdown(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to export Markdown: {}", e)))
+    }
+
     /// Optimizes the PDF document in-place using reachability analysis, stream recompression,
     /// stream deduplication, and Object Stream (/ObjStm) packing.
     #[pyo3(signature = (
