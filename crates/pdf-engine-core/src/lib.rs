@@ -12,7 +12,7 @@
 //! 3. **Typographic Engine (`fonts`)**: OpenType/TrueType parsing, `/ToUnicode` CMaps,
 //!    and ligature/font fallback metrics.
 //! 4. **Layout Reconstruction (`layout`)**: Spatial clustering from glyphs to paragraphs.
-//! 5. **Surgical Editor (`editor`)**: Atomic in-place reflow, stream mutation, and standard-14 paragraph style.
+//! 5. **Surgical Editor (`editor`)**: Atomic in-place reflow, stream mutation, standard-14 paragraph style, and content-stream text boxes.
 //! 6. **Security Hardening (`security`)**: Bounded memory limits, recursion caps,
 //!    decompression guards, and active-content removal on save.
 #![allow(
@@ -69,7 +69,8 @@ pub use cos::{
     ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString,
 };
 pub use editor::{
-    ParagraphStyle, PreparedParagraphStyle, ReflowEngine, ReflowLine, SurgicalEditor,
+    append_text_box, AppendedTextBox, ParagraphStyle, PreparedParagraphStyle, ReflowEngine,
+    ReflowLine, SurgicalEditor, TextBoxSpec,
 };
 pub use error::{PdfError, PdfResult};
 pub use fonts::{

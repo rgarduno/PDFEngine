@@ -198,7 +198,7 @@ PDFEngine/
     │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
     │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
     │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
-    │   │   └── editor/         # Surgical stream mutator, reflow, and standard-14 paragraph style
+    │   │   └── editor/         # Surgical stream mutator, reflow, standard-14 style, and content-stream text boxes
     │   └── tests/              # Conformance and integration test suite
     └── pdf-engine-python/      # High-performance PyO3 native Python extension
         ├── Cargo.toml
@@ -210,6 +210,8 @@ PDFAPI and PDFWeb are sibling repositories. This tree is only the engine.
 `render_page` paints one page to PNG, JPEG, or TIFF. The displayed box is the CropBox, or the MediaBox when CropBox is absent. `/Rotate` is applied clockwise after the paint. Density defaults to 144 and must be from 36 to 300. A bitmap is refused above 12000000 pixels or a side of 65535. Text that has no outline program uses an original 5 by 7 face, not the embedded outlines and not the PDF/A bitmap. This is not an Acrobat rendering. Nested clips, soft masks, transparency groups, and annotation appearances are not composited. Rendering mode 3 is not painted. TIFF output is one page, not a multi-page stack.
 
 A styled paragraph edit can keep the current font or switch to a standard 14 face: Helvetica, Times, or Courier, including bold and italic. Size, color, alignment, and leading can stay on the font the paragraph already uses, so an embedded subset keeps its character codes. A face change does not invent a bold twin of that subset. Leading is a baseline distance in points. When the size changes and leading is omitted, the old leading scales with the size and is then kept inside `[new size, 400]`. Color is device RGB wrapped outside the text object. This is not Acrobat's text options, and it does not add lists or superscripts. The CSS family of Helvetica is Arial.
+
+A text box appends content-stream text inside a rectangle. It is not a movable annotation, not a `/FreeText` annotation, and not a sticky note. The face is a standard 14 font. The defaults are Helvetica, 12 points, black, left aligned, and a leading of 1.2 times the size. Lines whose baseline falls below the rectangle are omitted. This raster paints that standard face with the built-in 5 by 7 glyphs, because the face has no embedded outlines. A real viewer uses the standard face.
 
 ---
 
@@ -487,6 +489,7 @@ preflight, or an acceptance by a court.
 | `POST` | `/api/documents/{id}/pdfa` | Rewrite the session as PDF/A-1b or PDF/A-2b. The body part is `1b` or `2b`. |
 | `GET` | `/api/documents/{id}/pdfa` | Report archive issues for `part=1b` or `part=2b` without converting. |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. Optional font, size, bold, italic, color, alignment, and leading. A named face is a standard 14 font. |
+| `POST` | `/api/documents/{id}/pages/{p}/text-box` | Append content-stream text inside a rectangle. The face is a standard 14 font. This is not a `/FreeText` annotation. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
 | `DELETE` | `/api/documents/{id}/forms/{name}` | Delete an interactive form field and its associated widget annotations. |

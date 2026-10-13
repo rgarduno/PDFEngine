@@ -2,12 +2,15 @@
 //!
 //! Provides atomic mutations on content ASTs without altering non-targeted
 //! graphics state, images, or vector paths. A paragraph edit can keep the
-//! current font or switch to a standard 14 face.
+//! current font or switch to a standard 14 face. A text box appends new
+//! content inside a rectangle. It is not a `/FreeText` annotation.
 
 pub mod mutator;
 pub mod reflow;
 pub mod style;
+pub mod textbox;
 
 pub use mutator::SurgicalEditor;
 pub use reflow::{ReflowEngine, ReflowLine};
 pub use style::{ParagraphStyle, PreparedParagraphStyle};
+pub use textbox::{append_text_box, AppendedTextBox, TextBoxSpec};

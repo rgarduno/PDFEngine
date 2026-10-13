@@ -11,7 +11,7 @@ use std::fs;
 
 use pdf_engine_core::annots::{AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType};
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
-use pdf_engine_core::editor::{ParagraphStyle, SurgicalEditor};
+use pdf_engine_core::editor::{ParagraphStyle, SurgicalEditor, TextBoxSpec};
 use pdf_engine_core::fonts::{resolve_page_fonts, FontMetrics, ResolvedFont};
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
@@ -1732,6 +1732,71 @@ impl PyPdfDocument {
         dict.set_item("font_size", prepared.size)?;
         dict.set_item("alignment", alignment_name)?;
         dict.set_item("leading", prepared.leading)?;
+        Ok(dict)
+    }
+
+    /// Appends content-stream text inside a rectangle and rebuilds the page handles.
+    ///
+    /// `page_index` follows `get_page`: a number inside `1..=page_count` is 1-based.
+    /// Omitted style fields become Helvetica, 12 points, black, left, and a leading
+    /// of 1.2 times the size. The text is not a `/FreeText` annotation. Lines whose
+    /// baseline falls below the rectangle are omitted.
+    #[pyo3(signature = (page_index, x, y, width, height, text, font=None, size=None, bold=None, italic=None, color=None, alignment=None, leading=None))]
+    pub fn add_text_box<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        text: &str,
+        font: Option<String>,
+        size: Option<f64>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        color: Option<Vec<f64>>,
+        alignment: Option<String>,
+        leading: Option<f64>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let parsed_alignment = match alignment {
+            Some(raw) => Some(ParagraphStyle::parse_alignment(&raw).map_err(map_engine_value)?),
+            None => None,
+        };
+        let parsed_color = match color {
+            Some(values) => {
+                Some(ParagraphStyle::color_from_components(&values).map_err(map_engine_value)?)
+            }
+            None => None,
+        };
+        let spec = TextBoxSpec {
+            text: text.to_string(),
+            x,
+            y,
+            width,
+            height,
+            style: ParagraphStyle {
+                family: font,
+                size,
+                bold,
+                italic,
+                color: parsed_color,
+                alignment: parsed_alignment,
+                leading,
+            },
+        };
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let appended = pdf_engine_core::append_text_box(&mut self.doc, zero_idx, &spec)
+            .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("font_resource", &appended.font_resource)?;
+        dict.set_item("base_font", &appended.base_font)?;
+        dict.set_item("line_count", appended.line_count)?;
         Ok(dict)
     }
 
