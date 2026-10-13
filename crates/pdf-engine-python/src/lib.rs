@@ -11,7 +11,7 @@ use std::fs;
 
 use pdf_engine_core::annots::{AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType};
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
-use pdf_engine_core::editor::SurgicalEditor;
+use pdf_engine_core::editor::{ParagraphStyle, SurgicalEditor};
 use pdf_engine_core::fonts::{resolve_page_fonts, FontMetrics, ResolvedFont};
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
@@ -1575,6 +1575,164 @@ impl PyPdfDocument {
         }
 
         Ok(())
+    }
+
+    /// Replaces a paragraph and applies a standard-14 face, size, color, alignment, or leading.
+    ///
+    /// `page_index` follows `get_page`: a number inside `1..=page_count` is 1-based.
+    /// A face change registers Helvetica, Times, or Courier. Size, color, alignment,
+    /// and leading can stay on the font the paragraph already uses. Leading is points.
+    /// This is not an embedded bold twin and not a list or superscript edit.
+    #[pyo3(signature = (page_index, paragraph_id, new_text, font=None, size=None, bold=None, italic=None, color=None, alignment=None, leading=None))]
+    pub fn edit_paragraph_styled<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+        paragraph_id: usize,
+        new_text: &str,
+        font: Option<String>,
+        size: Option<f64>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        color: Option<Vec<f64>>,
+        alignment: Option<String>,
+        leading: Option<f64>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let zero_idx = if page_index > 0 && page_index <= self.active_pages.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        if zero_idx >= self.active_pages.len() {
+            return Err(PyValueError::new_err(format!(
+                "Page index {} out of range (total pages: {})",
+                page_index,
+                self.active_pages.len()
+            )));
+        }
+        let mut page = PyPage {
+            page_number: self.active_pages[zero_idx].page_number,
+            page_id: self.active_pages[zero_idx].page_id,
+            contents_id: self.active_pages[zero_idx].contents_id,
+            ast: self.active_pages[zero_idx].ast.clone(),
+            paragraphs: self.active_pages[zero_idx].paragraphs.clone(),
+            metrics: self.active_pages[zero_idx].metrics.clone(),
+            faces: self.active_pages[zero_idx].faces.clone(),
+            hidden_ocg_props: self.active_pages[zero_idx].hidden_ocg_props.clone(),
+        };
+        let target = page
+            .paragraphs
+            .iter()
+            .find(|paragraph| paragraph.id == paragraph_id)
+            .cloned()
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "Paragraph id {} not found on page",
+                    paragraph_id
+                ))
+            })?;
+        let first_span = target
+            .lines
+            .first()
+            .and_then(|line| line.spans.first())
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("Target paragraph contains no styled spans")
+            })?;
+        let resource = first_span.font_name.trim_start_matches('/').to_string();
+        let current_size = first_span.font_size;
+        let (css_family, weight, css_style) = match page.faces.get(&resource) {
+            Some(face) => (face.family.clone(), face.weight, face.style.clone()),
+            None => (String::new(), 400, "normal".to_string()),
+        };
+        let parsed_alignment = match alignment {
+            Some(raw) => Some(ParagraphStyle::parse_alignment(&raw).map_err(map_engine_value)?),
+            None => None,
+        };
+        let parsed_color = match color {
+            Some(values) => {
+                Some(ParagraphStyle::color_from_components(&values).map_err(map_engine_value)?)
+            }
+            None => None,
+        };
+        let style = ParagraphStyle {
+            family: font,
+            size,
+            bold,
+            italic,
+            color: parsed_color,
+            alignment: parsed_alignment,
+            leading,
+        };
+        let prepared = style
+            .prepare(
+                &resource,
+                current_size,
+                target.leading,
+                target.alignment,
+                &css_family,
+                weight,
+                &css_style,
+            )
+            .map_err(map_engine_value)?;
+        let metrics = if prepared.registers_font {
+            page.metrics.clone()
+        } else if let Some(face) = page.faces.get(&prepared.font_resource) {
+            face.metrics.clone()
+        } else {
+            page.metrics.clone()
+        };
+        SurgicalEditor::edit_paragraph_prepared(
+            &mut page.ast,
+            &target,
+            new_text,
+            &metrics,
+            &prepared,
+        )
+        .map_err(map_engine_value)?;
+        if prepared.registers_font {
+            page.faces.insert(
+                prepared.font_resource.clone(),
+                ResolvedFont {
+                    metrics: FontMetrics::new(0, 255, vec![500.0; 256], 500.0),
+                    cmap: None,
+                    family: prepared.css_family.clone(),
+                    weight: prepared.weight,
+                    style: prepared.css_style.clone(),
+                    is_composite: false,
+                },
+            );
+        }
+        page.paragraphs = reconstruct_layout(
+            &page.ast,
+            &page.metrics,
+            &page.faces,
+            &page.hidden_ocg_props,
+        )?;
+        if prepared.registers_font {
+            if let Some(base_font) = prepared.base_font.as_deref() {
+                pdf_engine_core::watermark::helpers::ensure_font_resource(
+                    &mut self.doc,
+                    page.page_id,
+                    &prepared.font_resource,
+                    base_font,
+                )
+                .map_err(map_engine_value)?;
+            }
+        }
+        self.update_page(&page)?;
+        let alignment_name = match prepared.alignment {
+            TextAlignment::Left => "left",
+            TextAlignment::Center => "center",
+            TextAlignment::Right => "right",
+            TextAlignment::Justified => "justified",
+        };
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("font_resource", &prepared.font_resource)?;
+        dict.set_item("base_font", prepared.base_font.clone())?;
+        dict.set_item("font_size", prepared.size)?;
+        dict.set_item("alignment", alignment_name)?;
+        dict.set_item("leading", prepared.leading)?;
+        Ok(dict)
     }
 
     /// Extracts embedded font binaries (TrueType / OpenType) from a specific page.
