@@ -92,14 +92,14 @@ pub use ops::{
     add_attachment, add_layer, add_outline_item, clear_outlines, collect_garbage,
     compare_documents, compute_word_diffs, deduplicate_streams, delete_attachment, delete_layer,
     delete_pages, extract_attachment, extract_layers, extract_metadata, extract_outlines,
-    extract_pages, get_page_rotation, list_attachments, merge_documents, merge_pdf_bytes,
-    optimize_document, recompress_streams, register_page_layer_property, reorder_pages,
-    resolve_page_hidden_ocg_props, rotate_all_pages, rotate_page, save_optimized_to_vec,
-    set_layer_visibility, set_outlines, set_page_rotation, split_by_ranges, split_document,
-    update_metadata, DiffKind, DiffOptions, DiffReport, DiffSummary, DocumentMetadata,
-    EmbeddedAttachment, EmbeddedAttachmentInfo, ImageDiffItem, MetadataDiffItem, ObjectCloner,
-    OptimizationOptions, OptimizationStats, OptionalContentLayer, OutlineItem, PageDiff,
-    PageDimensions, TextDiffItem, WordDiff,
+    extract_pages, flatten_document_permanently, get_page_rotation, list_attachments,
+    merge_documents, merge_pdf_bytes, optimize_document, recompress_streams,
+    register_page_layer_property, reorder_pages, resolve_page_hidden_ocg_props, rotate_all_pages,
+    rotate_page, save_optimized_to_vec, set_layer_visibility, set_outlines, set_page_rotation,
+    split_by_ranges, split_document, update_metadata, DiffKind, DiffOptions, DiffReport,
+    DiffSummary, DocumentMetadata, EmbeddedAttachment, EmbeddedAttachmentInfo, HardFlattenReport,
+    ImageDiffItem, MetadataDiffItem, ObjectCloner, OptimizationOptions, OptimizationStats,
+    OptionalContentLayer, OutlineItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
 };
 pub use pdfa::{convert_to_pdfa, validate_pdfa, PdfALevel};
 pub use redact::{

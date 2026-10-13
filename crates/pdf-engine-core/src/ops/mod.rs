@@ -6,6 +6,7 @@
 pub mod attachments;
 pub mod cloner;
 pub mod diff;
+pub mod flatten;
 pub mod layers;
 pub mod merge;
 pub mod metadata;
@@ -24,6 +25,7 @@ pub use diff::{
     compare_documents, compute_word_diffs, DiffKind, DiffOptions, DiffReport, DiffSummary,
     ImageDiffItem, MetadataDiffItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
 };
+pub use flatten::{flatten_document_permanently, HardFlattenReport};
 pub use layers::{
     add_layer, delete_layer, extract_layers, register_page_layer_property,
     resolve_page_hidden_ocg_props, set_layer_visibility, OptionalContentLayer,

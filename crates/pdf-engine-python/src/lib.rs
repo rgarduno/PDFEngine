@@ -1107,6 +1107,62 @@ impl PyOptionalContentLayer {
     }
 }
 
+/// Summary report returned after executing a permanent hard-flatten (burn-in) operation.
+#[pyclass(name = "HardFlattenReport")]
+#[derive(Debug, Clone)]
+pub struct PyHardFlattenReport {
+    #[pyo3(get)]
+    pub pages_flattened: usize,
+    #[pyo3(get)]
+    pub forms_flattened: usize,
+    #[pyo3(get)]
+    pub annotations_flattened: usize,
+    #[pyo3(get)]
+    pub appearance_streams_compiled: usize,
+    #[pyo3(get)]
+    pub objects_purged: usize,
+}
+
+#[pymethods]
+impl PyHardFlattenReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "<HardFlattenReport pages={} forms={} annotations={} ap_streams={} purged={}>",
+            self.pages_flattened,
+            self.forms_flattened,
+            self.annotations_flattened,
+            self.appearance_streams_compiled,
+            self.objects_purged
+        )
+    }
+
+    /// Converts the hard-flatten report to a Python dictionary.
+    pub fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("pages_flattened", self.pages_flattened)?;
+        dict.set_item("forms_flattened", self.forms_flattened)?;
+        dict.set_item("annotations_flattened", self.annotations_flattened)?;
+        dict.set_item(
+            "appearance_streams_compiled",
+            self.appearance_streams_compiled,
+        )?;
+        dict.set_item("objects_purged", self.objects_purged)?;
+        Ok(dict)
+    }
+}
+
+impl PyHardFlattenReport {
+    pub fn from_core(report: pdf_engine_core::ops::HardFlattenReport) -> Self {
+        Self {
+            pages_flattened: report.pages_flattened,
+            forms_flattened: report.forms_flattened,
+            annotations_flattened: report.annotations_flattened,
+            appearance_streams_compiled: report.appearance_streams_compiled,
+            objects_purged: report.objects_purged,
+        }
+    }
+}
+
 /// Represents a single page within a PDF document in Python.
 #[pyclass(name = "Page")]
 pub struct PyPage {
@@ -3075,6 +3131,42 @@ impl PyPdfDocument {
         self.reload_active_pages()?;
         Ok(layer_id)
     }
+
+    /// Permanently flattens all (or selected 1-based `page_numbers`) interactive AcroForm fields,
+    /// visual annotations, rubber stamps, vector shapes, and `/AP /N` appearance streams directly
+    /// into page content streams, and purges `/Annots` and `/AcroForm` dictionaries from the document.
+    #[pyo3(signature = (page_numbers=None))]
+    pub fn flatten_permanently(
+        &mut self,
+        page_numbers: Option<Vec<usize>>,
+    ) -> PyResult<PyHardFlattenReport> {
+        let zero_indices: Option<Vec<usize>> = match page_numbers {
+            Some(nums) => {
+                let mut v = Vec::with_capacity(nums.len());
+                for n in nums {
+                    if n == 0 || n > self.page_ids.len() {
+                        return Err(PyValueError::new_err(format!(
+                            "Page number {} out of range (1..={})",
+                            n,
+                            self.page_ids.len()
+                        )));
+                    }
+                    v.push(n - 1);
+                }
+                Some(v)
+            }
+            None => None,
+        };
+
+        let report = pdf_engine_core::ops::flatten_document_permanently(
+            &mut self.doc,
+            zero_indices.as_deref(),
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Hard flatten failed: {}", e)))?;
+
+        self.reload_active_pages()?;
+        Ok(PyHardFlattenReport::from_core(report))
+    }
 }
 
 /// Merges multiple Python PDF documents sequentially into a single unified document.
@@ -3143,6 +3235,7 @@ fn pdf_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEmbeddedAttachmentInfo>()?;
     m.add_class::<PyEmbeddedAttachment>()?;
     m.add_class::<PyOptionalContentLayer>()?;
+    m.add_class::<PyHardFlattenReport>()?;
     m.add_function(wrap_pyfunction!(compare_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_documents, m)?)?;
     m.add_function(wrap_pyfunction!(merge_pdf_bytes, m)?)?;
