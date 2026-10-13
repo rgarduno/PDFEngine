@@ -14,6 +14,7 @@ pub mod merge;
 pub mod metadata;
 pub mod optimize;
 pub mod outlines;
+pub mod raster;
 pub mod reorder;
 pub mod rotation;
 pub mod search;
@@ -48,6 +49,10 @@ pub use optimize::{
     save_optimized_to_vec, OptimizationOptions, OptimizationStats,
 };
 pub use outlines::{add_outline_item, clear_outlines, extract_outlines, set_outlines, OutlineItem};
+pub use raster::{
+    render_page, PageRaster, RasterFormat, DEFAULT_RASTER_DPI, MAX_RASTER_DPI, MAX_RASTER_PIXELS,
+    MAX_RASTER_SIDE, MIN_RASTER_DPI,
+};
 pub use reorder::{delete_pages, reorder_pages};
 pub use rotation::{
     get_page_rotation, normalize_rotation, rotate_all_pages, rotate_page, set_page_rotation,

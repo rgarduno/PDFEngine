@@ -3327,6 +3327,33 @@ impl PyPdfDocument {
                 .map_err(map_engine_value)?;
         search_report_to_py(py, &report)
     }
+
+    /// Paints one page to PNG, JPEG, or TIFF. `page_index` is 0-based.
+    ///
+    /// This is a read. It does not rewrite the page. It is not an Acrobat
+    /// rendering: annotation appearances are not painted, and rendering mode 3
+    /// is not painted. Text without outlines uses a built-in face.
+    #[pyo3(signature = (page_index, format="png", dpi=144.0))]
+    pub fn render_page<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+        format: &str,
+        dpi: f64,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let parsed =
+            pdf_engine_core::ops::RasterFormat::parse(format).map_err(map_engine_value)?;
+        let raster =
+            pdf_engine_core::ops::render_page(&mut self.doc, page_index, parsed, dpi)
+                .map_err(map_engine_value)?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("bytes", pyo3::types::PyBytes::new(py, &raster.bytes))?;
+        dict.set_item("width", raster.width)?;
+        dict.set_item("height", raster.height)?;
+        dict.set_item("dpi", raster.dpi)?;
+        dict.set_item("omitted", raster.omitted)?;
+        Ok(dict)
+    }
 }
 
 fn map_engine_value(err: pdf_engine_core::PdfError) -> PyErr {

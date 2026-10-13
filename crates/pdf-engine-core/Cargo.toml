@@ -28,6 +28,8 @@ signature = { version = "2.2.0", features = ["digest"] }
 spki = { version = "0.7.3", features = ["alloc"] }
 x509-cert = { version = "0.2.5", features = ["builder", "pem"] }
 zeroize = { version = "1.8", features = ["alloc"] }
+jpeg-decoder = "0.3"
+jpeg-encoder = "0.6"
 
 [dev-dependencies]
 rand = "0.8"

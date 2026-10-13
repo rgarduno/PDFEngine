@@ -194,7 +194,7 @@ PDFEngine/
     │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
     │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
     │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
-    │   │   ├── ops/            # Page boxes, text search, split, merge, reorder, and delete
+    │   │   ├── ops/            # Page boxes, text search, raster, split, merge, reorder, and delete
     │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
     │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
     │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
@@ -206,6 +206,8 @@ PDFEngine/
 ```
 
 PDFAPI and PDFWeb are sibling repositories. This tree is only the engine.
+
+`render_page` paints one page to PNG, JPEG, or TIFF. The displayed box is the CropBox, or the MediaBox when CropBox is absent. `/Rotate` is applied clockwise after the paint. Density defaults to 144 and must be from 36 to 300. A bitmap is refused above 12000000 pixels or a side of 65535. Text that has no outline program uses an original 5 by 7 face, not the embedded outlines and not the PDF/A bitmap. This is not an Acrobat rendering. Nested clips, soft masks, transparency groups, and annotation appearances are not composited. Rendering mode 3 is not painted. TIFF output is one page, not a multi-page stack.
 
 ---
 
