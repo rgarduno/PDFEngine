@@ -47,6 +47,12 @@ pub struct PdfDocument {
     /// document it is about to save; the bytes, not this field, are what a
     /// later load can prove.
     pub write_version: String,
+    /// Cross-reference entries captured at load. [`Self::set_object`] stores a
+    /// live offset of 0, so an incremental save reparses the signed bytes from
+    /// this snapshot.
+    loaded_entries: BTreeMap<ObjectId, XRefEntry>,
+    /// Trailer dictionary captured at load, before later edits.
+    loaded_trailer: PdfDictionary,
 }
 
 impl PdfDocument {
@@ -78,6 +84,8 @@ impl PdfDocument {
         // Locate startxref offset from tail
         let startxref_offset = XRefTable::find_startxref(data)?;
         let xref = XRefTable::load_chain(data, startxref_offset, &limits)?;
+        let loaded_entries = xref.entries.clone();
+        let loaded_trailer = xref.trailer.clone();
 
         Ok(Self {
             raw_data: data.to_vec(),
@@ -85,6 +93,8 @@ impl PdfDocument {
             objects: BTreeMap::new(),
             limits,
             write_version: "1.7".to_string(),
+            loaded_entries,
+            loaded_trailer,
         })
     }
 
@@ -110,6 +120,8 @@ impl PdfDocument {
             objects: BTreeMap::new(),
             limits: SecurityLimits::default(),
             write_version: "1.7".to_string(),
+            loaded_entries: BTreeMap::new(),
+            loaded_trailer: PdfDictionary::new(),
         };
 
         let catalog_id = ObjectId::new(1);
@@ -573,8 +585,263 @@ impl PdfDocument {
         Ok(fonts)
     }
 
-    /// Serializes the complete document to a byte vector.
+    /// Serializes the document.
+    ///
+    /// A file whose stored bytes still verify `/adbe.pkcs7.detached` gains one
+    /// incremental update. The signed prefix stays in place, so that byte range
+    /// still matches. Bytes in the update are not covered by the same signature.
+    /// Any other file is rewritten, and a SHA-256 attestation is sealed again.
     pub fn save_to_vec(&mut self) -> PdfResult<Vec<u8>> {
+        if self.detached_pkcs7_covers_source() {
+            return self.save_incremental();
+        }
+        self.save_rewritten()
+    }
+
+    /// True when `raw_data` still contains a detached PKCS#7 signature that verifies.
+    ///
+    /// The check reads the stored bytes. A signature that is about to be written,
+    /// and a signature whose byte range no longer matches, stay on the full rewrite.
+    fn detached_pkcs7_covers_source(&self) -> bool {
+        if self.raw_data.is_empty()
+            || !self
+                .raw_data
+                .windows(crate::security::cms::PKCS7_MARK.len())
+                .any(|window| window == crate::security::cms::PKCS7_MARK)
+        {
+            return false;
+        }
+        crate::security::signatures::verify_document_signatures(self)
+            .iter()
+            .any(|sig| sig.sub_filter == "adbe.pkcs7.detached" && sig.byte_range_valid)
+    }
+
+    /// Appends objects that differ from the loaded revision, plus a classic xref.
+    ///
+    /// An unchanged file is returned as stored. `/Encrypt` on a signed file is
+    /// refused when there is something to append: plaintext objects must not
+    /// follow an encrypted body. Active-content keys are removed from the
+    /// appended objects only. The signed prefix is not rewritten.
+    fn save_incremental(&self) -> PdfResult<Vec<u8>> {
+        let mut changed = Vec::new();
+        let mut ids: Vec<ObjectId> = self.objects.keys().copied().collect();
+        ids.sort_by_key(|id| (id.number, id.generation));
+        for id in ids {
+            if id.number == 0 {
+                continue;
+            }
+            let mut stack = HashSet::new();
+            let same = match self.source_object(id, &mut stack, 0)? {
+                Some(source) => source == self.objects[&id],
+                None => false,
+            };
+            if !same {
+                changed.push((id, self.objects[&id].clone()));
+            }
+        }
+
+        let changed_numbers: HashSet<u32> = changed.iter().map(|(id, _)| id.number).collect();
+        let mut freed = Vec::new();
+        for (id, entry) in &self.loaded_entries {
+            if id.number == 0 || changed_numbers.contains(&id.number) {
+                continue;
+            }
+            if self.xref.entries.contains_key(id) {
+                continue;
+            }
+            let generation = match entry {
+                XRefEntry::InUse { generation, .. } => generation.saturating_add(1),
+                XRefEntry::Compressed { .. } => 1,
+                XRefEntry::Free { .. } => continue,
+            };
+            freed.push((id.number, generation));
+        }
+        freed.sort_by_key(|entry| entry.0);
+
+        let trailer_dirty = self.xref.trailer != self.loaded_trailer;
+        if changed.is_empty() && freed.is_empty() && !trailer_dirty {
+            return Ok(self.raw_data.clone());
+        }
+        if self.xref.trailer.contains_key("Encrypt") || self.loaded_trailer.contains_key("Encrypt")
+        {
+            return Err(PdfError::CryptographyError(
+                "Incremental save is refused for an encrypted PKCS#7 document.".to_string(),
+            ));
+        }
+
+        let mut scratch = self.scrub_surface(&changed);
+        crate::security::active::neutralize_active_content(&mut scratch)?;
+
+        let mut append = Vec::new();
+        for (id, _) in &changed {
+            let Some(obj) = scratch.objects.get(id) else {
+                continue;
+            };
+            let mut stack = HashSet::new();
+            let same = match self.source_object(*id, &mut stack, 0)? {
+                Some(source) => source == *obj,
+                None => false,
+            };
+            if !same {
+                append.push((*id, obj.clone()));
+            }
+        }
+        let scrubbed_trailer = scratch.xref.trailer.clone();
+        if append.is_empty() && freed.is_empty() && scrubbed_trailer == self.loaded_trailer {
+            return Ok(self.raw_data.clone());
+        }
+
+        let mut trailer = scrubbed_trailer;
+        if trailer.get("Type").and_then(|obj| obj.as_name()) == Some("XRef") {
+            trailer.remove("Type");
+        }
+        for key in ["W", "Index", "Filter", "DecodeParms", "Length", "XRefStm"] {
+            trailer.remove(key);
+        }
+        let prev = XRefTable::find_startxref(&self.raw_data)?;
+        trailer.insert("Prev", prev as i64);
+        let mut highest = 0u32;
+        for id in self.loaded_entries.keys() {
+            highest = highest.max(id.number);
+        }
+        for (id, _) in &append {
+            highest = highest.max(id.number);
+        }
+        for (number, _) in &freed {
+            highest = highest.max(*number);
+        }
+        trailer.insert("Size", i64::from(highest) + 1);
+
+        let mut out = self.raw_data.clone();
+        if out.last() != Some(&b'\n') {
+            out.push(b'\n');
+        }
+        let prefix_len = out.len();
+        let mut writer = Writer::with_offset(&mut out, prefix_len);
+        let mut offsets = Vec::new();
+        for (id, obj) in &append {
+            let write_id = ObjectId::with_generation(id.number, self.source_generation(*id));
+            let offset = writer.write_indirect_object(write_id, obj)?;
+            offsets.push((write_id, offset));
+        }
+        writer.write_xref_and_trailer_with_free(&offsets, &freed, &trailer)?;
+        Ok(out)
+    }
+
+    /// Document that holds only the objects and trailer about to be appended.
+    ///
+    /// Its cross-reference has no entries, so neutralization cannot load or
+    /// rewrite the signed prefix. `self` stays unchanged when this save fails.
+    fn scrub_surface(&self, changed: &[(ObjectId, PdfObject)]) -> Self {
+        let mut objects = BTreeMap::new();
+        for (id, obj) in changed {
+            objects.insert(*id, obj.clone());
+        }
+        let mut xref = XRefTable::new();
+        xref.trailer = self.xref.trailer.clone();
+        Self {
+            raw_data: Vec::new(),
+            xref,
+            objects,
+            limits: self.limits.clone(),
+            write_version: self.write_version.clone(),
+            loaded_entries: BTreeMap::new(),
+            loaded_trailer: PdfDictionary::new(),
+        }
+    }
+
+    /// Generation stored for `id` in the loaded revision. A new object uses 0.
+    fn source_generation(&self, id: ObjectId) -> u16 {
+        match self.loaded_entries.get(&ObjectId::new(id.number)) {
+            Some(XRefEntry::InUse { generation, .. }) => *generation,
+            _ => 0,
+        }
+    }
+
+    /// Parses `id` from the loaded revision. `None` means the object is new.
+    ///
+    /// The live cross-reference is ignored: a mutation stores offset 0 there.
+    /// A compressed object is read from the file container, not from the cache.
+    fn source_object(
+        &self,
+        id: ObjectId,
+        stack: &mut HashSet<ObjectId>,
+        depth: usize,
+    ) -> PdfResult<Option<PdfObject>> {
+        let Some(entry) = self.loaded_entries.get(&id).copied() else {
+            return Ok(None);
+        };
+        self.limits
+            .validate_depth(depth, id.number, id.generation)?;
+        if !stack.insert(id) {
+            return Err(PdfError::CircularReference {
+                id: id.number,
+                gen: id.generation,
+            });
+        }
+        let result = self.read_source_entry(id, entry, stack, depth);
+        stack.remove(&id);
+        result
+    }
+
+    fn read_source_entry(
+        &self,
+        id: ObjectId,
+        entry: XRefEntry,
+        stack: &mut HashSet<ObjectId>,
+        depth: usize,
+    ) -> PdfResult<Option<PdfObject>> {
+        match entry {
+            XRefEntry::Free { .. } => Ok(None),
+            XRefEntry::InUse { offset, .. } => {
+                let offset = usize::try_from(offset).map_err(|_| PdfError::InvalidXRef {
+                    offset: 0,
+                    message: format!("Object {} offset does not fit", id.number),
+                })?;
+                if offset >= self.raw_data.len() {
+                    return Err(PdfError::InvalidXRef {
+                        offset,
+                        message: format!("Object {} offset is past the signed bytes", id.number),
+                    });
+                }
+                let mut parser = Parser::at_offset(&self.raw_data, offset);
+                let (parsed_id, obj) = parser.parse_indirect_object()?;
+                if parsed_id.number != id.number {
+                    return Err(PdfError::InvalidXRef {
+                        offset,
+                        message: format!(
+                            "XRef pointed to object {}, but found object {}",
+                            id.number, parsed_id
+                        ),
+                    });
+                }
+                Ok(Some(obj))
+            }
+            XRefEntry::Compressed {
+                container_id,
+                index_in_stream,
+            } => {
+                let container = self
+                    .source_object(ObjectId::new(container_id), stack, depth + 1)?
+                    .ok_or(PdfError::ObjectNotFound {
+                        id: container_id,
+                        gen: 0,
+                    })?;
+                let PdfObject::Stream(stream) = container else {
+                    return Err(PdfError::TypeMismatch {
+                        id: container_id,
+                        gen: 0,
+                        expected: "Stream",
+                        found: "Non-stream object",
+                    });
+                };
+                Ok(Some(self.extract_from_obj_stm(&stream, index_in_stream)?))
+            }
+        }
+    }
+
+    /// Rewrites every object. A SHA-256 attestation is sealed against the new bytes.
+    fn save_rewritten(&mut self) -> PdfResult<Vec<u8>> {
         let mut out = Vec::new();
         let mut writer = Writer::new(&mut out);
 

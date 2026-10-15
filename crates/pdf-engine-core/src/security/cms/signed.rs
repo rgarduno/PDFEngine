@@ -211,7 +211,10 @@ pub(crate) fn insert_timestamp(cms_der: &[u8], token: &[u8]) -> PdfResult<Vec<u8
     encode_signed_data(&signed)
 }
 
-/// The byte range covers `file` except the hex digits of `/Contents`.
+/// The byte range covers the signed revision except the hex digits of `/Contents`.
+///
+/// `end2` may stop before the end of `file`. Bytes after `end2` are not hashed,
+/// so a later incremental update does not enter this digest.
 pub(crate) fn cms_byte_range_valid(file: &[u8], byte_range: &[usize], contents: &[u8]) -> bool {
     if byte_range.len() != 4 {
         return false;
@@ -223,7 +226,7 @@ pub(crate) fn cms_byte_range_valid(file: &[u8], byte_range: &[usize], contents: 
     let Some(end2) = start2.checked_add(len2) else {
         return false;
     };
-    if end2 != file.len() {
+    if len1 > file.len() || start2 > file.len() || end2 > file.len() {
         return false;
     }
     let Some(hex_len) = contents.len().checked_mul(2) else {
@@ -260,7 +263,7 @@ pub(crate) fn cms_byte_range_valid(file: &[u8], byte_range: &[usize], contents: 
     }
     let mut hasher = sha2::Sha256::new();
     hasher.update(&file[..len1]);
-    hasher.update(&file[start2..]);
+    hasher.update(&file[start2..end2]);
     message_digest_matches(
         &signed,
         hasher.finalize().as_slice(),

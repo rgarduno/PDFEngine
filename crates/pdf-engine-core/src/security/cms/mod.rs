@@ -5,8 +5,9 @@
 //! It does not decide whether a viewer trusts the certificate, and it does not
 //! claim that a particular reader or authority accepts the file.
 //!
-//! The byte range covers the saved file except the hex digits of `/Contents`.
-//! A later full save rewrites offsets and leaves this signature invalid.
+//! The byte range covers the signed revision except the hex digits of `/Contents`.
+//! A later save appends an incremental update when this signature still verifies.
+//! Bytes after that range are not covered by the same signature.
 //! An RFC 3161 token is stored as an unsigned attribute, so embedding it does
 //! not move `/ByteRange`.
 
@@ -234,6 +235,7 @@ mod tests {
     use x509_cert::Certificate;
 
     use super::*;
+    use crate::cos::PdfName;
     use crate::security::signatures::sign_document;
 
     fn config() -> DigitalSignatureConfig {
@@ -341,8 +343,28 @@ mod tests {
         }
     }
 
+    fn set_piece_info(doc: &mut PdfDocument, name: &str) {
+        let id = doc.catalog_id().unwrap();
+        let mut catalog = doc.get_object(id).unwrap();
+        catalog
+            .as_dict_mut()
+            .unwrap()
+            .insert("PieceInfo", PdfName::new(name));
+        doc.set_object(id, catalog);
+    }
+
+    fn piece_info(doc: &mut PdfDocument) -> Option<String> {
+        let id = doc.catalog_id().unwrap();
+        doc.get_object(id)
+            .unwrap()
+            .as_dict()
+            .and_then(|dict| dict.get("PieceInfo"))
+            .and_then(|value| value.as_name())
+            .map(str::to_string)
+    }
+
     #[test]
-    fn rsa_pem_signature_verifies_and_a_rewrite_invalidates_it() {
+    fn rsa_pem_signature_verifies_and_an_unmodified_save_keeps_it() {
         let key = rsa_key();
         let cert = issue_rsa(&key, "CN=PDFEngine", 1);
         let other = issue_rsa(&rsa_key(), "CN=Other", 2);
@@ -381,8 +403,68 @@ mod tests {
         let tampered_doc = PdfDocument::load(&tampered).unwrap();
         assert!(!verify_document_signatures(&tampered_doc)[0].byte_range_valid);
 
-        let rewritten = PdfDocument::load(&doc.save_to_vec().unwrap()).unwrap();
-        assert!(!verify_document_signatures(&rewritten)[0].byte_range_valid);
+        let saved = doc.save_to_vec().unwrap();
+        assert_eq!(saved, doc.raw_data());
+        let kept = PdfDocument::load(&saved).unwrap();
+        assert!(verify_document_signatures(&kept)[0].byte_range_valid);
+    }
+
+    #[test]
+    fn incremental_save_keeps_the_pkcs7_byte_range() {
+        let key = rsa_key();
+        let cert = issue_rsa(&key, "CN=PDFEngine", 11);
+        let cert_pem = cert.to_pem(LineEnding::LF).unwrap();
+        let key_pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        let mut doc = page();
+        sign_document_cms(
+            &mut doc,
+            &config(),
+            &pem_material(&cert_pem, key_pem.as_str(), None),
+        )
+        .unwrap();
+        let signed = doc.raw_data().to_vec();
+        set_piece_info(&mut doc, "Annex");
+        let saved = doc.save_to_vec().unwrap();
+        assert!(saved.starts_with(&signed));
+        assert!(saved.len() > signed.len());
+        let mut loaded = PdfDocument::load(&saved).unwrap();
+        let sig = &verify_document_signatures(&loaded)[0];
+        assert!(sig.byte_range_valid);
+        assert_eq!(sig.byte_range[2] + sig.byte_range[3], signed.len());
+        assert_eq!(piece_info(&mut loaded).as_deref(), Some("Annex"));
+
+        set_piece_info(&mut loaded, "Second");
+        let saved_again = loaded.save_to_vec().unwrap();
+        assert!(saved_again.starts_with(&saved));
+        assert!(saved_again.starts_with(&signed));
+        let mut loaded_again = PdfDocument::load(&saved_again).unwrap();
+        let sig = &verify_document_signatures(&loaded_again)[0];
+        assert!(sig.byte_range_valid);
+        assert_eq!(sig.byte_range[2] + sig.byte_range[3], signed.len());
+        assert_eq!(piece_info(&mut loaded_again).as_deref(), Some("Second"));
+    }
+
+    #[test]
+    fn incremental_save_refuses_an_encrypted_pkcs7_document() {
+        let key = rsa_key();
+        let cert = issue_rsa(&key, "CN=PDFEngine", 12);
+        let cert_pem = cert.to_pem(LineEnding::LF).unwrap();
+        let key_pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        let mut doc = page();
+        sign_document_cms(
+            &mut doc,
+            &config(),
+            &pem_material(&cert_pem, key_pem.as_str(), None),
+        )
+        .unwrap();
+        set_piece_info(&mut doc, "Annex");
+        doc.xref.trailer.insert("Encrypt", 9i64);
+        let err = doc.save_to_vec().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cryptography error: Incremental save is refused for an encrypted PKCS#7 document."
+        );
+        assert!(verify_document_signatures(&doc)[0].byte_range_valid);
     }
 
     #[test]

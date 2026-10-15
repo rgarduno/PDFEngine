@@ -3,7 +3,7 @@
 //! Provides deterministic, byte-accurate serialization for PDF objects,
 //! cross-reference tables, trailers, and incremental updates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Write};
 
 use crate::cos::filters::{encode_flate, Compression};
@@ -21,9 +21,17 @@ pub struct Writer<W: Write> {
 impl<W: Write> Writer<W> {
     /// Creates a new writer wrapping an underlying `Write` sink.
     pub fn new(writer: W) -> Self {
+        Self::with_offset(writer, 0)
+    }
+
+    /// Creates a writer whose offsets continue after `bytes_written` bytes already in `writer`.
+    ///
+    /// `Write` for `Vec<u8>` appends, so an incremental update must seed the
+    /// counter with the prefix length. [`Self::new`] still starts at 0.
+    pub fn with_offset(writer: W, bytes_written: usize) -> Self {
         Self {
             writer,
-            bytes_written: 0,
+            bytes_written,
         }
     }
 
@@ -159,6 +167,17 @@ impl<W: Write> Writer<W> {
         offsets: &[(ObjectId, usize)],
         trailer_dict: &PdfDictionary,
     ) -> io::Result<()> {
+        self.write_xref_and_trailer_with_free(offsets, &[], trailer_dict)
+    }
+
+    /// Writes a classic table. `freed` is `(object number, generation)` for
+    /// numbers removed from the previous revision. Object 0 stays the free-list head.
+    pub fn write_xref_and_trailer_with_free(
+        &mut self,
+        offsets: &[(ObjectId, usize)],
+        freed: &[(u32, u16)],
+        trailer_dict: &PdfDictionary,
+    ) -> io::Result<()> {
         let startxref_offset = self.bytes_written;
 
         // Object 0 is the free-list head. Later numbers are written in order,
@@ -172,9 +191,19 @@ impl<W: Write> Writer<W> {
 
         let mut entries: Vec<(u32, u16, usize, bool)> = Vec::with_capacity(sorted.len() + 1);
         entries.push((0, 65535, 0, false));
+        let mut in_use_numbers = HashSet::new();
         for (id, offset) in &sorted {
             entries.push((id.number, id.generation, *offset, true));
+            in_use_numbers.insert(id.number);
         }
+        let mut seen_free = HashSet::new();
+        for &(number, generation) in freed {
+            if number == 0 || in_use_numbers.contains(&number) || !seen_free.insert(number) {
+                continue;
+            }
+            entries.push((number, generation, 0, false));
+        }
+        entries.sort_by_key(|entry| entry.0);
 
         let mut index = 0;
         while index < entries.len() {
@@ -188,7 +217,7 @@ impl<W: Write> Writer<W> {
                 if in_use {
                     self.write_all(format!("{:010} {:05} n \n", offset, generation).as_bytes())?;
                 } else {
-                    self.write_all(b"0000000000 65535 f \n")?;
+                    self.write_all(format!("{:010} {:05} f \n", offset, generation).as_bytes())?;
                 }
             }
             index = end;

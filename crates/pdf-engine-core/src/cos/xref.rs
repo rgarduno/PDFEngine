@@ -123,17 +123,16 @@ impl XRefTable {
                             let mut parser = Parser::at_offset(data, lexer.cursor());
                             let trailer_obj = parser.parse_object()?;
                             if let PdfObject::Dictionary(dict) = trailer_obj {
-                                // Merge entries from earlier trailer if not yet set
-                                for (k, v) in dict.0 {
-                                    table.trailer.0.entry(k).or_insert(v);
-                                }
-
-                                // Check for /Prev incremental update pointer
-                                current_offset = table
-                                    .trailer
+                                // Follow /Prev from this trailer. The merged trailer
+                                // still holds a newer /Prev, so reading it again loops.
+                                let prev = dict
                                     .get("Prev")
                                     .and_then(|o| o.as_i64())
                                     .map(|o| o as usize);
+                                for (k, v) in dict.0 {
+                                    table.trailer.0.entry(k).or_insert(v);
+                                }
+                                current_offset = prev;
                             } else {
                                 return Err(PdfError::InvalidXRef {
                                     offset: lexer.cursor(),
@@ -157,16 +156,16 @@ impl XRefTable {
                     if let PdfObject::Stream(stream) = obj {
                         Self::parse_xref_stream(&stream, &mut table, limits)?;
 
-                        // Merge trailer fields from XRef stream dictionary
-                        for (k, v) in stream.dict.0 {
-                            table.trailer.0.entry(k).or_insert(v);
-                        }
-
-                        current_offset = table
-                            .trailer
+                        // Same /Prev rule as a classic trailer: this stream, not the merge.
+                        let prev = stream
+                            .dict
                             .get("Prev")
                             .and_then(|o| o.as_i64())
                             .map(|o| o as usize);
+                        for (k, v) in stream.dict.0 {
+                            table.trailer.0.entry(k).or_insert(v);
+                        }
+                        current_offset = prev;
                     } else {
                         return Err(PdfError::InvalidXRef {
                             offset,
