@@ -222,6 +222,8 @@ A fill-and-sign mark appends typed Times-Italic text, a drawn path clipped to th
 
 `export_document_docx` writes one Word section per page. The size is the CropBox, or the MediaBox when CropBox is absent. One point is 20 twips. Each margin is the gap to the content, from 36 to 72 points, and at most a quarter of that side. A paragraph that starts further right gets a left indent. Space before is the vertical gap to the block above, capped at 72 points, and the first block subtracts the top margin. A table uses the width of its box. A document with no pages still emits one US Letter section. This remains a reconstruction: there are no floating text boxes, images are not embedded, and it is not Word's page design. Markdown export is unchanged. Editing a PDF still does not rebuild that PDF from the DOCX.
 
+`export_document_xlsx` writes one Office Open XML worksheet for each table the existing detector returns. Every cell is that reconstructed text, including a value that looks like a number or a formula, so it is not calculated and not coerced. A span is not an Excel merge. The grid stops at 1,048,576 rows, 16,384 columns, and 32,767 characters in a cell. A document with no detected table still emits one empty worksheet named `Tables`, so the package opens. This is not a binary XLS file and it is not Excel's layout. CSV, JSON, Markdown, and HTML export of one table are unchanged. A badly drawn table can still go undetected. A page the detector refuses fails the export.
+
 ---
 
 ## Security & Resilience (Enterprise Grade)

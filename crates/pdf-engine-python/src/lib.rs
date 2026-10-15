@@ -3282,6 +3282,16 @@ impl PyPdfDocument {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to export DOCX: {}", e)))
     }
 
+    /// Exports detected tables into an Office Open XML workbook (`.xlsx`).
+    ///
+    /// Each table is one worksheet. Every cell is reconstructed text, so a value
+    /// that looks like a number or a formula stays text. This is not a binary `.xls`.
+    pub fn export_xlsx(&mut self) -> PyResult<Vec<u8>> {
+        gate(self.doc.require_copy())?;
+        pdf_engine_core::export_document_xlsx(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to export XLSX: {}", e)))
+    }
+
     /// Exports the PDF document into structured GitHub-Flavored Markdown (`.md`).
     pub fn export_markdown(&mut self) -> PyResult<String> {
         gate(self.doc.require_copy())?;
