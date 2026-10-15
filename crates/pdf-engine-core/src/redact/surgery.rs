@@ -2,8 +2,9 @@
 //!
 //! Marked-content `/ActualText`, `/Alt`, and `/E` entries on the rewritten page are
 //! removed with the glyphs. This pass records the excised glyph runs. The sanitizer
-//! deletes an embedded file that repeats the removed datum. The structure tree and
-//! form appearances stay. This is not an ISO 32000-1 legal redaction.
+//! deletes an embedded file that repeats the removed datum, and it clears a form
+//! field `/V` and `/AP` when either one repeats that datum. The structure tree
+//! stays. This is not an ISO 32000-1 legal redaction.
 
 use std::collections::{BTreeMap, HashSet};
 

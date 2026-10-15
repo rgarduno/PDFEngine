@@ -15,7 +15,7 @@ use crate::layout::reconstructor::LayoutReconstructor;
 use crate::ops::attachments::{collect_all_attachments, delete_attachment, EmbeddedAttachment};
 use crate::stream::parser::{build_ast_from_operations, ContentStreamTokenizer};
 
-const MIN_NEEDLE_SCALARS: usize = 4;
+pub(super) const MIN_NEEDLE_SCALARS: usize = 4;
 
 /// Deletes embedded files that repeat `exact` or, when set, `ignore_case`.
 ///
@@ -87,7 +87,7 @@ fn attachment_repeats(
     false
 }
 
-fn text_repeats(haystack: &str, exact: &[&str], ignore_case: Option<&str>) -> bool {
+pub(super) fn text_repeats(haystack: &str, exact: &[&str], ignore_case: Option<&str>) -> bool {
     if haystack.is_empty() {
         return false;
     }
@@ -100,7 +100,7 @@ fn text_repeats(haystack: &str, exact: &[&str], ignore_case: Option<&str>) -> bo
     }
 }
 
-fn payload_repeats(data: &[u8], exact: &[&str], ignore_case: Option<&str>) -> bool {
+pub(super) fn payload_repeats(data: &[u8], exact: &[&str], ignore_case: Option<&str>) -> bool {
     if exact.iter().any(|needle| bytes_contain(data, needle.as_bytes())) {
         return true;
     }
@@ -112,7 +112,7 @@ fn payload_repeats(data: &[u8], exact: &[&str], ignore_case: Option<&str>) -> bo
     }
 }
 
-fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack.len() >= needle.len()
         && haystack.windows(needle.len()).any(|window| window == needle)

@@ -6,6 +6,7 @@ use crate::error::{PdfError, PdfResult};
 use crate::fonts::FontMetrics;
 use crate::layout::geometry::Rect;
 use crate::redact::embedded::remove_embedded_files_repeating;
+use crate::redact::fields::clear_form_values_repeating;
 use crate::redact::surgery::{apply_redaction_to_ast, find_pattern_hits};
 use crate::redact::types::{RedactionConfig, RedactionPattern, RedactionRect, RedactionSummary};
 use crate::stream::parser::{build_ast_from_operations, serialize_ast, ContentStreamTokenizer};
@@ -13,9 +14,9 @@ use crate::watermark::helpers::ensure_font_resource;
 
 /// Redacts specified rectangular regions on a single page of `doc`.
 ///
-/// Glyph runs excised here select embedded files. A pattern redaction skips that
-/// selection and purges from the matched substrings, so a padded neighbor is
-/// not treated as the datum.
+/// Glyph runs excised here select embedded files and form values. A pattern
+/// redaction skips that selection and purges from the matched substrings, so a
+/// padded neighbor is not treated as the datum.
 pub fn redact_page(
     doc: &mut PdfDocument,
     page_index: usize,
@@ -119,6 +120,7 @@ fn redact_page_at(
 
     if purge_embedded {
         remove_embedded_files_repeating(doc, &summary.removed_texts, None)?;
+        clear_form_values_repeating(doc, &summary.removed_texts, None)?;
     }
 
     Ok(summary)
@@ -204,6 +206,7 @@ pub fn redact_document_pattern(
 
     if !summaries.is_empty() {
         remove_embedded_files_repeating(doc, &exact_needles, ignore_case_query.as_deref())?;
+        clear_form_values_repeating(doc, &exact_needles, ignore_case_query.as_deref())?;
     }
 
     Ok(summaries)

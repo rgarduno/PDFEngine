@@ -4,11 +4,13 @@
 //! opaque blackout, and can drop intersecting annotations. It also removes page
 //! `/Metadata` and marked-content `/ActualText`, `/Alt`, and `/E` on that page.
 //! An embedded file is removed when its name, filename, description, or decoded
-//! bytes repeat a removed string of at least 4 characters. The structure tree
-//! and form appearances stay. Document `/Info` and catalog XMP are removed only
+//! bytes repeat a removed string of at least 4 characters. A form field loses
+//! `/V` and `/AP` when either one repeats such a string. The widget stays. The
+//! structure tree stays. Document `/Info` and catalog XMP are removed only
 //! when `scrub_metadata` is set. This is not an ISO 32000-1 legal redaction.
 
 mod embedded;
+mod fields;
 pub mod patterns;
 pub mod sanitizer;
 pub mod surgery;

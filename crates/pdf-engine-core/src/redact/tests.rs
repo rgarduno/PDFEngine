@@ -577,3 +577,367 @@ fn redaction_keeps_embedded_pdf_that_only_hides_the_email_inside() {
 
     assert_eq!(attachment_names(&mut doc), vec!["wrapped.pdf".to_string()]);
 }
+
+fn field_named(doc: &mut crate::cos::PdfDocument, name: &str) -> crate::forms::FormField {
+    crate::forms::extract_document_forms(doc)
+        .unwrap()
+        .into_iter()
+        .find(|field| field.name == name)
+        .unwrap_or_else(|| panic!("missing field {name}"))
+}
+
+fn text_field(name: &str, value: Option<&str>, y: f64) -> crate::forms::FormFieldCreateOptions {
+    crate::forms::FormFieldCreateOptions {
+        name: name.to_string(),
+        value: value.map(str::to_string),
+        rect: Rect::new(72.0, y, 320.0, y + 18.0),
+        ..crate::forms::FormFieldCreateOptions::default()
+    }
+}
+
+fn page_annot_ids(doc: &mut crate::cos::PdfDocument, page_id: crate::cos::object::ObjectId) -> Vec<crate::cos::object::ObjectId> {
+    let page = doc.get_object(page_id).unwrap().as_dict().unwrap().clone();
+    match page.get("Annots") {
+        Some(crate::cos::object::PdfObject::Array(items)) => {
+            items.iter().filter_map(|item| item.as_reference()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[test]
+fn redaction_clears_form_value_and_appearance_that_repeat_the_email() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let page_id = doc.get_pages().unwrap()[0];
+    let email = crate::forms::create_form_field(&mut doc, 1, &text_field("email", Some(EMAIL), 520.0)).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("note", Some("quarterly totals"), 480.0)).unwrap();
+    crate::forms::create_form_field(
+        &mut doc,
+        1,
+        &crate::forms::FormFieldCreateOptions {
+            name: "agree".to_string(),
+            field_type: crate::forms::FormFieldType::Checkbox,
+            value: None,
+            rect: Rect::new(72.0, 440.0, 96.0, 458.0),
+            ..crate::forms::FormFieldCreateOptions::default()
+        },
+    )
+    .unwrap();
+    crate::forms::create_form_field(
+        &mut doc,
+        1,
+        &crate::forms::FormFieldCreateOptions {
+            name: "country".to_string(),
+            field_type: crate::forms::FormFieldType::Choice,
+            value: Some("Mexico".to_string()),
+            options: Some(vec!["Mexico".to_string(), "Canada".to_string()]),
+            rect: Rect::new(72.0, 400.0, 240.0, 418.0),
+            ..crate::forms::FormFieldCreateOptions::default()
+        },
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    let cleared = field_named(&mut doc, "email");
+    assert_eq!(cleared.value, "");
+    assert_eq!(cleared.id, email.id);
+    let cleared_dict = doc.get_object(cleared.id).unwrap().as_dict().unwrap().clone();
+    assert!(!cleared_dict.contains_key("V"));
+    assert!(!cleared_dict.contains_key("AP"));
+    assert!(doc.objects.contains_key(&cleared.id));
+    assert!(page_annot_ids(&mut doc, page_id).contains(&cleared.id));
+
+    assert_eq!(field_named(&mut doc, "note").value, "quarterly totals");
+    let agree = field_named(&mut doc, "agree");
+    assert_eq!(agree.value, "Off");
+    let agree_dict = doc.get_object(agree.id).unwrap().as_dict().unwrap().clone();
+    assert!(agree_dict.contains_key("AS"));
+    let country = field_named(&mut doc, "country");
+    assert_eq!(country.value, "Mexico");
+    assert_eq!(country.options, vec!["Mexico".to_string(), "Canada".to_string()]);
+
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!bytes_contain(&saved, EMAIL));
+}
+
+#[test]
+fn redaction_keeps_form_value_when_the_page_has_no_match() {
+    let hello = single_page_pdf(
+        b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Hello only) Tj\nET\n",
+        false,
+    );
+    let mut doc = crate::cos::PdfDocument::load(&hello).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("email", Some(EMAIL), 520.0)).unwrap();
+
+    let summaries =
+        redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+            .unwrap();
+
+    assert!(summaries.is_empty());
+    assert_eq!(field_named(&mut doc, "email").value, EMAIL);
+    let saved = doc.save_to_vec().unwrap();
+    assert!(bytes_contain(&saved, EMAIL));
+}
+
+#[test]
+fn redaction_keeps_form_value_for_a_short_match() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::forms::create_form_field(
+        &mut doc,
+        1,
+        &text_field("clip", Some("fi confidential@corp.com"), 520.0),
+    )
+    .unwrap();
+
+    let pattern = RedactionPattern::Text {
+        query: "fi".to_string(),
+        case_sensitive: false,
+    };
+    redact_document_pattern(&mut doc, &pattern, None, &RedactionConfig::default()).unwrap();
+
+    assert_eq!(field_named(&mut doc, "clip").value, "fi confidential@corp.com");
+}
+
+#[test]
+fn redaction_clears_form_value_when_text_case_does_not_match() {
+    let page = single_page_pdf(
+        b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Reach SECRET team) Tj\nET\n",
+        false,
+    );
+    let mut doc = crate::cos::PdfDocument::load(&page).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("code", Some("SECRET"), 520.0)).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("notes", Some("notes"), 480.0)).unwrap();
+
+    let pattern = RedactionPattern::Text {
+        query: "secret".to_string(),
+        case_sensitive: false,
+    };
+    redact_document_pattern(&mut doc, &pattern, None, &RedactionConfig::default()).unwrap();
+
+    assert_eq!(field_named(&mut doc, "code").value, "");
+    assert_eq!(field_named(&mut doc, "notes").value, "notes");
+}
+
+#[test]
+fn redaction_keeps_a_neighbor_word_in_a_form_field() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("email", Some(EMAIL), 400.0)).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("status", Some("Verified"), 360.0))
+        .unwrap();
+
+    let mut config = RedactionConfig::default();
+    config.padding = 80.0;
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &config).unwrap();
+
+    assert_eq!(field_named(&mut doc, "email").value, "");
+    assert_eq!(field_named(&mut doc, "status").value, "Verified");
+}
+
+#[test]
+fn region_redaction_clears_form_value_with_the_excised_text() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let line = "Client Email: confidential@corp.com Verified";
+    crate::forms::create_form_field(&mut doc, 1, &text_field("line", Some(line), 400.0)).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field("other", Some("other@corp.com"), 360.0))
+        .unwrap();
+
+    redact_document_rectangles(
+        &mut doc,
+        0,
+        &[Rect::new(70.0, 690.0, 400.0, 720.0)],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(field_named(&mut doc, "line").value, "");
+    assert_eq!(field_named(&mut doc, "other").value, "other@corp.com");
+}
+
+#[test]
+fn redaction_clears_a_widget_appearance_when_the_value_does_not_repeat() {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfObject, PdfStream, PdfString};
+
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let page_id = doc.get_pages().unwrap()[0];
+    let acro_id = crate::forms::get_or_create_acroform(&mut doc).unwrap();
+
+    let compressed =
+        crate::cos::encode_flate(octal_literal(EMAIL).as_bytes(), crate::cos::Compression::default())
+            .unwrap();
+    assert!(!bytes_contain(&compressed, EMAIL));
+    let stream_id = doc.alloc_object_id();
+    let mut stream_dict = PdfDictionary::new();
+    stream_dict.insert("Filter", PdfObject::Name(PdfName::new("FlateDecode")));
+    stream_dict.insert("Length", PdfObject::Integer(compressed.len() as i64));
+    doc.set_object(
+        stream_id,
+        PdfObject::Stream(PdfStream::new(stream_dict, compressed)),
+    );
+
+    let kid_id = doc.alloc_object_id();
+    let mut kid = PdfDictionary::new();
+    kid.insert("Subtype", PdfObject::Name(PdfName::new("Widget")));
+    kid.insert("Rect", PdfObject::Array(vec![
+        PdfObject::Real(72.0),
+        PdfObject::Real(400.0),
+        PdfObject::Real(320.0),
+        PdfObject::Real(418.0),
+    ]));
+    kid.insert("P", PdfObject::Reference(page_id));
+    let mut appearance = PdfDictionary::new();
+    appearance.insert("N", PdfObject::Reference(stream_id));
+    kid.insert("AP", PdfObject::Dictionary(appearance));
+    doc.set_object(kid_id, PdfObject::Dictionary(kid));
+
+    let parent_id = doc.alloc_object_id();
+    let mut parent = PdfDictionary::new();
+    parent.insert("T", PdfObject::String(PdfString::literal(b"Email".to_vec())));
+    parent.insert("FT", PdfObject::Name(PdfName::new("Tx")));
+    parent.insert("V", PdfObject::String(PdfString::literal(b"ok".to_vec())));
+    parent.insert("Kids", PdfObject::Array(vec![PdfObject::Reference(kid_id)]));
+    doc.set_object(parent_id, PdfObject::Dictionary(parent));
+
+    let mut acro = match doc.get_object(acro_id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("acroform"),
+    };
+    let mut fields = match acro.remove("Fields") {
+        Some(PdfObject::Array(items)) => items,
+        _ => Vec::new(),
+    };
+    fields.push(PdfObject::Reference(parent_id));
+    acro.insert("Fields", PdfObject::Array(fields));
+    doc.set_object(acro_id, PdfObject::Dictionary(acro));
+
+    let mut page = match doc.get_object(page_id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("page"),
+    };
+    let mut annots = match page.remove("Annots") {
+        Some(PdfObject::Array(items)) => items,
+        _ => Vec::new(),
+    };
+    annots.push(PdfObject::Reference(kid_id));
+    page.insert("Annots", PdfObject::Array(annots));
+    doc.set_object(page_id, PdfObject::Dictionary(page));
+
+    assert_eq!(field_named(&mut doc, "Email").value, "ok");
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(field_named(&mut doc, "Email").value, "");
+    assert!(doc.objects.contains_key(&parent_id));
+    assert!(doc.objects.contains_key(&kid_id));
+    assert!(!doc.objects.contains_key(&stream_id));
+    assert!(!doc.xref.entries.contains_key(&stream_id));
+}
+
+#[test]
+fn redaction_drops_an_indirect_form_value_that_repeats_the_email() {
+    use crate::cos::object::{PdfObject, PdfString};
+
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let created =
+        crate::forms::create_form_field(&mut doc, 1, &text_field("email", None, 520.0)).unwrap();
+    let value_id = doc.alloc_object_id();
+    doc.set_object(
+        value_id,
+        PdfObject::String(PdfString::literal(EMAIL.as_bytes().to_vec())),
+    );
+    let mut field = match doc.get_object(created.id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("field"),
+    };
+    field.insert("V", PdfObject::Reference(value_id));
+    doc.set_object(created.id, PdfObject::Dictionary(field));
+    assert_eq!(field_named(&mut doc, "email").value, "");
+    assert!(bytes_contain(&doc.save_to_vec().unwrap(), EMAIL));
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert!(!doc.objects.contains_key(&value_id));
+    assert!(!doc.xref.entries.contains_key(&value_id));
+    assert!(!bytes_contain(&doc.save_to_vec().unwrap(), EMAIL));
+}
+
+#[test]
+fn redaction_keeps_the_field_name_default_and_option_list() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::forms::create_form_field(&mut doc, 1, &text_field(EMAIL, Some("kept"), 520.0)).unwrap();
+    crate::forms::create_form_field(
+        &mut doc,
+        1,
+        &crate::forms::FormFieldCreateOptions {
+            name: "backup".to_string(),
+            value: Some("quarterly totals".to_string()),
+            default_value: Some(EMAIL.to_string()),
+            rect: Rect::new(72.0, 480.0, 320.0, 498.0),
+            ..crate::forms::FormFieldCreateOptions::default()
+        },
+    )
+    .unwrap();
+    crate::forms::create_form_field(
+        &mut doc,
+        1,
+        &crate::forms::FormFieldCreateOptions {
+            name: "country".to_string(),
+            field_type: crate::forms::FormFieldType::Choice,
+            value: Some("Mexico".to_string()),
+            options: Some(vec![EMAIL.to_string(), "Mexico".to_string()]),
+            rect: Rect::new(72.0, 440.0, 320.0, 458.0),
+            ..crate::forms::FormFieldCreateOptions::default()
+        },
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    let named = field_named(&mut doc, EMAIL);
+    assert_eq!(named.value, "kept");
+    let backup = field_named(&mut doc, "backup");
+    assert_eq!(backup.value, "quarterly totals");
+    assert_eq!(backup.default_value.as_deref(), Some(EMAIL));
+    let country = field_named(&mut doc, "country");
+    assert_eq!(country.value, "Mexico");
+    assert!(country.options.iter().any(|option| option == EMAIL));
+}
+
+#[test]
+fn redaction_keeps_an_appearance_whose_filter_cannot_be_decoded() {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfObject, PdfStream};
+
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    let created =
+        crate::forms::create_form_field(&mut doc, 1, &text_field("note", Some("kept-note"), 400.0))
+            .unwrap();
+    let raw = format!("BT /F1 12 Tf ({EMAIL}) Tj ET").into_bytes();
+    let stream_id = doc.alloc_object_id();
+    let mut stream_dict = PdfDictionary::new();
+    stream_dict.insert("Filter", PdfObject::Name(PdfName::new("LZWDecode")));
+    stream_dict.insert("Length", PdfObject::Integer(raw.len() as i64));
+    doc.set_object(stream_id, PdfObject::Stream(PdfStream::new(stream_dict, raw)));
+
+    let mut field = match doc.get_object(created.id).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        _ => panic!("field"),
+    };
+    let mut appearance = PdfDictionary::new();
+    appearance.insert("N", PdfObject::Reference(stream_id));
+    field.insert("AP", PdfObject::Dictionary(appearance));
+    doc.set_object(created.id, PdfObject::Dictionary(field));
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(field_named(&mut doc, "note").value, "kept-note");
+    let kept = doc.get_object(created.id).unwrap().as_dict().unwrap().clone();
+    assert!(kept.contains_key("AP"));
+    assert!(doc.objects.contains_key(&stream_id));
+    assert!(doc.xref.entries.contains_key(&stream_id));
+    assert!(bytes_contain(&doc.save_to_vec().unwrap(), EMAIL));
+}
