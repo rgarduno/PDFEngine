@@ -3551,6 +3551,33 @@ impl PyPdfDocument {
         search_report_to_py(py, &report)
     }
 
+    /// Rewrites reconstructed paragraph text.
+    ///
+    /// A subset stays only when every character of the new paragraph has a real
+    /// width. Otherwise that paragraph moves to Helvetica, Times, or Courier.
+    /// A character those faces cannot draw changes nothing. The query and the
+    /// replacement are not stored.
+    #[pyo3(signature = (query, replacement, ignore_case=true, max_hits=100))]
+    pub fn replace_text<'py>(
+        &mut self,
+        py: Python<'py>,
+        query: &str,
+        replacement: &str,
+        ignore_case: bool,
+        max_hits: usize,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let report = pdf_engine_core::ops::replace_document_text(
+            &mut self.doc,
+            query,
+            replacement,
+            ignore_case,
+            max_hits,
+        )
+        .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        replace_report_to_py(py, &report)
+    }
+
     /// Paints one page to PNG, JPEG, or TIFF. `page_index` is 0-based.
     ///
     /// This is a read. It does not rewrite the page. It is not an Acrobat
@@ -3626,6 +3653,22 @@ fn search_report_to_py<'py>(
     }
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("hits", hits)?;
+    dict.set_item("truncated", report.truncated)?;
+    dict.set_item("pages_skipped", &report.pages_skipped)?;
+    Ok(dict)
+}
+
+fn replace_report_to_py<'py>(
+    py: Python<'py>,
+    report: &pdf_engine_core::ops::TextReplaceReport,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("replacements", report.replacements)?;
+    dict.set_item("paragraphs", report.paragraphs)?;
+    dict.set_item(
+        "paragraphs_on_standard_face",
+        report.paragraphs_on_standard_face,
+    )?;
     dict.set_item("truncated", report.truncated)?;
     dict.set_item("pages_skipped", &report.pages_skipped)?;
     Ok(dict)

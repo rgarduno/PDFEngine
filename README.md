@@ -194,7 +194,7 @@ PDFEngine/
     │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
     │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
     │   │   ├── annots/         # ISO 32000-1 annotations: markups, links, stamps & flattening
-    │   │   ├── ops/            # Page boxes, text search, raster, split, merge, reorder, and delete
+    │   │   ├── ops/            # Page boxes, text search, find-and-replace, raster, split, merge, reorder, and delete
     │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
     │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
     │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
@@ -212,6 +212,8 @@ PDFAPI and PDFWeb are sibling repositories. This tree is only the engine.
 A styled paragraph edit can keep the current font or switch to a standard 14 face: Helvetica, Times, or Courier, including bold and italic. Size, color, alignment, and leading can stay on the font the paragraph already uses, so an embedded subset keeps its character codes. A face change does not invent a bold twin of that subset. Leading is a baseline distance in points. When the size changes and leading is omitted, the old leading scales with the size and is then kept inside `[new size, 400]`. Color is device RGB wrapped outside the text object. This is not Acrobat's text options, and it does not add lists or superscripts. The CSS family of Helvetica is Arial.
 
 A text box appends content-stream text inside a rectangle. It is not a movable annotation, not a `/FreeText` annotation, and not a sticky note. The face is a standard 14 font. The defaults are Helvetica, 12 points, black, left aligned, and a leading of 1.2 times the size. Lines whose baseline falls below the rectangle are omitted. This raster paints that standard face with the built-in 5 by 7 glyphs, because the face has no embedded outlines. A real viewer uses the standard face.
+
+Find-and-replace rewrites reconstructed paragraph text. A subset font is kept only when every character of the new paragraph, including a space the line break needs, round-trips to a byte that has a real width. Otherwise that paragraph moves to Helvetica, Times, or Courier, and bold or italic follows the old face. The report counts how many paragraphs moved. A character those faces cannot draw aborts the replace and writes nothing. This does not add glyphs to the embedded subset. The raster still paints a standard face as 5 by 7 glyphs. A hit cap can stop inside a paragraph. A newline is allowed. An empty replacement deletes the match. The whole paragraph is rewritten in the first span's face, and color is not preserved.
 
 ---
 
@@ -490,6 +492,7 @@ preflight, or an acceptance by a court.
 | `GET` | `/api/documents/{id}/pdfa` | Report archive issues for `part=1b` or `part=2b` without converting. |
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. Optional font, size, bold, italic, color, alignment, and leading. A named face is a standard 14 font. |
 | `POST` | `/api/documents/{id}/pages/{p}/text-box` | Append content-stream text inside a rectangle. The face is a standard 14 font. This is not a `/FreeText` annotation. |
+| `POST` | `/api/documents/{id}/replace` | Replace reconstructed paragraph text. A subset stays only when its widths cover the new text. Otherwise the paragraph moves to a standard 14 face, or the replace writes nothing. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
 | `DELETE` | `/api/documents/{id}/forms/{name}` | Delete an interactive form field and its associated widget annotations. |

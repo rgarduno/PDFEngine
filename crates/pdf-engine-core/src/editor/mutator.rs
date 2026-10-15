@@ -52,6 +52,7 @@ impl SurgicalEditor {
             metrics,
             encoder,
             &prepared,
+            false,
         )
     }
 
@@ -71,6 +72,29 @@ impl SurgicalEditor {
             metrics,
             &encoder,
             prepared,
+            false,
+        )
+    }
+
+    /// Replaces a paragraph and measures the line breaks with `encoder`.
+    ///
+    /// [`Self::edit_paragraph_with_encoder`] still measures with WinAnsi widths.
+    pub fn edit_paragraph_encoded(
+        ast: &mut ContentAst,
+        target_block: &ParagraphBlock,
+        new_text: &str,
+        metrics: &FontMetrics,
+        encoder: &FontEncoder,
+        prepared: &PreparedParagraphStyle,
+    ) -> PdfResult<()> {
+        Self::edit_paragraph_prepared_with_encoder(
+            ast,
+            target_block,
+            new_text,
+            metrics,
+            encoder,
+            prepared,
+            true,
         )
     }
 
@@ -81,6 +105,7 @@ impl SurgicalEditor {
         metrics: &FontMetrics,
         encoder: &FontEncoder,
         prepared: &PreparedParagraphStyle,
+        measure_with_encoder: bool,
     ) -> PdfResult<()> {
         if target_block.source_node_ids.is_empty() {
             return Err(PdfError::LayoutError(
@@ -103,14 +128,26 @@ impl SurgicalEditor {
         text_state.font_size = prepared.size;
 
         let max_width = target_block.bbox.width().max(50.0);
-        let reflow_lines = ReflowEngine::reflow(
-            new_text,
-            max_width,
-            metrics,
-            &text_state,
-            prepared.alignment,
-            prepared.leading,
-        );
+        let reflow_lines = if measure_with_encoder {
+            ReflowEngine::reflow_with_encoder(
+                new_text,
+                max_width,
+                metrics,
+                &text_state,
+                prepared.alignment,
+                prepared.leading,
+                encoder,
+            )
+        } else {
+            ReflowEngine::reflow(
+                new_text,
+                max_width,
+                metrics,
+                &text_state,
+                prepared.alignment,
+                prepared.leading,
+            )
+        };
 
         let new_operations = Self::synthesize_text_operations(
             &reflow_lines,

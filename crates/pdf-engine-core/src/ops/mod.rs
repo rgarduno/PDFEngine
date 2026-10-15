@@ -17,6 +17,7 @@ pub mod outlines;
 pub mod raster;
 pub mod reorder;
 pub mod rotation;
+pub mod replace;
 pub mod search;
 pub mod split;
 
@@ -57,6 +58,7 @@ pub use reorder::{delete_pages, reorder_pages};
 pub use rotation::{
     get_page_rotation, normalize_rotation, rotate_all_pages, rotate_page, set_page_rotation,
 };
+pub use replace::{replace_document_text, TextReplaceReport};
 pub use search::{
     search_document, TextSearchHit, TextSearchReport, MAX_QUERY_SCALARS, MAX_SEARCH_HITS,
 };

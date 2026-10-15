@@ -150,7 +150,7 @@ fn page_paragraphs(
 
 /// Ordinary content failures. Security, decompression, cycles, recursion, and
 /// missing objects stay outside this set and abort the search.
-fn is_skippable(err: &PdfError) -> bool {
+pub(crate) fn is_skippable(err: &PdfError) -> bool {
     matches!(
         err,
         PdfError::ContentStreamError(_)

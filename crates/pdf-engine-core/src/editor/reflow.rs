@@ -27,6 +27,8 @@ pub struct ReflowEngine;
 
 impl ReflowEngine {
     /// Breaks and re-flows text within a bounding box width constraint.
+    ///
+    /// Widths use WinAnsi codes. A subset font has to call [`Self::reflow_with_encoder`].
     pub fn reflow(
         text: &str,
         max_width: f64,
@@ -35,9 +37,32 @@ impl ReflowEngine {
         alignment: TextAlignment,
         leading: f64,
     ) -> Vec<ReflowLine> {
+        Self::reflow_with_encoder(
+            text,
+            max_width,
+            metrics,
+            text_state,
+            alignment,
+            leading,
+            &FontEncoder::new(),
+        )
+    }
+
+    /// Same line break as [`Self::reflow`], measuring each glyph with `encoder`.
+    pub fn reflow_with_encoder(
+        text: &str,
+        max_width: f64,
+        metrics: &FontMetrics,
+        text_state: &TextState,
+        alignment: TextAlignment,
+        leading: f64,
+        encoder: &FontEncoder,
+    ) -> Vec<ReflowLine> {
         let paragraphs: Vec<&str> = text.split('\n').collect();
         let mut result_lines = Vec::new();
         let mut cur_y = 0.0;
+        let (space_code, _) = encoder.encode_char(' ');
+        let space_advance = metrics.compute_char_advance(space_code, text_state);
 
         for para in paragraphs {
             let words: Vec<&str> = para.split_whitespace().collect();
@@ -49,10 +74,9 @@ impl ReflowEngine {
 
             let mut cur_line_words: Vec<&str> = Vec::new();
             let mut cur_line_width = 0.0;
-            let space_advance = metrics.compute_char_advance(32, text_state);
 
             for word in words {
-                let word_width = Self::compute_word_width(word, metrics, text_state);
+                let word_width = Self::compute_word_width(word, metrics, text_state, encoder);
 
                 let needed_width = if cur_line_words.is_empty() {
                     word_width
@@ -101,9 +125,13 @@ impl ReflowEngine {
     }
 
     /// Computes advance width of an individual word in points.
-    fn compute_word_width(word: &str, metrics: &FontMetrics, text_state: &TextState) -> f64 {
+    fn compute_word_width(
+        word: &str,
+        metrics: &FontMetrics,
+        text_state: &TextState,
+        encoder: &FontEncoder,
+    ) -> f64 {
         let mut width = 0.0;
-        let encoder = FontEncoder::new();
         for c in word.chars() {
             let (code, _) = encoder.encode_char(c);
             width += metrics.compute_char_advance(code, text_state);

@@ -101,13 +101,15 @@ pub use ops::{
     list_attachments, merge_documents, merge_pdf_bytes, optimize_document, page_boxes,
     parse_page_boundary, recompress_streams, register_page_layer_property, reorder_pages,
     resolve_page_hidden_ocg_props, reverse_pages, rotate_all_pages, rotate_page,
-    render_page, save_optimized_to_vec, search_document, set_layer_visibility, set_outlines,
+    render_page, replace_document_text, save_optimized_to_vec, search_document,
+    set_layer_visibility, set_outlines,
     set_page_boundary, set_page_rotation, split_by_ranges, split_document, update_metadata,
     DiffKind, DiffOptions, DiffReport, DiffSummary, DocumentMetadata, EmbeddedAttachment,
     EmbeddedAttachmentInfo, HardFlattenReport, ImageDiffItem, MetadataDiffItem, ObjectCloner,
     OptimizationOptions, OptimizationStats, OptionalContentLayer, OutlineItem, PageBoundary,
-    PageBoxes, PageDiff, PageDimensions, PageRaster, RasterFormat, TextDiffItem, TextSearchHit,
-    TextSearchReport, WordDiff, DEFAULT_RASTER_DPI, MAX_QUERY_SCALARS, MAX_RASTER_DPI,
+    PageBoxes, PageDiff, PageDimensions, PageRaster, RasterFormat, TextDiffItem, TextReplaceReport,
+    TextSearchHit, TextSearchReport, WordDiff, DEFAULT_RASTER_DPI, MAX_QUERY_SCALARS,
+    MAX_RASTER_DPI,
     MAX_RASTER_PIXELS, MAX_RASTER_SIDE, MAX_SEARCH_HITS, MIN_RASTER_DPI,
 };
 pub use pdfa::{convert_to_pdfa, validate_pdfa, PdfALevel};
