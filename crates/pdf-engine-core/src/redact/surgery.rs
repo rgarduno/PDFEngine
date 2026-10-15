@@ -1,8 +1,9 @@
 //! Removes glyphs that intersect a redaction rectangle and draws an opaque blackout.
 //!
 //! Marked-content `/ActualText`, `/Alt`, and `/E` entries on the rewritten page are
-//! removed with the glyphs. Attachments, the structure tree, and form appearances
-//! are left in place. This is not an ISO 32000-1 legal redaction.
+//! removed with the glyphs. This pass records the excised glyph runs. The sanitizer
+//! deletes an embedded file that repeats the removed datum. The structure tree and
+//! form appearances stay. This is not an ISO 32000-1 legal redaction.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -23,9 +24,25 @@ pub fn find_pattern_boxes_on_page(
     metrics: &FontMetrics,
     padding: f64,
 ) -> PdfResult<Vec<Rect>> {
+    Ok(find_pattern_hits(ast, pattern, metrics, padding)?
+        .into_iter()
+        .map(|(rect, _text)| rect)
+        .collect())
+}
+
+/// Same boxes as [`find_pattern_boxes_on_page`], plus the matched substring.
+///
+/// The substring is the datum `find_matches` found. It is not every glyph inside
+/// the padded box. A match with no glyph overlap is omitted.
+pub(crate) fn find_pattern_hits(
+    ast: &ContentAst,
+    pattern: &RedactionPattern,
+    metrics: &FontMetrics,
+    padding: f64,
+) -> PdfResult<Vec<(Rect, String)>> {
     let reconstructor = LayoutReconstructor::new(ast).with_font("F1", metrics.clone());
     let paragraphs = reconstructor.reconstruct()?;
-    let mut detected_boxes = Vec::new();
+    let mut hits = Vec::new();
 
     for paragraph in paragraphs {
         for line in paragraph.lines {
@@ -69,13 +86,17 @@ pub fn find_pattern_boxes_on_page(
                         bbox.max_x + padding,
                         bbox.max_y + padding,
                     );
-                    detected_boxes.push(padded);
+                    let matched = line_text
+                        .get(start_byte..end_byte)
+                        .unwrap_or("")
+                        .to_string();
+                    hits.push((padded, matched));
                 }
             }
         }
     }
 
-    Ok(detected_boxes)
+    Ok(hits)
 }
 
 const ALTERNATE_TEXT_KEYS: &[&str] = &["ActualText", "Alt", "E"];
@@ -174,6 +195,18 @@ pub fn apply_redaction_to_ast(
     for (node_id, glyphs) in node_glyphs {
         if !dirty_node_ids.contains(&node_id) {
             continue;
+        }
+
+        let mut run = String::new();
+        for (_, glyph, is_redacted) in &glyphs {
+            if *is_redacted {
+                run.push_str(&glyph.unicode);
+            } else if !run.is_empty() {
+                summary.removed_texts.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            summary.removed_texts.push(run);
         }
 
         let replacement_operations = synthesize_redacted_text_operations(&glyphs);

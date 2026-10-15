@@ -5,17 +5,32 @@ use crate::cos::PdfDocument;
 use crate::error::{PdfError, PdfResult};
 use crate::fonts::FontMetrics;
 use crate::layout::geometry::Rect;
-use crate::redact::surgery::{apply_redaction_to_ast, find_pattern_boxes_on_page};
+use crate::redact::embedded::remove_embedded_files_repeating;
+use crate::redact::surgery::{apply_redaction_to_ast, find_pattern_hits};
 use crate::redact::types::{RedactionConfig, RedactionPattern, RedactionRect, RedactionSummary};
 use crate::stream::parser::{build_ast_from_operations, serialize_ast, ContentStreamTokenizer};
 use crate::watermark::helpers::ensure_font_resource;
 
 /// Redacts specified rectangular regions on a single page of `doc`.
+///
+/// Glyph runs excised here select embedded files. A pattern redaction skips that
+/// selection and purges from the matched substrings, so a padded neighbor is
+/// not treated as the datum.
 pub fn redact_page(
     doc: &mut PdfDocument,
     page_index: usize,
     redactions: &[RedactionRect],
     config: &RedactionConfig,
+) -> PdfResult<RedactionSummary> {
+    redact_page_at(doc, page_index, redactions, config, true)
+}
+
+fn redact_page_at(
+    doc: &mut PdfDocument,
+    page_index: usize,
+    redactions: &[RedactionRect],
+    config: &RedactionConfig,
+    purge_embedded: bool,
 ) -> PdfResult<RedactionSummary> {
     let pages = doc.get_pages()?;
     let page_id = pages
@@ -102,6 +117,10 @@ pub fn redact_page(
         let _ = scrub_document_metadata(doc)?;
     }
 
+    if purge_embedded {
+        remove_embedded_files_repeating(doc, &summary.removed_texts, None)?;
+    }
+
     Ok(summary)
 }
 
@@ -126,6 +145,14 @@ pub fn redact_document_pattern(
 
     let mut summaries = Vec::new();
     let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+    let mut exact_needles = Vec::new();
+    let ignore_case_query = match pattern {
+        RedactionPattern::Text {
+            query,
+            case_sensitive: false,
+        } => Some(query.clone()),
+        _ => None,
+    };
 
     for idx in page_indices {
         let page_id = pages[idx];
@@ -134,16 +161,24 @@ pub fn redact_document_pattern(
         let ops = tokenizer.tokenize_all().unwrap_or_default();
         let ast = build_ast_from_operations(ops);
 
-        // Find matches on this page
-        let detected_boxes = find_pattern_boxes_on_page(&ast, pattern, &metrics, config.padding)?;
-        if detected_boxes.is_empty() {
+        // Find matches on this page. The needle is the matched substring, not
+        // every glyph the padded box happens to cover.
+        let hits = find_pattern_hits(&ast, pattern, &metrics, config.padding)?;
+        if hits.is_empty() {
             continue;
+        }
+        if ignore_case_query.is_none() {
+            for (_rect, text) in &hits {
+                if !exact_needles.iter().any(|needle: &String| needle == text) {
+                    exact_needles.push(text.clone());
+                }
+            }
         }
 
         // Construct RedactionRect items
-        let redactions: Vec<RedactionRect> = detected_boxes
+        let redactions: Vec<RedactionRect> = hits
             .into_iter()
-            .map(|rect| {
+            .map(|(rect, _text)| {
                 let mut r = RedactionRect::new(rect).with_fill_color(
                     config.fill_color[0],
                     config.fill_color[1],
@@ -159,12 +194,16 @@ pub fn redact_document_pattern(
             })
             .collect();
 
-        let summary = redact_page(doc, idx, &redactions, config)?;
+        let summary = redact_page_at(doc, idx, &redactions, config, false)?;
         summaries.push(summary);
     }
 
     if config.scrub_metadata {
         let _ = scrub_document_metadata(doc)?;
+    }
+
+    if !summaries.is_empty() {
+        remove_embedded_files_repeating(doc, &exact_needles, ignore_case_query.as_deref())?;
     }
 
     Ok(summaries)

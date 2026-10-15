@@ -370,7 +370,7 @@ fn decode_filespec(
 
 /// Collects all embedded attachments in the document (both Catalog `/Names /EmbeddedFiles`
 /// and page-level `/FileAttachment` annotations).
-fn collect_all_attachments(doc: &mut PdfDocument) -> PdfResult<Vec<EmbeddedAttachment>> {
+pub(crate) fn collect_all_attachments(doc: &mut PdfDocument) -> PdfResult<Vec<EmbeddedAttachment>> {
     let mut results = Vec::new();
     let mut seen_filespec_ids = HashSet::new();
 

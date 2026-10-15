@@ -265,3 +265,315 @@ fn redaction_drops_page_metadata_and_keeps_document_info() {
     let info = doc.get_object(info_id).unwrap().as_dict().unwrap().clone();
     assert!(info.contains_key("Author"));
 }
+
+const EMAIL: &str = "confidential@corp.com";
+
+fn attachment_names(doc: &mut crate::cos::PdfDocument) -> Vec<String> {
+    let mut names: Vec<String> = crate::ops::list_attachments(doc)
+        .unwrap()
+        .into_iter()
+        .map(|info| info.name)
+        .collect();
+    names.sort();
+    names
+}
+
+fn single_page_pdf(stream_content: &[u8], flate: bool) -> Vec<u8> {
+    let stored = if flate {
+        crate::cos::encode_flate(stream_content, crate::cos::Compression::default()).unwrap()
+    } else {
+        stream_content.to_vec()
+    };
+    let filter = if flate { " /Filter /FlateDecode" } else { "" };
+
+    let mut pdf = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+
+    let offset1 = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+    let offset2 = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+
+    let offset3 = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n",
+    );
+
+    let offset4 = pdf.len();
+    pdf.extend_from_slice(
+        format!("4 0 obj\n<< /Length {}{filter} >>\nstream\n", stored.len()).as_bytes(),
+    );
+    pdf.extend_from_slice(&stored);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 5\n");
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    pdf.extend_from_slice(format!("{:010} 00000 n \n", offset1).as_bytes());
+    pdf.extend_from_slice(format!("{:010} 00000 n \n", offset2).as_bytes());
+    pdf.extend_from_slice(format!("{:010} 00000 n \n", offset3).as_bytes());
+    pdf.extend_from_slice(format!("{:010} 00000 n \n", offset4).as_bytes());
+    pdf.extend_from_slice(b"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n");
+    pdf.extend_from_slice(format!("{xref_offset}\n%%EOF").as_bytes());
+    pdf
+}
+
+fn octal_literal(text: &str) -> String {
+    let mut escaped = String::new();
+    for byte in text.bytes() {
+        escaped.push('\\');
+        escaped.push_str(&format!("{byte:03o}"));
+    }
+    format!("BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n({escaped}) Tj\nET\n")
+}
+
+fn bytes_contain(haystack: &[u8], needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    haystack.len() >= needle.len() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+#[test]
+fn redaction_removes_embedded_file_that_repeats_the_email() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(&mut doc, "note.txt", EMAIL.as_bytes(), Some("text/plain"), None)
+        .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "other.txt",
+        b"other@corp.com",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["other.txt".to_string()]);
+    let kept = crate::ops::extract_attachment(&mut doc, "other.txt").unwrap();
+    assert_eq!(kept.data, b"other@corp.com");
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!bytes_contain(&saved, EMAIL));
+}
+
+#[test]
+fn redaction_removes_embedded_file_named_or_described_with_the_email() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "confidential@corp.com.txt",
+        b"hello",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "memo.txt",
+        b"plain notes",
+        Some("text/plain"),
+        Some("reach confidential@corp.com"),
+    )
+    .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "public.txt",
+        b"public notice",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["public.txt".to_string()]);
+}
+
+#[test]
+fn redaction_keeps_embedded_file_when_the_page_has_no_match() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "absent.txt",
+        b"absent-token-zz",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    let pattern = RedactionPattern::Text {
+        query: "absent-token-zz".to_string(),
+        case_sensitive: true,
+    };
+    let summaries =
+        redact_document_pattern(&mut doc, &pattern, None, &RedactionConfig::default()).unwrap();
+
+    assert!(summaries.is_empty());
+    assert_eq!(attachment_names(&mut doc), vec!["absent.txt".to_string()]);
+}
+
+#[test]
+fn redaction_ignores_embedded_file_for_a_short_match() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "clip.txt",
+        b"fi confidential@corp.com",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    let pattern = RedactionPattern::Text {
+        query: "fi".to_string(),
+        case_sensitive: false,
+    };
+    redact_document_pattern(&mut doc, &pattern, None, &RedactionConfig::default()).unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["clip.txt".to_string()]);
+    let kept = crate::ops::extract_attachment(&mut doc, "clip.txt").unwrap();
+    assert_eq!(kept.data, b"fi confidential@corp.com");
+}
+
+#[test]
+fn redaction_removes_embedded_file_when_text_case_does_not_match() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "copy.txt",
+        b"Confidential copy",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "public.txt",
+        b"public notice",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    let pattern = RedactionPattern::Text {
+        query: "CONFIDENTIAL".to_string(),
+        case_sensitive: false,
+    };
+    redact_document_pattern(&mut doc, &pattern, None, &RedactionConfig::default()).unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["public.txt".to_string()]);
+}
+
+#[test]
+fn redaction_keeps_a_neighbor_word_in_another_file() {
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(&mut doc, "leak.txt", EMAIL.as_bytes(), Some("text/plain"), None)
+        .unwrap();
+    crate::ops::add_attachment(&mut doc, "neighbor.txt", b"Verified", Some("text/plain"), None)
+        .unwrap();
+
+    let mut config = RedactionConfig::default();
+    config.padding = 80.0;
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &config).unwrap();
+
+    assert_eq!(
+        attachment_names(&mut doc),
+        vec!["neighbor.txt".to_string()]
+    );
+}
+
+#[test]
+fn region_redaction_removes_embedded_file_with_the_excised_text() {
+    let line = "Client Email: confidential@corp.com Verified";
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(&mut doc, "line.txt", line.as_bytes(), Some("text/plain"), None)
+        .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "other.txt",
+        b"other@corp.com",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    redact_document_rectangles(
+        &mut doc,
+        0,
+        &[Rect::new(70.0, 690.0, 400.0, 720.0)],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["other.txt".to_string()]);
+}
+
+#[test]
+fn redaction_removes_embedded_pdf_whose_page_repeats_the_email() {
+    let nested = single_page_pdf(octal_literal(EMAIL).as_bytes(), true);
+    assert!(
+        !bytes_contain(&nested, EMAIL),
+        "the fixture must hide the email from a raw byte search"
+    );
+
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "nested.pdf",
+        &nested,
+        Some("application/pdf"),
+        None,
+    )
+    .unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "other.txt",
+        b"other@corp.com",
+        Some("text/plain"),
+        None,
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["other.txt".to_string()]);
+}
+
+#[test]
+fn redaction_keeps_embedded_pdf_that_only_hides_the_email_inside() {
+    let secret = single_page_pdf(octal_literal(EMAIL).as_bytes(), true);
+    assert!(!bytes_contain(&secret, EMAIL));
+    let hello = single_page_pdf(
+        b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Hello only) Tj\nET\n",
+        false,
+    );
+    let mut wrapper = crate::cos::PdfDocument::load(&hello).unwrap();
+    crate::ops::add_attachment(
+        &mut wrapper,
+        "secret.pdf",
+        &secret,
+        Some("application/pdf"),
+        None,
+    )
+    .unwrap();
+    let wrapper_bytes = wrapper.save_to_vec().unwrap();
+    assert!(!bytes_contain(&wrapper_bytes, EMAIL));
+
+    let mut doc = crate::cos::PdfDocument::load(&create_test_pdf_with_email()).unwrap();
+    crate::ops::add_attachment(
+        &mut doc,
+        "wrapped.pdf",
+        &wrapper_bytes,
+        Some("application/pdf"),
+        None,
+    )
+    .unwrap();
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    assert_eq!(attachment_names(&mut doc), vec!["wrapped.pdf".to_string()]);
+}

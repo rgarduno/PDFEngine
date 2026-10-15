@@ -149,4 +149,8 @@ pub struct RedactionSummary {
     pub pruned_annotations_count: usize,
     /// List of spatial rectangles where redactions were applied.
     pub applied_rects: Vec<Rect>,
+    /// Contiguous glyph runs excised on this page. A pattern redaction does not
+    /// use these runs to choose an embedded file: the matched substring is shorter
+    /// than the padded box. Strings shorter than 4 scalars do not select a file.
+    pub removed_texts: Vec<String>,
 }
