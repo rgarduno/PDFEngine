@@ -4,7 +4,7 @@
 //! as Flate. A JPEG loses its DCT coefficients. A filter array, a 1-bit image,
 //! CMYK, an inline image, an image inside a form, and an image inside an
 //! appearance stay. A shared image is split so another placement keeps its own
-//! samples. The structure tree stays.
+//! samples. Structure-tree text is a separate pass.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;

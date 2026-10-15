@@ -1382,3 +1382,377 @@ fn redaction_rewrites_a_jpeg_as_flate_and_keeps_gray_outside_samples() {
         vec![0, 0, 70, 100, 0, 0, 190, 220]
     );
 }
+
+const STRUCT_EMAIL: &str = "secret@corp.com";
+
+fn text_page(text: &str) -> Vec<u8> {
+    let content = format!("BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n({text}) Tj\nET\n");
+    assemble_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>\n".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\n".to_vec(),
+        stream_body("", content.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n".to_vec(),
+    ])
+}
+
+fn structure_pdf() -> Vec<u8> {
+    let content = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(secret@corp.com quarterly) Tj\nET\n";
+    let utf16 = "<FEFF00730065006300720065007400400063006F00720070002E0063006F006D>";
+    assemble_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>\n".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\n".to_vec(),
+        stream_body("", content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n".to_vec(),
+        b"<< /Type /StructTreeRoot /K 7 0 R /ParentTree 11 0 R /RoleMap << /Paragraph /P >> >>\n".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 6 0 R /K [ 8 0 R 13 0 R << /Type /StructElem /S /Span /ActualText (secret@corp.com) /Alt (quarterly totals) >> ] >>\n".to_vec(),
+        format!(
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 /ID (p1) /Lang (en-US) /ActualText (reach secret@corp.com now) /E {utf16} /T (Section title) /Alt (quarterly totals) /A << /O /Layout /SpaceBefore 12 >> >>\n"
+        ).into_bytes(),
+        b"<< /Type /StructElem /S /P /K 1 /ActualText 12 0 R /T (kept heading) >>\n".to_vec(),
+        b"<< /Limits [0 0] /Nums [0 9 0 R] >>\n".to_vec(),
+        b"<< /Kids [10 0 R] >>\n".to_vec(),
+        b"(secret@corp.com)\n".to_vec(),
+        b"<< /Type /StructElem /S /Span /P 7 0 R /K 2 /ActualText << /Note (quarterly totals) >> /T (secret@corp.com) >>\n".to_vec(),
+    ])
+}
+
+fn object_dict(doc: &mut PdfDocument, number: u32) -> crate::cos::object::PdfDictionary {
+    match doc.get_object(ObjectId::new(number)).unwrap() {
+        PdfObject::Dictionary(dict) => dict,
+        other => panic!("object {number} is {other:?}"),
+    }
+}
+
+fn entry_text(object: &PdfObject) -> String {
+    match object {
+        PdfObject::String(text) => text.to_string_lossy(),
+        PdfObject::Name(name) => name.as_str().to_string(),
+        other => panic!("not text: {other:?}"),
+    }
+}
+
+fn attach_struct_elem(doc: &mut PdfDocument, actual: &str, alt: &str) -> ObjectId {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfString};
+
+    let id = doc.alloc_object_id();
+    let mut elem = PdfDictionary::new();
+    elem.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+    elem.insert("S", PdfObject::Name(PdfName::new("P")));
+    elem.insert("K", PdfObject::Integer(0));
+    elem.insert(
+        "ActualText",
+        PdfObject::String(PdfString::literal(actual.as_bytes().to_vec())),
+    );
+    elem.insert(
+        "Alt",
+        PdfObject::String(PdfString::literal(alt.as_bytes().to_vec())),
+    );
+    doc.set_object(id, PdfObject::Dictionary(elem));
+    let catalog_id = doc.catalog_id().unwrap();
+    let mut catalog = doc.catalog().unwrap();
+    let mut root = PdfDictionary::new();
+    root.insert("Type", PdfObject::Name(PdfName::new("StructTreeRoot")));
+    root.insert("K", PdfObject::Reference(id));
+    let root_id = doc.alloc_object_id();
+    doc.set_object(root_id, PdfObject::Dictionary(root));
+    catalog.insert("StructTreeRoot", PdfObject::Reference(root_id));
+    doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
+    id
+}
+
+#[test]
+fn redaction_clears_structure_text_that_repeats_the_removed_datum() {
+    let mut doc = PdfDocument::load(&structure_pdf()).unwrap();
+    let summaries =
+        redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+            .unwrap();
+    assert_eq!(summaries.len(), 1);
+
+    let root = object_dict(&mut doc, 6);
+    assert_eq!(root.get("K").and_then(|item| item.as_reference()), Some(ObjectId::new(7)));
+    assert!(root.contains_key("ParentTree"));
+    assert!(root.contains_key("RoleMap"));
+    let role = root.get("RoleMap").and_then(|item| item.as_dict()).unwrap();
+    assert_eq!(role.get("Paragraph").and_then(|item| item.as_name()), Some("P"));
+
+    let document = object_dict(&mut doc, 7);
+    assert_eq!(document.get("S").and_then(|item| item.as_name()), Some("Document"));
+    let kids = document.get("K").and_then(|item| item.as_array()).unwrap();
+    assert_eq!(kids.len(), 3);
+    let inline = kids[2].as_dict().unwrap();
+    assert!(inline.get("ActualText").is_none());
+    assert_eq!(entry_text(inline.get("Alt").unwrap()), "quarterly totals");
+    assert_eq!(inline.get("S").and_then(|item| item.as_name()), Some("Span"));
+
+    let element = object_dict(&mut doc, 8);
+    assert!(element.get("ActualText").is_none());
+    assert!(element.get("E").is_none());
+    assert_eq!(entry_text(element.get("T").unwrap()), "Section title");
+    assert_eq!(entry_text(element.get("Alt").unwrap()), "quarterly totals");
+    assert_eq!(element.get("S").and_then(|item| item.as_name()), Some("P"));
+    assert_eq!(element.get("K").and_then(|item| item.as_integer()), Some(0));
+    assert_eq!(element.get("Pg").and_then(|item| item.as_reference()), Some(ObjectId::new(3)));
+    assert_eq!(entry_text(element.get("ID").unwrap()), "p1");
+    assert_eq!(entry_text(element.get("Lang").unwrap()), "en-US");
+    let attrs = element.get("A").and_then(|item| item.as_dict()).unwrap();
+    assert_eq!(attrs.get("O").and_then(|item| item.as_name()), Some("Layout"));
+
+    let orphan = object_dict(&mut doc, 9);
+    assert!(orphan.get("ActualText").is_none());
+    assert_eq!(entry_text(orphan.get("T").unwrap()), "kept heading");
+    assert_eq!(orphan.get("S").and_then(|item| item.as_name()), Some("P"));
+    assert!(!doc.objects.contains_key(&ObjectId::new(12)));
+    assert!(!doc.xref.entries.contains_key(&ObjectId::new(12)));
+
+    let kept_value = object_dict(&mut doc, 13);
+    assert_eq!(kept_value.get("T").map(|_| ()), None);
+    let note = kept_value.get("ActualText").and_then(|item| item.as_dict()).unwrap();
+    assert_eq!(entry_text(note.get("Note").unwrap()), "quarterly totals");
+
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!slice_in(&saved, STRUCT_EMAIL.as_bytes()));
+    assert!(slice_in(&saved, b"quarterly totals"));
+    assert!(slice_in(&saved, b"Section title"));
+    assert!(slice_in(&saved, b"kept heading"));
+    assert!(slice_in(&saved, b"/StructTreeRoot"));
+
+    let mut doc = PdfDocument::load(&saved).unwrap();
+    let element = object_dict(&mut doc, 8);
+    assert!(element.get("ActualText").is_none());
+    assert_eq!(entry_text(element.get("Alt").unwrap()), "quarterly totals");
+    assert!(doc.get_object(ObjectId::new(12)).is_err());
+}
+
+#[test]
+fn redaction_without_a_page_match_leaves_structure_text() {
+    let mut doc = PdfDocument::load(&text_page("quarterly totals")).unwrap();
+    let id = attach_struct_elem(&mut doc, STRUCT_EMAIL, "quarterly totals");
+    let summaries =
+        redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+            .unwrap();
+    assert!(summaries.is_empty());
+    let elem = object_dict(&mut doc, id.number);
+    assert_eq!(entry_text(elem.get("ActualText").unwrap()), STRUCT_EMAIL);
+}
+
+#[test]
+fn a_short_redaction_does_not_clear_structure_text() {
+    let mut doc = PdfDocument::load(&text_page("abc yyyy")).unwrap();
+    let id = attach_struct_elem(&mut doc, "abc", "yyyy");
+    redact_page(
+        &mut doc,
+        0,
+        &[RedactionRect::new(Rect::new(72.0, 700.0, 89.5, 712.0))],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    let elem = object_dict(&mut doc, id.number);
+    assert_eq!(entry_text(elem.get("ActualText").unwrap()), "abc");
+    assert_eq!(entry_text(elem.get("Alt").unwrap()), "yyyy");
+}
+
+#[test]
+fn case_insensitive_redaction_clears_structure_text_in_another_case() {
+    let mut doc = PdfDocument::load(&text_page("SecretToken")).unwrap();
+    let id = attach_struct_elem(&mut doc, "SECRETTOKEN", "quarterly totals");
+    redact_document_pattern(
+        &mut doc,
+        &RedactionPattern::Text {
+            query: "secrettoken".to_string(),
+            case_sensitive: false,
+        },
+        None,
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    let elem = object_dict(&mut doc, id.number);
+    assert!(elem.get("ActualText").is_none());
+    assert_eq!(entry_text(elem.get("Alt").unwrap()), "quarterly totals");
+}
+
+#[test]
+fn region_redaction_clears_structure_text_from_the_excised_glyphs() {
+    let mut doc = PdfDocument::load(&text_page("secret@corp.com yyyy")).unwrap();
+    let id = attach_struct_elem(&mut doc, STRUCT_EMAIL, "yyyy");
+    let summary = redact_page(
+        &mut doc,
+        0,
+        &[RedactionRect::new(Rect::new(72.0, 700.0, 161.5, 712.0))],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    assert!(summary.purged_glyphs_count >= 15);
+    let elem = object_dict(&mut doc, id.number);
+    assert!(elem.get("ActualText").is_none());
+    assert_eq!(entry_text(elem.get("Alt").unwrap()), "yyyy");
+    let page_id = doc.get_pages().unwrap()[0];
+    let content = doc.get_page_content_bytes(page_id).unwrap();
+    assert!(slice_in(&content, b"yyyy"));
+    assert!(!slice_in(&content, STRUCT_EMAIL.as_bytes()));
+}
+
+#[test]
+fn a_shared_structure_string_stays_while_another_entry_uses_it() {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfString};
+
+    let mut doc = PdfDocument::load(&text_page(STRUCT_EMAIL)).unwrap();
+    let string_id = doc.alloc_object_id();
+    doc.set_object(
+        string_id,
+        PdfObject::String(PdfString::literal(STRUCT_EMAIL.as_bytes().to_vec())),
+    );
+    let marked = doc.alloc_object_id();
+    let mut marked_dict = PdfDictionary::new();
+    marked_dict.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+    marked_dict.insert("S", PdfObject::Name(PdfName::new("P")));
+    marked_dict.insert("ActualText", PdfObject::Reference(string_id));
+    doc.set_object(marked, PdfObject::Dictionary(marked_dict));
+
+    let neighbor = doc.alloc_object_id();
+    let mut neighbor_dict = PdfDictionary::new();
+    neighbor_dict.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+    neighbor_dict.insert("S", PdfObject::Name(PdfName::new("P")));
+    neighbor_dict.insert("Lang", PdfObject::Reference(string_id));
+    neighbor_dict.insert(
+        "T",
+        PdfObject::String(PdfString::literal(b"quarterly totals".to_vec())),
+    );
+    doc.set_object(neighbor, PdfObject::Dictionary(neighbor_dict));
+
+    let root_id = doc.alloc_object_id();
+    let mut root = PdfDictionary::new();
+    root.insert("Type", PdfObject::Name(PdfName::new("StructTreeRoot")));
+    root.insert(
+        "K",
+        PdfObject::Array(vec![
+            PdfObject::Reference(marked),
+            PdfObject::Reference(neighbor),
+        ]),
+    );
+    doc.set_object(root_id, PdfObject::Dictionary(root));
+    let catalog_id = doc.catalog_id().unwrap();
+    let mut catalog = doc.catalog().unwrap();
+    catalog.insert("StructTreeRoot", PdfObject::Reference(root_id));
+    doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    let marked_dict = object_dict(&mut doc, marked.number);
+    assert!(marked_dict.get("ActualText").is_none());
+    let neighbor_dict = object_dict(&mut doc, neighbor.number);
+    assert_eq!(
+        neighbor_dict.get("Lang").and_then(|item| item.as_reference()),
+        Some(string_id)
+    );
+    assert!(doc.objects.contains_key(&string_id));
+    assert!(doc.xref.entries.contains_key(&string_id));
+    assert!(slice_in(&doc.save_to_vec().unwrap(), STRUCT_EMAIL.as_bytes()));
+}
+
+#[test]
+fn a_structure_deeper_than_64_keeps_the_unread_text() {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfString};
+
+    let mut doc = PdfDocument::load(&text_page(STRUCT_EMAIL)).unwrap();
+    let mut ids = Vec::with_capacity(65);
+    for _ in 0..65 {
+        let id = doc.alloc_object_id();
+        doc.set_object(id, PdfObject::Dictionary(PdfDictionary::new()));
+        ids.push(id);
+    }
+    for index in 0..64 {
+        let mut elem = PdfDictionary::new();
+        elem.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+        elem.insert("S", PdfObject::Name(PdfName::new("P")));
+        elem.insert("K", PdfObject::Reference(ids[index + 1]));
+        if index == 63 {
+            elem.insert(
+                "ActualText",
+                PdfObject::String(PdfString::literal(STRUCT_EMAIL.as_bytes().to_vec())),
+            );
+        }
+        doc.set_object(ids[index], PdfObject::Dictionary(elem));
+    }
+    let mut deepest = PdfDictionary::new();
+    deepest.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+    deepest.insert("S", PdfObject::Name(PdfName::new("P")));
+    deepest.insert(
+        "ActualText",
+        PdfObject::String(PdfString::literal(STRUCT_EMAIL.as_bytes().to_vec())),
+    );
+    deepest.insert(
+        "Alt",
+        PdfObject::String(PdfString::literal(b"quarterly totals".to_vec())),
+    );
+    doc.set_object(ids[64], PdfObject::Dictionary(deepest));
+
+    let root_id = doc.alloc_object_id();
+    let mut root = PdfDictionary::new();
+    root.insert("Type", PdfObject::Name(PdfName::new("StructTreeRoot")));
+    root.insert("K", PdfObject::Reference(ids[0]));
+    doc.set_object(root_id, PdfObject::Dictionary(root));
+    let catalog_id = doc.catalog_id().unwrap();
+    let mut catalog = doc.catalog().unwrap();
+    catalog.insert("StructTreeRoot", PdfObject::Reference(root_id));
+    doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    let reached = object_dict(&mut doc, ids[63].number);
+    assert!(reached.get("ActualText").is_none());
+    let unread = object_dict(&mut doc, ids[64].number);
+    assert_eq!(entry_text(unread.get("ActualText").unwrap()), STRUCT_EMAIL);
+    assert_eq!(entry_text(unread.get("Alt").unwrap()), "quarterly totals");
+}
+
+#[test]
+fn a_broken_structure_root_does_not_fail_redaction() {
+    let mut doc = PdfDocument::load(&text_page(STRUCT_EMAIL)).unwrap();
+    let catalog_id = doc.catalog_id().unwrap();
+    let mut catalog = doc.catalog().unwrap();
+    catalog.insert("StructTreeRoot", PdfObject::Reference(ObjectId::new(99)));
+    doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
+    let summaries =
+        redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+            .unwrap();
+    assert_eq!(summaries.len(), 1);
+}
+
+#[test]
+fn an_inline_structure_root_loses_text_that_repeats_the_removed_datum() {
+    use crate::cos::object::{PdfDictionary, PdfName, PdfString};
+
+    let mut doc = PdfDocument::load(&text_page(STRUCT_EMAIL)).unwrap();
+    let mut elem = PdfDictionary::new();
+    elem.insert("Type", PdfObject::Name(PdfName::new("StructElem")));
+    elem.insert("S", PdfObject::Name(PdfName::new("P")));
+    elem.insert(
+        "ActualText",
+        PdfObject::String(PdfString::literal(STRUCT_EMAIL.as_bytes().to_vec())),
+    );
+    elem.insert(
+        "Alt",
+        PdfObject::String(PdfString::literal(b"quarterly totals".to_vec())),
+    );
+    let mut root = PdfDictionary::new();
+    root.insert("Type", PdfObject::Name(PdfName::new("StructTreeRoot")));
+    root.insert("K", PdfObject::Dictionary(elem));
+    let catalog_id = doc.catalog_id().unwrap();
+    let mut catalog = doc.catalog().unwrap();
+    catalog.insert("StructTreeRoot", PdfObject::Dictionary(root));
+    doc.set_object(catalog_id, PdfObject::Dictionary(catalog));
+
+    redact_document_pattern(&mut doc, &RedactionPattern::Email, None, &RedactionConfig::default())
+        .unwrap();
+
+    let catalog = object_dict(&mut doc, catalog_id.number);
+    let root = catalog.get("StructTreeRoot").and_then(|item| item.as_dict()).unwrap();
+    let elem = root.get("K").and_then(|item| item.as_dict()).unwrap();
+    assert!(elem.get("ActualText").is_none());
+    assert_eq!(entry_text(elem.get("Alt").unwrap()), "quarterly totals");
+    assert_eq!(elem.get("S").and_then(|item| item.as_name()), Some("P"));
+}

@@ -8,13 +8,15 @@
 //! `/V` and `/AP` when either one repeats such a string. The widget stays. An
 //! intersecting painted image loses the pixels inside the redaction rectangle.
 //! An image this process cannot decode, and an image inside a form or an
-//! appearance, stays. The structure tree stays. Document `/Info` and catalog
-//! XMP are removed only when `scrub_metadata` is set. This is not an ISO
-//! 32000-1 legal redaction.
+//! appearance, stays. A structure element loses `/ActualText`, `/Alt`, `/E`,
+//! and `/T` when that entry repeats a removed string of at least 4 characters.
+//! The element stays. Document `/Info` and catalog XMP are removed only when
+//! `scrub_metadata` is set. This is not an ISO 32000-1 legal redaction.
 
 mod embedded;
 mod fields;
 mod pixels;
+mod structure;
 pub mod patterns;
 pub mod sanitizer;
 pub mod surgery;
