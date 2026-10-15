@@ -106,6 +106,7 @@ pub fn replace_document_text(
     {
         return Err(marked("The replacement contains a control character."));
     }
+    doc.require_modify()?;
 
     let page_ids = doc.get_pages()?;
     let mut plans = Vec::new();

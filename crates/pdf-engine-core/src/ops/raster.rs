@@ -121,6 +121,7 @@ pub fn render_page(
     format: RasterFormat,
     dpi: f64,
 ) -> PdfResult<PageRaster> {
+    doc.require_print()?;
     let painted = paint_page_rgb(doc, page_index, dpi)?;
     let bytes = match format {
         RasterFormat::Png => encode_png(painted.width, painted.height, &painted.pixels, true)?,

@@ -22,6 +22,7 @@ pub use writer::Writer;
 pub use xref::{XRefEntry, XRefTable};
 
 use crate::error::{PdfError, PdfResult};
+use crate::security::permissions::{PdfPermissions, PERMISSION_DENIED};
 use crate::security::SecurityLimits;
 
 /// In-memory parsed PDF document.
@@ -53,6 +54,13 @@ pub struct PdfDocument {
     loaded_entries: BTreeMap<ObjectId, XRefEntry>,
     /// Trailer dictionary captured at load, before later edits.
     loaded_trailer: PdfDictionary,
+    /// Bits remembered after a user password opens the file.
+    ///
+    /// `None` means this session is unrestricted: the file was not opened with a
+    /// user password, the owner password was used, or every enforced bit was set.
+    /// Bit 10 and bit 12 are not enforced bits. A restricted value blocks later
+    /// print, copy, and edit in this process. Saving the decrypted file drops `/P`.
+    user_permissions: Option<PdfPermissions>,
 }
 
 impl PdfDocument {
@@ -95,6 +103,7 @@ impl PdfDocument {
             write_version: "1.7".to_string(),
             loaded_entries,
             loaded_trailer,
+            user_permissions: None,
         })
     }
 
@@ -122,6 +131,7 @@ impl PdfDocument {
             write_version: "1.7".to_string(),
             loaded_entries: BTreeMap::new(),
             loaded_trailer: PdfDictionary::new(),
+            user_permissions: None,
         };
 
         let catalog_id = ObjectId::new(1);
@@ -747,6 +757,7 @@ impl PdfDocument {
             write_version: self.write_version.clone(),
             loaded_entries: BTreeMap::new(),
             loaded_trailer: PdfDictionary::new(),
+            user_permissions: None,
         }
     }
 
@@ -921,6 +932,7 @@ impl PdfDocument {
         &mut self,
         options: &crate::ops::OptimizationOptions,
     ) -> PdfResult<(Vec<u8>, crate::ops::OptimizationStats)> {
+        self.require_modify()?;
         crate::ops::save_optimized_to_vec(self, options)
     }
 
@@ -931,6 +943,7 @@ impl PdfDocument {
 
     /// Updates document metadata and synchronizes `/Info` and `/Root /Metadata` (XMP).
     pub fn set_metadata(&mut self, meta: &crate::ops::metadata::DocumentMetadata) -> PdfResult<()> {
+        self.require_modify()?;
         crate::ops::metadata::update_metadata(self, meta)
     }
 
@@ -944,7 +957,112 @@ impl PdfDocument {
         &mut self,
         items: &[crate::ops::outlines::OutlineItem],
     ) -> PdfResult<usize> {
+        self.require_assemble()?;
         crate::ops::outlines::set_outlines(self, items)
+    }
+}
+
+impl PdfDocument {
+    fn permission_denied() -> PdfError {
+        PdfError::CryptographyError(PERMISSION_DENIED.to_string())
+    }
+
+    /// Remembers `/P` for a user password. The owner, and a user whose enforced
+    /// bits are all set, stay unrestricted and are not told apart later.
+    pub(crate) fn apply_opened_permissions(&mut self, is_owner: bool, permissions: PdfPermissions) {
+        if is_owner || permissions.allows_all_enforced() {
+            self.user_permissions = None;
+        } else {
+            self.user_permissions = Some(permissions);
+        }
+    }
+
+    /// True when this session may copy text. An unrestricted session may.
+    pub fn allows_copy(&self) -> bool {
+        self.user_permissions
+            .map(PdfPermissions::allows_copy)
+            .unwrap_or(true)
+    }
+
+    fn require_when(&self, allowed: bool) -> PdfResult<()> {
+        if allowed {
+            Ok(())
+        } else {
+            Err(Self::permission_denied())
+        }
+    }
+
+    /// Bit 3. This process has one raster.
+    pub fn require_print(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_print)
+                .unwrap_or(true),
+        )
+    }
+
+    /// Bit 5.
+    pub fn require_copy(&self) -> PdfResult<()> {
+        self.require_when(self.allows_copy())
+    }
+
+    /// Bit 4.
+    pub fn require_modify(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_modify)
+                .unwrap_or(true),
+        )
+    }
+
+    /// Bit 6.
+    pub fn require_annotate(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_annotate)
+                .unwrap_or(true),
+        )
+    }
+
+    /// Bit 9 or bit 6.
+    pub fn require_fill(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_fill)
+                .unwrap_or(true),
+        )
+    }
+
+    /// Bits 4 and 6. Used when a field is created or annotations are burned in.
+    pub fn require_form_create(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_content_and_annotations)
+                .unwrap_or(true),
+        )
+    }
+
+    /// Flattening annotations burns them into page content, so both bits are required.
+    pub fn require_flatten_annotations(&self) -> PdfResult<()> {
+        self.require_form_create()
+    }
+
+    /// Bit 11 or bit 4.
+    pub fn require_assemble(&self) -> PdfResult<()> {
+        self.require_when(
+            self.user_permissions
+                .map(PdfPermissions::allows_assemble)
+                .unwrap_or(true),
+        )
+    }
+
+    /// A restricted user password cannot encrypt the file again.
+    pub fn require_security_change(&self) -> PdfResult<()> {
+        if self.user_permissions.is_some() {
+            Err(Self::permission_denied())
+        } else {
+            Ok(())
+        }
     }
 }
 

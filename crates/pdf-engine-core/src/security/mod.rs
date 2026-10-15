@@ -8,7 +8,9 @@
 //! Saving a document removes `/JavaScript`, `/JS`, `/Launch`, `/SubmitForm`,
 //! `/OpenAction`, and `/AA`. A `/URI` action is kept unless its scheme is
 //! `javascript`, `vbscript`, `file`, or `data`.
-//! The `/P` bitmask is stored and is not enforced by this process.
+//! After a user password opens the file, `/P` blocks print, copy, and edit in this
+//! process. The owner password is unrestricted. Bit 12 is stored and is not a second
+//! raster. Bit 10 is not a separate extract path. Saving the decrypted file drops `/P`.
 
 pub mod active;
 pub mod cms;

@@ -11,14 +11,33 @@ pub fn merge_documents(docs: &mut [PdfDocument]) -> PdfResult<PdfDocument> {
     let mut merged = PdfDocument::empty();
 
     for src_doc in docs {
-        let pages = src_doc.get_pages()?;
-        let mut cloner = ObjectCloner::new(src_doc)?;
-        for page_id in pages {
-            cloner.import_page(src_doc, page_id, &mut merged)?;
-        }
+        src_doc.require_copy()?;
+        import_pages(src_doc, &mut merged)?;
     }
 
     Ok(merged)
+}
+
+/// Appends every page of `source` after every page of `dest`.
+///
+/// `dest` may assemble without being allowed to copy. `source` must be allowed
+/// to copy. The result is a new document and does not keep a session gate.
+pub fn append_document(dest: &mut PdfDocument, source: &mut PdfDocument) -> PdfResult<PdfDocument> {
+    dest.require_assemble()?;
+    source.require_copy()?;
+    let mut merged = PdfDocument::empty();
+    import_pages(dest, &mut merged)?;
+    import_pages(source, &mut merged)?;
+    Ok(merged)
+}
+
+fn import_pages(src_doc: &mut PdfDocument, merged: &mut PdfDocument) -> PdfResult<()> {
+    let pages = src_doc.get_pages()?;
+    let mut cloner = ObjectCloner::new(src_doc)?;
+    for page_id in pages {
+        cloner.import_page(src_doc, page_id, merged)?;
+    }
+    Ok(())
 }
 
 /// Commercial convenience function: merges raw PDF byte buffers and returns serialized bytes.

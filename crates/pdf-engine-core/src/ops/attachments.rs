@@ -479,6 +479,7 @@ pub fn extract_attachment(doc: &mut PdfDocument, name: &str) -> PdfResult<Embedd
             "Attachment name cannot be empty".to_string(),
         ));
     }
+    doc.require_copy()?;
     let all = collect_all_attachments(doc)?;
     for att in all {
         if att.info.name == target || att.info.filename == target {

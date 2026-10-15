@@ -89,6 +89,7 @@ pub fn search_document(
             "max_hits must be from 1 to {MAX_SEARCH_HITS}"
         )));
     }
+    doc.require_copy()?;
 
     let page_ids = doc.get_pages()?;
     let mut hits = Vec::new();

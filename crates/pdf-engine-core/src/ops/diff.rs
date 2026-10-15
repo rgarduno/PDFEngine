@@ -863,6 +863,8 @@ pub fn compare_documents(
     doc_target: &mut PdfDocument,
     options: &DiffOptions,
 ) -> PdfResult<DiffReport> {
+    doc_base.require_copy()?;
+    doc_target.require_copy()?;
     let base_pages = doc_base.get_pages()?;
     let target_pages = doc_target.get_pages()?;
 

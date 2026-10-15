@@ -40,7 +40,7 @@ pub use layers::{
     add_layer, delete_layer, extract_layers, register_page_layer_property,
     resolve_page_hidden_ocg_props, set_layer_visibility, OptionalContentLayer,
 };
-pub use merge::{merge_documents, merge_pdf_bytes};
+pub use merge::{append_document, merge_documents, merge_pdf_bytes};
 pub use metadata::{
     current_timestamps, extract_metadata, format_utc_timestamps, iso_to_pdf_date, pdf_date_to_iso,
     update_metadata, DocumentMetadata,

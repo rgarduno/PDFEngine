@@ -460,7 +460,13 @@ impl PyRedactionSummary {
 }
 
 /// Bits stored in the encryption dictionary `/P` entry.
-/// This process does not enforce them. The bit positions follow ISO 32000-1 §7.6.3.2 Table 22.
+/// After a user password opens the file, this process refuses print, copy, and
+/// edit when those bits are clear. The owner password is unrestricted. A user
+/// password whose enforced bits are all set is not told apart from the owner.
+/// Bit 12 is stored and is not a second raster. Bit 10 is not a separate extract
+/// path. Saving the decrypted file drops `/P`. A page already returned still
+/// holds the paragraphs it reconstructed. The bit positions follow ISO 32000-1
+/// §7.6.3.2 Table 22.
 #[pyclass(name = "PdfPermissions")]
 #[derive(Debug, Clone)]
 pub struct PyPdfPermissions {
@@ -1177,13 +1183,20 @@ pub struct PyPage {
     pub metrics: FontMetrics,
     faces: BTreeMap<String, ResolvedFont>,
     hidden_ocg_props: std::collections::HashSet<String>,
+    /// Copied from the session when this page object is built. A page already
+    /// returned keeps the value it had then.
+    text_extract_allowed: bool,
 }
 
 #[pymethods]
 impl PyPage {
     /// Returns the list of reconstructed paragraph blocks on this page.
-    pub fn get_paragraphs(&self) -> Vec<PyParagraph> {
-        self.paragraphs
+    pub fn get_paragraphs(&self) -> PyResult<Vec<PyParagraph>> {
+        if !self.text_extract_allowed {
+            return Err(permission_denied());
+        }
+        Ok(self
+            .paragraphs
             .iter()
             .map(|p| {
                 let align_str = match p.alignment {
@@ -1209,7 +1222,7 @@ impl PyPage {
                     font_style,
                 }
             })
-            .collect()
+            .collect())
     }
 
     /// Surgically edits a paragraph in-place on this page without modifying surrounding graphics.
@@ -1242,8 +1255,8 @@ impl PyPage {
     }
 
     /// Returns a JSON-formatted SceneGraph of the page layout.
-    pub fn scenegraph_json(&self) -> String {
-        let paragraphs = self.get_paragraphs();
+    pub fn scenegraph_json(&self) -> PyResult<String> {
+        let paragraphs = self.get_paragraphs()?;
         let mut json = String::from("{\"page\":");
         json.push_str(&self.page_number.to_string());
         json.push_str(",\"paragraphs\":[");
@@ -1271,7 +1284,7 @@ impl PyPage {
         }
 
         json.push_str("]}");
-        json
+        Ok(json)
     }
 }
 
@@ -1338,6 +1351,7 @@ impl PyPdfDocument {
 
         let mut active_pages = Vec::with_capacity(page_ids.len());
         let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+        let text_extract_allowed = doc.allows_copy();
 
         for (idx, &page_id) in page_ids.iter().enumerate() {
             let faces = resolve_page_fonts(&mut doc, page_id)
@@ -1381,6 +1395,7 @@ impl PyPdfDocument {
                 metrics: metrics.clone(),
                 faces,
                 hidden_ocg_props,
+                text_extract_allowed,
             });
         }
 
@@ -1395,6 +1410,7 @@ impl PyPdfDocument {
     pub(crate) fn reload_active_pages(&mut self) -> PyResult<()> {
         let page_ids = self.page_ids.clone();
         let metrics = FontMetrics::new(0, 255, vec![500.0; 256], 500.0);
+        let text_extract_allowed = self.doc.allows_copy();
         let mut reloaded_pages = Vec::with_capacity(page_ids.len());
 
         for (idx, &page_id) in page_ids.iter().enumerate() {
@@ -1430,6 +1446,7 @@ impl PyPdfDocument {
                         metrics: metrics.clone(),
                         faces,
                         hidden_ocg_props,
+                        text_extract_allowed,
                     });
                 }
             }
@@ -1480,6 +1497,7 @@ impl PyPdfDocument {
         &mut self,
         language: Option<String>,
     ) -> PyResult<(usize, usize, usize)> {
+        gate(self.doc.require_modify())?;
         let report = pdf_engine_core::add_searchable_text_layer(&mut self.doc, language.as_deref())
             .map_err(|e| {
                 PyRuntimeError::new_err(format!("Failed to add searchable text: {}", e))
@@ -1497,6 +1515,7 @@ impl PyPdfDocument {
     /// structural issues. This is the engine's own check. It is not a
     /// veraPDF certificate, an Acrobat preflight, or a court acceptance.
     pub fn to_pdfa(&mut self, part: &str) -> PyResult<()> {
+        gate(self.doc.require_modify())?;
         let Some(level) = pdf_engine_core::PdfALevel::parse(part) else {
             return Err(PyRuntimeError::new_err(
                 "Failed to archive: Archive part was rejected.",
@@ -1519,6 +1538,7 @@ impl PyPdfDocument {
 
     /// Retrieves a mutable reference to a page by 1-based or 0-based index.
     pub fn get_page(&mut self, index: usize) -> PyResult<PyPage> {
+        let text_extract_allowed = self.doc.allows_copy();
         let zero_idx = if index > 0 && index <= self.active_pages.len() {
             index - 1
         } else {
@@ -1536,6 +1556,7 @@ impl PyPdfDocument {
                 metrics: page.metrics.clone(),
                 faces: page.faces.clone(),
                 hidden_ocg_props: page.hidden_ocg_props.clone(),
+                text_extract_allowed,
             })
         } else {
             Err(PyValueError::new_err(format!(
@@ -1548,6 +1569,7 @@ impl PyPdfDocument {
 
     /// Updates the active page state back into the document.
     pub fn update_page(&mut self, page: &PyPage) -> PyResult<()> {
+        gate(self.doc.require_modify())?;
         let zero_idx = if page.page_number > 0 && page.page_number <= self.active_pages.len() {
             page.page_number - 1
         } else {
@@ -1564,6 +1586,7 @@ impl PyPdfDocument {
         }
 
         if zero_idx < self.active_pages.len() {
+            let text_extract_allowed = self.doc.allows_copy();
             self.active_pages[zero_idx] = PyPage {
                 page_number: page.page_number,
                 page_id: page.page_id,
@@ -1573,6 +1596,7 @@ impl PyPdfDocument {
                 metrics: page.metrics.clone(),
                 faces: page.faces.clone(),
                 hidden_ocg_props: page.hidden_ocg_props.clone(),
+                text_extract_allowed,
             };
         }
 
@@ -1600,6 +1624,7 @@ impl PyPdfDocument {
         alignment: Option<String>,
         leading: Option<f64>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let zero_idx = if page_index > 0 && page_index <= self.active_pages.len() {
             page_index - 1
         } else {
@@ -1612,6 +1637,7 @@ impl PyPdfDocument {
                 self.active_pages.len()
             )));
         }
+        let text_extract_allowed = self.doc.allows_copy();
         let mut page = PyPage {
             page_number: self.active_pages[zero_idx].page_number,
             page_id: self.active_pages[zero_idx].page_id,
@@ -1621,6 +1647,7 @@ impl PyPdfDocument {
             metrics: self.active_pages[zero_idx].metrics.clone(),
             faces: self.active_pages[zero_idx].faces.clone(),
             hidden_ocg_props: self.active_pages[zero_idx].hidden_ocg_props.clone(),
+            text_extract_allowed,
         };
         let target = page
             .paragraphs
@@ -1761,6 +1788,7 @@ impl PyPdfDocument {
         alignment: Option<String>,
         leading: Option<f64>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let parsed_alignment = match alignment {
             Some(raw) => Some(ParagraphStyle::parse_alignment(&raw).map_err(map_engine_value)?),
             None => None,
@@ -1822,6 +1850,7 @@ impl PyPdfDocument {
         strokes: Option<Vec<Vec<Vec<f64>>>>,
         image: Option<Vec<u8>>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let parsed_kind = match kind {
             "signature" => FillSignKind::Signature,
             "initials" => FillSignKind::Initials,
@@ -1955,6 +1984,7 @@ impl PyPdfDocument {
 
     /// Retrieves raw image file bytes and MIME type for a given image object ID.
     pub fn get_image_binary(&mut self, object_id_num: u32) -> PyResult<(Vec<u8>, String)> {
+        gate(self.doc.require_copy())?;
         let obj_id = ObjectId::new(object_id_num);
         let (bytes, mime) = pdf_engine_core::images::get_image_binary(&mut self.doc, obj_id)
             .map_err(|e| {
@@ -1965,6 +1995,7 @@ impl PyPdfDocument {
 
     /// Surgically replaces an existing Image XObject in the document with new JPEG or PNG bytes.
     pub fn replace_image(&mut self, object_id_num: u32, new_bytes: &[u8]) -> PyResult<()> {
+        gate(self.doc.require_modify())?;
         let obj_id = ObjectId::new(object_id_num);
         pdf_engine_core::images::replace_image_content(&mut self.doc, obj_id, new_bytes)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to replace image: {}", e)))
@@ -2038,6 +2069,7 @@ impl PyPdfDocument {
         max_length: Option<usize>,
         font_size: Option<f64>,
     ) -> PyResult<PyFormField> {
+        gate(self.doc.require_form_create())?;
         let f_type = pdf_engine_core::forms::FormFieldType::from_str(&field_type);
         let opts = pdf_engine_core::forms::FormFieldCreateOptions {
             name,
@@ -2079,6 +2111,7 @@ impl PyPdfDocument {
 
     /// Deletes an existing interactive form field from the document by name.
     pub fn delete_form_field(&mut self, name: &str) -> PyResult<bool> {
+        gate(self.doc.require_form_create())?;
         pdf_engine_core::forms::delete_form_field(&mut self.doc, name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete form field: {}", e)))
     }
@@ -2107,6 +2140,7 @@ impl PyPdfDocument {
         is_required: Option<bool>,
         is_multiline: Option<bool>,
     ) -> PyResult<Option<PyFormField>> {
+        gate(self.doc.require_form_create())?;
         let rect = match (min_x, min_y, max_x, max_y) {
             (Some(x1), Some(y1), Some(x2), Some(y2)) => {
                 Some(pdf_engine_core::layout::geometry::Rect::new(x1, y1, x2, y2))
@@ -2147,6 +2181,7 @@ impl PyPdfDocument {
 
     /// Fills a single form field by name or ID.
     pub fn fill_form_field(&mut self, name_or_id: &str, value: &str) -> PyResult<bool> {
+        gate(self.doc.require_fill())?;
         pdf_engine_core::forms::fill_field_value(&mut self.doc, name_or_id, value)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to fill form field: {}", e)))
     }
@@ -2156,6 +2191,7 @@ impl PyPdfDocument {
         &mut self,
         values: std::collections::HashMap<String, String>,
     ) -> PyResult<usize> {
+        gate(self.doc.require_fill())?;
         pdf_engine_core::forms::fill_fields_batch(&mut self.doc, &values).map_err(|e| {
             PyRuntimeError::new_err(format!("Failed to batch fill form fields: {}", e))
         })
@@ -2163,6 +2199,7 @@ impl PyPdfDocument {
 
     /// Flattens all interactive form fields into permanent page content and strips widget annotations.
     pub fn flatten_forms(&mut self) -> PyResult<usize> {
+        gate(self.doc.require_modify())?;
         let count = pdf_engine_core::forms::flatten_document_forms(&mut self.doc).map_err(|e| {
             PyRuntimeError::new_err(format!("Failed to flatten form fields: {}", e))
         })?;
@@ -2195,6 +2232,7 @@ impl PyPdfDocument {
         page_number: usize,
         candidates: Option<Vec<PyDetectedFormFieldCandidate>>,
     ) -> PyResult<Vec<PyFormField>> {
+        gate(self.doc.require_form_create())?;
         let core_candidates = match candidates {
             Some(cands) => cands.into_iter().map(|c| c.to_core()).collect(),
             None => {
@@ -2278,6 +2316,7 @@ impl PyPdfDocument {
         opacity: Option<f64>,
         contents: Option<String>,
     ) -> PyResult<u32> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2319,6 +2358,7 @@ impl PyPdfDocument {
         uri: &str,
         show_border: Option<bool>,
     ) -> PyResult<u32> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2347,6 +2387,7 @@ impl PyPdfDocument {
         max_y: f64,
         target_page_index: usize,
     ) -> PyResult<u32> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2379,6 +2420,7 @@ impl PyPdfDocument {
         color: Option<Vec<f64>>,
         date_str: Option<&str>,
     ) -> PyResult<u32> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2422,6 +2464,7 @@ impl PyPdfDocument {
         line_width: f64,
         opacity: f64,
     ) -> PyResult<u32> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2480,6 +2523,7 @@ impl PyPdfDocument {
 
     /// Deletes an annotation from a page.
     pub fn delete_annotation(&mut self, page_index: usize, annot_id: u32) -> PyResult<bool> {
+        gate(self.doc.require_annotate())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2492,6 +2536,7 @@ impl PyPdfDocument {
     /// Flattens all visual annotations (highlights, underlines, strikeouts, stamps) into permanent page graphics.
     #[pyo3(signature = (page_index=None))]
     pub fn flatten_annotations(&mut self, page_index: Option<usize>) -> PyResult<usize> {
+        gate(self.doc.require_flatten_annotations())?;
         let target_idx = page_index.map(|idx| {
             if idx > 0 && idx <= self.page_ids.len() {
                 idx - 1
@@ -2510,6 +2555,7 @@ impl PyPdfDocument {
 
     /// Rotates a page (0-based or 1-based index) by degrees (normalized to 0, 90, 180, 270).
     pub fn rotate_page(&mut self, page_index: usize, degrees: i32) -> PyResult<i32> {
+        gate(self.doc.require_assemble())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2532,12 +2578,14 @@ impl PyPdfDocument {
 
     /// Rotates all pages in the document by `degrees`.
     pub fn rotate_all_pages(&mut self, degrees: i32) -> PyResult<()> {
+        gate(self.doc.require_assemble())?;
         pdf_engine_core::ops::rotate_all_pages(&mut self.doc, degrees)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to rotate all pages: {}", e)))
     }
 
     /// Extracts specified pages into a new self-contained PyPdfDocument.
     pub fn extract_pages(&mut self, page_indices: Vec<usize>) -> PyResult<Self> {
+        gate(self.doc.require_copy())?;
         let zero_indices: Vec<usize> = page_indices
             .into_iter()
             .map(|idx| {
@@ -2555,6 +2603,7 @@ impl PyPdfDocument {
 
     /// Deletes specified pages from the document.
     pub fn delete_pages(&mut self, page_indices: Vec<usize>) -> PyResult<()> {
+        gate(self.doc.require_assemble())?;
         let zero_indices: Vec<usize> = page_indices
             .into_iter()
             .map(|idx| {
@@ -2576,6 +2625,7 @@ impl PyPdfDocument {
 
     /// Reorders the document pages according to a 0-based permutation.
     pub fn reorder_pages(&mut self, new_order: Vec<usize>) -> PyResult<()> {
+        gate(self.doc.require_assemble())?;
         pdf_engine_core::ops::reorder_pages(&mut self.doc, &new_order)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to reorder pages: {}", e)))?;
         let updated = Self::from_doc(self.doc.clone())?;
@@ -2587,8 +2637,11 @@ impl PyPdfDocument {
 
     /// Merges another document's pages into this document.
     pub fn merge_with(&mut self, other: &PyPdfDocument) -> PyResult<()> {
-        let mut docs = [self.doc.clone(), other.doc.clone()];
-        let merged = pdf_engine_core::ops::merge_documents(&mut docs)
+        gate(self.doc.require_assemble())?;
+        gate(other.doc.require_copy())?;
+        let mut dest = self.doc.clone();
+        let mut source = other.doc.clone();
+        let merged = pdf_engine_core::ops::append_document(&mut dest, &mut source)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge: {}", e)))?;
         let updated = Self::from_doc(merged)?;
         self.doc = updated.doc;
@@ -2610,6 +2663,7 @@ impl PyPdfDocument {
         skip_first_page: Option<bool>,
         page_indices: Option<Vec<usize>>,
     ) -> PyResult<usize> {
+        gate(self.doc.require_modify())?;
         let pos = match position.as_deref() {
             Some(s) => PaginationPosition::parse(s).ok_or_else(|| {
                 PyValueError::new_err(format!("Invalid pagination position: '{}'", s))
@@ -2653,6 +2707,7 @@ impl PyPdfDocument {
         placement: Option<String>,
         page_indices: Option<Vec<usize>>,
     ) -> PyResult<usize> {
+        gate(self.doc.require_modify())?;
         let place = match placement.as_deref() {
             Some(s) => WatermarkPlacement::parse(s).ok_or_else(|| {
                 PyValueError::new_err(format!("Invalid watermark placement: '{}'", s))
@@ -2697,6 +2752,7 @@ impl PyPdfDocument {
         placement: Option<String>,
         page_indices: Option<Vec<usize>>,
     ) -> PyResult<usize> {
+        gate(self.doc.require_modify())?;
         let place = match placement.as_deref() {
             Some(s) => WatermarkPlacement::parse(s).ok_or_else(|| {
                 PyValueError::new_err(format!("Invalid watermark placement: '{}'", s))
@@ -2739,6 +2795,7 @@ impl PyPdfDocument {
         font_size: Option<f64>,
         prune_annotations: Option<bool>,
     ) -> PyResult<PyRedactionSummary> {
+        gate(self.doc.require_modify())?;
         let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
             page_index - 1
         } else {
@@ -2795,6 +2852,7 @@ impl PyPdfDocument {
         scrub_metadata: Option<bool>,
         padding: Option<f64>,
     ) -> PyResult<Vec<PyRedactionSummary>> {
+        gate(self.doc.require_modify())?;
         let pattern = RedactionPattern::from_name(
             &pattern_type,
             custom_query.as_deref(),
@@ -2872,6 +2930,7 @@ impl PyPdfDocument {
         prune_annotations: Option<bool>,
         padding: Option<f64>,
     ) -> PyResult<Vec<PyRedactionSummary>> {
+        gate(self.doc.require_modify())?;
         let pattern = RedactionPattern::Text {
             query,
             case_sensitive: case_sensitive.unwrap_or(false),
@@ -2927,6 +2986,7 @@ impl PyPdfDocument {
 
     /// Scrubs sensitive metadata from the document (/Info dictionary and /Metadata XMP).
     pub fn sanitize_document(&mut self) -> PyResult<bool> {
+        gate(self.doc.require_modify())?;
         let modified = pdf_engine_core::redact::scrub_document_metadata(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Sanitization failed: {}", e)))?;
         Ok(modified)
@@ -2943,6 +3003,7 @@ impl PyPdfDocument {
         encrypt_metadata: bool,
         algorithm: &str,
     ) -> PyResult<()> {
+        gate(self.doc.require_security_change())?;
         let revision = EncryptionRevision::from_name(algorithm).ok_or_else(|| {
             PyValueError::new_err(format!(
                 "Unsupported encryption algorithm '{}'. Use 'aes128', 'aes256', or 'aes256-r5'.",
@@ -3018,6 +3079,7 @@ impl PyPdfDocument {
         timestamp_token: Option<Vec<u8>>,
         reserve_timestamp: bool,
     ) -> PyResult<PyVerifiedSignature> {
+        gate(self.doc.require_modify())?;
         let config = DigitalSignatureConfig {
             signer_name: signer_name.to_string(),
             reason: reason.to_string(),
@@ -3061,6 +3123,7 @@ impl PyPdfDocument {
 
     /// Embeds an RFC 3161 token into the existing PKCS#7 contents hole.
     pub fn embed_cms_timestamp(&mut self, token: &[u8]) -> PyResult<PyVerifiedSignature> {
+        gate(self.doc.require_modify())?;
         let sig = pdf_engine_core::security::embed_cms_timestamp(&mut self.doc, token)
             .map_err(|e| PyRuntimeError::new_err(format!("Timestamp embed failed: {}", e)))?;
         self.reload_active_pages()?;
@@ -3099,6 +3162,7 @@ impl PyPdfDocument {
 
     /// Detects all structured tables on the specified page (1-indexed).
     pub fn extract_tables(&mut self, page_number: usize) -> PyResult<Vec<PyDetectedTable>> {
+        gate(self.doc.require_copy())?;
         let tables = pdf_engine_core::tables::detect_tables(&mut self.doc, page_number)
             .map_err(|e| PyRuntimeError::new_err(format!("Table extraction failed: {}", e)))?;
         Ok(tables.into_iter().map(PyDetectedTable::from_core).collect())
@@ -3111,6 +3175,7 @@ impl PyPdfDocument {
         table_idx: usize,
         format: &str,
     ) -> PyResult<String> {
+        gate(self.doc.require_copy())?;
         let tables = pdf_engine_core::tables::detect_tables(&mut self.doc, page_number)
             .map_err(|e| PyRuntimeError::new_err(format!("Table extraction failed: {}", e)))?;
         let table = tables.get(table_idx).ok_or_else(|| {
@@ -3167,6 +3232,7 @@ impl PyPdfDocument {
 
     /// Updates and synchronizes document metadata across /Info and XMP stream.
     pub fn set_metadata(&mut self, data: &Bound<'_, pyo3::types::PyDict>) -> PyResult<()> {
+        gate(self.doc.require_modify())?;
         let current = self.doc.get_metadata().unwrap_or_default();
         let resolve_field = |key: &str, current_val: Option<String>| -> PyResult<Option<String>> {
             if data.contains(key)? {
@@ -3211,12 +3277,14 @@ impl PyPdfDocument {
 
     /// Exports the PDF document into a native Microsoft Word OpenXML (`.docx`) byte buffer.
     pub fn export_docx(&mut self) -> PyResult<Vec<u8>> {
+        gate(self.doc.require_copy())?;
         pdf_engine_core::export_document_docx(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to export DOCX: {}", e)))
     }
 
     /// Exports the PDF document into structured GitHub-Flavored Markdown (`.md`).
     pub fn export_markdown(&mut self) -> PyResult<String> {
+        gate(self.doc.require_copy())?;
         pdf_engine_core::export_document_markdown(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to export Markdown: {}", e)))
     }
@@ -3238,6 +3306,7 @@ impl PyPdfDocument {
         deduplicate_streams: bool,
         max_objects_per_stream: usize,
     ) -> PyResult<PyOptimizationStats> {
+        gate(self.doc.require_modify())?;
         let options = pdf_engine_core::ops::OptimizationOptions {
             remove_unused_objects: remove_unused,
             pack_into_object_streams: pack_object_streams,
@@ -3270,6 +3339,7 @@ impl PyPdfDocument {
         deduplicate_streams: bool,
         max_objects_per_stream: usize,
     ) -> PyResult<(Vec<u8>, PyOptimizationStats)> {
+        gate(self.doc.require_modify())?;
         let options = pdf_engine_core::ops::OptimizationOptions {
             remove_unused_objects: remove_unused,
             pack_into_object_streams: pack_object_streams,
@@ -3304,6 +3374,8 @@ impl PyPdfDocument {
         compare_images: bool,
         compare_metadata: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
+        gate(self.doc.require_copy())?;
+        gate(target.doc.require_copy())?;
         let options = pdf_engine_core::ops::DiffOptions {
             ignore_whitespace: true,
             ignore_case,
@@ -3330,6 +3402,7 @@ impl PyPdfDocument {
 
     /// Replaces the Document Outline (`/Outlines` / Table of Contents) tree and returns total items written.
     pub fn set_outlines(&mut self, items: Vec<PyOutlineItem>) -> PyResult<usize> {
+        gate(self.doc.require_assemble())?;
         let core_items: Vec<pdf_engine_core::ops::OutlineItem> =
             items.iter().map(PyOutlineItem::to_core).collect();
         self.doc
@@ -3344,6 +3417,7 @@ impl PyPdfDocument {
         item: PyOutlineItem,
         parent_indices: Option<Vec<usize>>,
     ) -> PyResult<usize> {
+        gate(self.doc.require_assemble())?;
         let indices = parent_indices.unwrap_or_default();
         pdf_engine_core::ops::add_outline_item(&mut self.doc, item.to_core(), &indices)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to add outline item: {}", e)))
@@ -3351,6 +3425,7 @@ impl PyPdfDocument {
 
     /// Removes the entire `/Outlines` tree from the document.
     pub fn clear_outlines(&mut self) -> PyResult<bool> {
+        gate(self.doc.require_assemble())?;
         pdf_engine_core::ops::clear_outlines(&mut self.doc)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to clear outlines: {}", e)))
     }
@@ -3367,6 +3442,7 @@ impl PyPdfDocument {
 
     /// Extracts a specific embedded file attachment by logical name or filename.
     pub fn extract_attachment(&mut self, name: &str) -> PyResult<PyEmbeddedAttachment> {
+        gate(self.doc.require_copy())?;
         let att = pdf_engine_core::ops::extract_attachment(&mut self.doc, name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract attachment: {}", e)))?;
         Ok(PyEmbeddedAttachment::from_core(att))
@@ -3381,6 +3457,7 @@ impl PyPdfDocument {
         mime_type: Option<&str>,
         description: Option<&str>,
     ) -> PyResult<PyEmbeddedAttachmentInfo> {
+        gate(self.doc.require_modify())?;
         let info =
             pdf_engine_core::ops::add_attachment(&mut self.doc, name, data, mime_type, description)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to add attachment: {}", e)))?;
@@ -3389,6 +3466,7 @@ impl PyPdfDocument {
 
     /// Deletes an embedded file attachment by logical name or filename.
     pub fn delete_attachment(&mut self, name: &str) -> PyResult<bool> {
+        gate(self.doc.require_modify())?;
         pdf_engine_core::ops::delete_attachment(&mut self.doc, name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete attachment: {}", e)))
     }
@@ -3412,6 +3490,7 @@ impl PyPdfDocument {
         intent: Option<Vec<String>>,
         locked: bool,
     ) -> PyResult<PyOptionalContentLayer> {
+        gate(self.doc.require_modify())?;
         let layer = pdf_engine_core::ops::add_layer(&mut self.doc, name, visible, intent, locked)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to add layer: {}", e)))?;
         self.reload_active_pages()?;
@@ -3425,6 +3504,7 @@ impl PyPdfDocument {
         target: &str,
         visible: bool,
     ) -> PyResult<PyOptionalContentLayer> {
+        gate(self.doc.require_modify())?;
         let updated = pdf_engine_core::ops::set_layer_visibility(&mut self.doc, target, visible)
             .map_err(|e| {
                 PyRuntimeError::new_err(format!("Failed to set layer visibility: {}", e))
@@ -3435,6 +3515,7 @@ impl PyPdfDocument {
 
     /// Deletes an Optional Content Group (`/Type /OCG`) by `id` or `name` from the document's `/OCProperties`.
     pub fn delete_layer(&mut self, target: &str) -> PyResult<bool> {
+        gate(self.doc.require_modify())?;
         let deleted = pdf_engine_core::ops::delete_layer(&mut self.doc, target)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete layer: {}", e)))?;
         if deleted {
@@ -3451,6 +3532,7 @@ impl PyPdfDocument {
         prop_name: &str,
         layer_target: &str,
     ) -> PyResult<String> {
+        gate(self.doc.require_modify())?;
         let layer_id = pdf_engine_core::ops::register_page_layer_property(
             &mut self.doc,
             page_number,
@@ -3472,6 +3554,7 @@ impl PyPdfDocument {
         &mut self,
         page_numbers: Option<Vec<usize>>,
     ) -> PyResult<PyHardFlattenReport> {
+        gate(self.doc.require_modify())?;
         let zero_indices: Option<Vec<usize>> = match page_numbers {
             Some(nums) => {
                 let mut v = Vec::with_capacity(nums.len());
@@ -3525,6 +3608,7 @@ impl PyPdfDocument {
         title: Option<String>,
         figure_alt_fallback: &str,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let options = pdf_engine_core::PdfUaTaggingOptions {
             lang: lang.to_string(),
             title,
@@ -3541,6 +3625,7 @@ impl PyPdfDocument {
     /// Width and height are points inside `(0, 14400]`. Returns the landing index.
     #[pyo3(signature = (index, width=612.0, height=792.0))]
     pub fn insert_blank_page(&mut self, index: usize, width: f64, height: f64) -> PyResult<usize> {
+        gate(self.doc.require_assemble())?;
         let landed = pdf_engine_core::ops::insert_blank_page(&mut self.doc, index, width, height)
             .map_err(map_engine_value)?;
         self.refresh_handles()?;
@@ -3551,6 +3636,7 @@ impl PyPdfDocument {
     ///
     /// `insert_at` equal to the page count appends. Returns the landing index.
     pub fn duplicate_page(&mut self, source_index: usize, insert_at: usize) -> PyResult<usize> {
+        gate(self.doc.require_assemble())?;
         let landed =
             pdf_engine_core::ops::duplicate_page(&mut self.doc, source_index, insert_at)
                 .map_err(map_engine_value)?;
@@ -3568,6 +3654,8 @@ impl PyPdfDocument {
         source_indices: Vec<usize>,
         insert_at: usize,
     ) -> PyResult<usize> {
+        gate(self.doc.require_assemble())?;
+        gate(source.doc.require_copy())?;
         let mut source_doc = source.doc.clone();
         let inserted = pdf_engine_core::ops::insert_pages(
             &mut self.doc,
@@ -3582,6 +3670,7 @@ impl PyPdfDocument {
 
     /// Reverses page order. Fewer than two pages leaves the document unchanged.
     pub fn reverse_pages(&mut self) -> PyResult<()> {
+        gate(self.doc.require_assemble())?;
         pdf_engine_core::ops::reverse_pages(&mut self.doc).map_err(map_engine_value)?;
         self.refresh_handles()?;
         Ok(())
@@ -3612,6 +3701,7 @@ impl PyPdfDocument {
         kind: &str,
         corners: Option<Vec<f64>>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let boxes = pdf_engine_core::ops::set_page_boundary(
             &mut self.doc,
             page_index,
@@ -3633,6 +3723,7 @@ impl PyPdfDocument {
         ignore_case: bool,
         max_hits: usize,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_copy())?;
         let report =
             pdf_engine_core::ops::search_document(&mut self.doc, query, ignore_case, max_hits)
                 .map_err(map_engine_value)?;
@@ -3654,6 +3745,7 @@ impl PyPdfDocument {
         ignore_case: bool,
         max_hits: usize,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_modify())?;
         let report = pdf_engine_core::ops::replace_document_text(
             &mut self.doc,
             query,
@@ -3679,6 +3771,7 @@ impl PyPdfDocument {
         format: &str,
         dpi: f64,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        gate(self.doc.require_print())?;
         let parsed =
             pdf_engine_core::ops::RasterFormat::parse(format).map_err(map_engine_value)?;
         let raster =
@@ -3708,6 +3801,16 @@ fn map_engine_value(err: pdf_engine_core::PdfError) -> PyErr {
         }
         _ => PyRuntimeError::new_err(err.to_string()),
     }
+}
+
+fn gate(check: pdf_engine_core::PdfResult<()>) -> PyResult<()> {
+    check.map_err(map_engine_value)
+}
+
+fn permission_denied() -> PyErr {
+    map_engine_value(pdf_engine_core::PdfError::CryptographyError(
+        pdf_engine_core::security::permissions::PERMISSION_DENIED.to_string(),
+    ))
 }
 
 fn rect_corners(rect: Rect) -> [f64; 4] {
@@ -3829,6 +3932,9 @@ fn pdfua_report_to_py_dict<'py>(
 /// Merges multiple Python PDF documents sequentially into a single unified document.
 #[pyfunction]
 pub fn merge_documents(docs: Vec<PyRef<'_, PyPdfDocument>>) -> PyResult<PyPdfDocument> {
+    for doc in &docs {
+        gate(doc.doc.require_copy())?;
+    }
     let mut raw_docs: Vec<PdfDocument> = docs.iter().map(|d| d.doc.clone()).collect();
     let merged = pdf_engine_core::ops::merge_documents(&mut raw_docs)
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to merge documents: {}", e)))?;

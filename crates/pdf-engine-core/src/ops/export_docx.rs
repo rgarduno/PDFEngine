@@ -160,6 +160,7 @@ fn is_name_italic(name: &str) -> bool {
 /// Preserves heading levels inferred from rendered font sizes, bold/italic span runs,
 /// paragraph breaks, and reconstructed tables.
 pub fn export_document_markdown(doc: &mut PdfDocument) -> PdfResult<String> {
+    doc.require_copy()?;
     let pages = doc.get_pages()?;
     let mut out = String::new();
 
@@ -282,6 +283,7 @@ fn escape_xml(input: &str) -> String {
 /// WordprocessingML with styled paragraphs, run-level font families/sizes/weights,
 /// and bordered grid tables.
 pub fn export_document_docx(doc: &mut PdfDocument) -> PdfResult<Vec<u8>> {
+    doc.require_copy()?;
     let metadata = extract_metadata(doc).unwrap_or_default();
     let pages = doc.get_pages()?;
 

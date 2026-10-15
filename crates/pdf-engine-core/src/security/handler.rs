@@ -1,6 +1,7 @@
 //! Standard Security Handler for ISO 32000-1 §7.6.3 (Revision 4, AES-128) and
 //! ISO 32000-2 §7.6.4 (Revisions 5 and 6, AES-256).
-//! The permissions bitmask is stored in `/P` (and `/Perms` for AES-256) and is not enforced by this process.
+//! After a user password opens the file, the `/P` integer blocks print, copy, and edit.
+//! `/Perms` is checked only for the AES-256 `adb` marker. The owner password is unrestricted.
 
 use crate::cos::{
     ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfString, StringFormat,
@@ -553,6 +554,7 @@ pub fn encrypt_document(doc: &mut PdfDocument, options: &EncryptionOptions) -> P
             "Owner password is required.".into(),
         ));
     }
+    doc.require_security_change()?;
 
     materialize_objects(doc)?;
 
@@ -855,9 +857,23 @@ pub fn authenticate_document(doc: &mut PdfDocument, password: &str) -> PdfResult
     ))
 }
 
+/// Reads `/P` before `/Encrypt` is removed. A missing integer is the unrestricted value `-4`.
+fn opened_permissions(doc: &mut PdfDocument) -> PdfPermissions {
+    let p_value = load_encrypt_dictionary(doc)
+        .ok()
+        .and_then(|dict| dict.get("P").and_then(|obj| obj.as_integer()))
+        .unwrap_or(-4);
+    PdfPermissions::from_p_value(p_value as i32)
+}
+
 /// Decrypts an encrypted document in place and removes `/Encrypt` from the trailer.
+///
+/// Decrypt itself is allowed. A user password whose enforced bits are not all set
+/// remembers those bits for later print, copy, and edit checks. The owner password
+/// does not. The written file no longer carries `/P`.
 pub fn decrypt_document(doc: &mut PdfDocument, password: &str) -> PdfResult<()> {
-    let (_is_owner, doc_key) = authenticate_document(doc, password)?;
+    let (is_owner, doc_key) = authenticate_document(doc, password)?;
+    let permissions = opened_permissions(doc);
     let encrypt_id = doc
         .xref
         .trailer
@@ -885,6 +901,7 @@ pub fn decrypt_document(doc: &mut PdfDocument, password: &str) -> PdfResult<()> 
 
     // Ciphertext hid URI schemes. The decrypted graph is clear, so strip actions now.
     super::active::neutralize_active_content(doc)?;
+    doc.apply_opened_permissions(is_owner, permissions);
 
     Ok(())
 }
@@ -1092,5 +1109,133 @@ mod tests {
             }
         }
         assert_eq!(secret.as_deref(), Some(&b"classified-note"[..]));
+    }
+
+    fn locked_permissions() -> PdfPermissions {
+        PdfPermissions {
+            print_low_res: false,
+            print_high_res: false,
+            modify_contents: false,
+            copy_extract: false,
+            modify_annotations: false,
+            fill_forms: false,
+            accessibility_extract: true,
+            assemble_document: false,
+        }
+    }
+
+    fn denies(result: PdfResult<impl Sized>) -> bool {
+        match result {
+            Err(err) => err
+                .to_string()
+                .contains(crate::security::permissions::PERMISSION_DENIED),
+            Ok(_) => false,
+        }
+    }
+
+    fn allows(result: PdfResult<impl Sized>) {
+        if let Err(err) = result {
+            assert!(
+                !err.to_string()
+                    .contains(crate::security::permissions::PERMISSION_DENIED),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_password_enforces_stored_permissions() {
+        let plain = document_with_secret().save_to_vec().unwrap();
+        let mut source = PdfDocument::load(&plain).unwrap();
+        let locked = EncryptionOptions {
+            user_password: "user_locked".to_string(),
+            owner_password: "owner_locked".to_string(),
+            permissions: locked_permissions(),
+            revision: EncryptionRevision::Aes128,
+            encrypt_metadata: true,
+        };
+        encrypt_document(&mut source, &locked).unwrap();
+        let encrypted = source.save_to_vec().unwrap();
+
+        let mut user_doc = PdfDocument::load(&encrypted).unwrap();
+        decrypt_document(&mut user_doc, "user_locked").unwrap();
+        assert!(denies(crate::ops::search_document(
+            &mut user_doc,
+            "classified",
+            false,
+            10
+        )));
+        assert!(denies(crate::ops::replace_document_text(
+            &mut user_doc,
+            "classified",
+            "open",
+            false,
+            10
+        )));
+        assert!(denies(crate::ops::render_page(
+            &mut user_doc,
+            0,
+            crate::ops::RasterFormat::Png,
+            72.0
+        )));
+        assert!(user_doc.save_to_vec().is_ok());
+        assert!(denies(encrypt_document(&mut user_doc, &sample_options())));
+        assert!(!user_doc.xref.trailer.contains_key("Encrypt"));
+
+        let mut read_only = PdfDocument::load(&plain).unwrap();
+        encrypt_document(&mut read_only, &sample_options()).unwrap();
+        let read_only_bytes = read_only.save_to_vec().unwrap();
+        let mut read_only_user = PdfDocument::load(&read_only_bytes).unwrap();
+        decrypt_document(&mut read_only_user, "user123").unwrap();
+        assert!(denies(read_only_user.require_copy()));
+        assert!(denies(read_only_user.require_modify()));
+        allows(crate::ops::render_page(
+            &mut read_only_user,
+            0,
+            crate::ops::RasterFormat::Png,
+            72.0,
+        ));
+
+        let mut owner_doc = PdfDocument::load(&encrypted).unwrap();
+        decrypt_document(&mut owner_doc, "owner_locked").unwrap();
+        allows(crate::ops::search_document(
+            &mut owner_doc,
+            "classified",
+            false,
+            10,
+        ));
+        allows(crate::ops::replace_document_text(
+            &mut owner_doc,
+            "classified",
+            "open",
+            false,
+            10,
+        ));
+        allows(crate::ops::render_page(
+            &mut owner_doc,
+            0,
+            crate::ops::RasterFormat::Png,
+            72.0,
+        ));
+
+        let mut open = PdfDocument::load(&plain).unwrap();
+        let open_options = EncryptionOptions {
+            user_password: "user_open".to_string(),
+            owner_password: "owner_open".to_string(),
+            permissions: PdfPermissions::default(),
+            revision: EncryptionRevision::Aes128,
+            encrypt_metadata: true,
+        };
+        encrypt_document(&mut open, &open_options).unwrap();
+        let open_bytes = open.save_to_vec().unwrap();
+        let mut open_user = PdfDocument::load(&open_bytes).unwrap();
+        decrypt_document(&mut open_user, "user_open").unwrap();
+        allows(crate::ops::search_document(
+            &mut open_user,
+            "classified",
+            false,
+            10,
+        ));
+        assert!(open_user.require_security_change().is_ok());
     }
 }
