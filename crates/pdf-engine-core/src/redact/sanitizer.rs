@@ -107,6 +107,9 @@ fn redact_page_at(
     page_dict.remove("Metadata");
     doc.set_object(page_id, PdfObject::Dictionary(page_dict));
 
+    // Image samples are geometric: a rectangle clears pixels even when no glyph was removed.
+    super::pixels::blackout_image_pixels(doc, page_id, redactions)?;
+
     // 6. Prune intersecting interactive annotations (links, highlights, redact annotations)
     if config.prune_annotations {
         let pruned = prune_page_annotations(doc, page_id, redactions)?;

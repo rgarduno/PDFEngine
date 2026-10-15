@@ -5,12 +5,16 @@
 //! `/Metadata` and marked-content `/ActualText`, `/Alt`, and `/E` on that page.
 //! An embedded file is removed when its name, filename, description, or decoded
 //! bytes repeat a removed string of at least 4 characters. A form field loses
-//! `/V` and `/AP` when either one repeats such a string. The widget stays. The
-//! structure tree stays. Document `/Info` and catalog XMP are removed only
-//! when `scrub_metadata` is set. This is not an ISO 32000-1 legal redaction.
+//! `/V` and `/AP` when either one repeats such a string. The widget stays. An
+//! intersecting painted image loses the pixels inside the redaction rectangle.
+//! An image this process cannot decode, and an image inside a form or an
+//! appearance, stays. The structure tree stays. Document `/Info` and catalog
+//! XMP are removed only when `scrub_metadata` is set. This is not an ISO
+//! 32000-1 legal redaction.
 
 mod embedded;
 mod fields;
+mod pixels;
 pub mod patterns;
 pub mod sanitizer;
 pub mod surgery;

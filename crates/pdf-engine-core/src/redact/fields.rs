@@ -4,7 +4,7 @@
 //! and `/AP` are removed together when either one repeats a removed string of
 //! at least 4 characters. The option list, the default value, and the field
 //! name stay. An appearance whose filter cannot be decoded does not match on
-//! its own. An image inside that appearance is left for a later pass.
+//! its own. An image inside an appearance stays.
 
 use std::collections::HashSet;
 

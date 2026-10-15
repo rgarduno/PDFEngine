@@ -1,7 +1,10 @@
 //! Comprehensive unit tests for PDF Redaction and Content Sanitization.
 
 use super::*;
+use crate::cos::object::{ObjectId, PdfObject};
+use crate::cos::PdfDocument;
 use crate::fonts::FontMetrics;
+use crate::images::extract_page_images;
 use crate::layout::geometry::Rect;
 use crate::stream::parser::{build_ast_from_operations, serialize_ast, ContentStreamTokenizer};
 
@@ -940,4 +943,442 @@ fn redaction_keeps_an_appearance_whose_filter_cannot_be_decoded() {
     assert!(doc.objects.contains_key(&stream_id));
     assert!(doc.xref.entries.contains_key(&stream_id));
     assert!(bytes_contain(&doc.save_to_vec().unwrap(), EMAIL));
+}
+
+const RGB_4X2: &str = "/Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8";
+const GRAY_4X2: &str =
+    "/Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8";
+
+fn rgb_4x2_samples() -> Vec<u8> {
+    vec![
+        10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200,
+        210, 220, 230, 240,
+    ]
+}
+
+fn assemble_pdf(bodies: &[Vec<u8>]) -> Vec<u8> {
+    let mut pdf = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+    let mut offsets = Vec::with_capacity(bodies.len());
+    for (index, body) in bodies.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        pdf.extend_from_slice(body);
+        if !body.ends_with(b"\n") {
+            pdf.push(b'\n');
+        }
+        pdf.extend_from_slice(b"endobj\n");
+    }
+    let xref_offset = pdf.len();
+    let size = bodies.len() + 1;
+    pdf.extend_from_slice(format!("xref\n0 {size}\n").as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n")
+            .as_bytes(),
+    );
+    pdf
+}
+
+fn stream_body(dict_tail: &str, data: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    let gap = if dict_tail.is_empty() { "" } else { " " };
+    body.extend_from_slice(
+        format!("<< {dict_tail}{gap}/Length {} >>\nstream\n", data.len()).as_bytes(),
+    );
+    body.extend_from_slice(data);
+    body.extend_from_slice(b"endstream\n");
+    body
+}
+
+fn page_body(image_id: u32, contents_id: u32) -> Vec<u8> {
+    format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 {image_id} 0 R >> >> /Contents {contents_id} 0 R >>\n"
+    )
+    .into_bytes()
+}
+
+fn one_image_pdf(content: &str, image_dict: &str, samples: &[u8]) -> Vec<u8> {
+    assemble_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>\n".to_vec(),
+        b"<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\n".to_vec(),
+        page_body(5, 4),
+        stream_body("", content.as_bytes()),
+        stream_body(image_dict, samples),
+    ])
+}
+
+fn two_page_image_pdf(content: &str, image_dict: &str, samples: &[u8]) -> Vec<u8> {
+    assemble_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>\n".to_vec(),
+        b"<< /Type /Pages /Kids [ 3 0 R 4 0 R ] /Count 2 >>\n".to_vec(),
+        page_body(7, 5),
+        page_body(7, 6),
+        stream_body("", content.as_bytes()),
+        stream_body("", content.as_bytes()),
+        stream_body(image_dict, samples),
+    ])
+}
+
+fn image_paint(width: &str, height: &str, x: &str, y: &str) -> String {
+    format!("q\n{width} 0 0 {height} {x} {y} cm\n/Im1 Do\nQ\n")
+}
+
+fn slice_in(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+fn image_stream(doc: &mut PdfDocument, id: ObjectId) -> crate::cos::object::PdfStream {
+    match doc.get_object(id).unwrap() {
+        PdfObject::Stream(stream) => stream,
+        _ => panic!("image object is not a stream"),
+    }
+}
+
+fn decoded_samples(doc: &mut PdfDocument, id: ObjectId) -> Vec<u8> {
+    let stream = image_stream(doc, id);
+    let filter = stream
+        .dict
+        .get("Filter")
+        .and_then(|item| item.as_name())
+        .unwrap_or("")
+        .trim_start_matches('/')
+        .to_string();
+    crate::cos::decode_stream(&filter, None, &stream.content, &doc.limits).unwrap()
+}
+
+fn reload(doc: &mut PdfDocument) -> PdfDocument {
+    PdfDocument::load(&doc.save_to_vec().unwrap()).unwrap()
+}
+
+fn redact_box(doc: &mut PdfDocument, page: usize, rect: Rect) {
+    redact_page(
+        doc,
+        page,
+        &[RedactionRect::new(rect)],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+}
+
+fn assert_rgb_left_cleared(samples: &[u8]) {
+    assert_eq!(
+        samples,
+        &[
+            0, 0, 0, 0, 0, 0, 70, 80, 90, 100, 110, 120, 0, 0, 0, 0, 0, 0, 190, 200, 210, 220,
+            230, 240,
+        ]
+    );
+}
+
+#[test]
+fn redaction_destroys_image_samples_inside_a_rectangle() {
+    let raw = rgb_4x2_samples();
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        RGB_4X2,
+        &raw,
+    ))
+    .unwrap();
+    redact_box(&mut doc, 0, Rect::new(100.0, 200.0, 102.0, 202.0));
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!slice_in(&saved, &raw));
+    let mut doc = PdfDocument::load(&saved).unwrap();
+    let stream = image_stream(&mut doc, ObjectId::new(5));
+    assert_eq!(
+        stream.dict.get("Filter").and_then(|item| item.as_name()),
+        Some("FlateDecode")
+    );
+    assert_eq!(
+        stream.dict.get("ColorSpace").and_then(|item| item.as_name()),
+        Some("DeviceRGB")
+    );
+    assert_rgb_left_cleared(&decoded_samples(&mut doc, ObjectId::new(5)));
+    let page = doc.get_pages().unwrap()[0];
+    let images = extract_page_images(&mut doc, page).unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].resource_name, "Im1");
+    assert_eq!(images[0].object_id, ObjectId::new(5));
+    assert_eq!(images[0].width_px, 4);
+    assert_eq!(images[0].height_px, 2);
+}
+
+#[test]
+fn redaction_leaves_an_image_that_misses_the_rectangle() {
+    let raw = rgb_4x2_samples();
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        RGB_4X2,
+        &raw,
+    ))
+    .unwrap();
+    let before = image_stream(&mut doc, ObjectId::new(5)).content;
+    redact_box(&mut doc, 0, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(image_stream(&mut doc, ObjectId::new(5)).content, before);
+}
+
+#[test]
+fn redaction_leaves_image_samples_when_no_rectangle_is_applied() {
+    let raw = rgb_4x2_samples();
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        RGB_4X2,
+        &raw,
+    ))
+    .unwrap();
+    let before = image_stream(&mut doc, ObjectId::new(5)).content;
+    redact_document_pattern(
+        &mut doc,
+        &RedactionPattern::Email,
+        None,
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    redact_page(&mut doc, 0, &[], &RedactionConfig::default()).unwrap();
+    assert_eq!(image_stream(&mut doc, ObjectId::new(5)).content, before);
+}
+
+#[test]
+fn redaction_leaves_an_image_whose_filter_cannot_be_decoded() {
+    let marker = b"KEEP-LZW-IMAGE-BYTES";
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        &format!("{RGB_4X2} /Filter /LZWDecode"),
+        marker,
+    ))
+    .unwrap();
+    redact_box(&mut doc, 0, Rect::new(100.0, 200.0, 102.0, 202.0));
+    let stream = image_stream(&mut doc, ObjectId::new(5));
+    assert_eq!(stream.content, marker);
+    assert_eq!(
+        stream.dict.get("Filter").and_then(|item| item.as_name()),
+        Some("LZWDecode")
+    );
+}
+
+#[test]
+fn redaction_leaves_a_filter_array_and_a_non_identity_decode() {
+    let marker = b"KEEP-ARRAY-FILTER";
+    let mut array_doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        &format!("{RGB_4X2} /Filter [/FlateDecode]"),
+        marker,
+    ))
+    .unwrap();
+    redact_box(
+        &mut array_doc,
+        0,
+        Rect::new(100.0, 200.0, 102.0, 202.0),
+    );
+    let stream = image_stream(&mut array_doc, ObjectId::new(5));
+    assert_eq!(stream.content, marker);
+    assert!(matches!(stream.dict.get("Filter"), Some(PdfObject::Array(_))));
+
+    let raw = rgb_4x2_samples();
+    let mut decode_doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        &format!("{RGB_4X2} /Decode [1 0 1 0 1 0]"),
+        &raw,
+    ))
+    .unwrap();
+    redact_box(
+        &mut decode_doc,
+        0,
+        Rect::new(100.0, 200.0, 102.0, 202.0),
+    );
+    let stream = image_stream(&mut decode_doc, ObjectId::new(5));
+    assert_eq!(stream.content, raw);
+    assert!(stream.dict.contains_key("Decode"));
+}
+
+#[test]
+fn redaction_splits_a_shared_image_when_one_placement_meets_the_rectangle() {
+    let raw = rgb_4x2_samples();
+    let content = format!(
+        "{}{}",
+        image_paint("4", "2", "100", "200"),
+        image_paint("4", "2", "400", "200")
+    );
+    let mut doc = PdfDocument::load(&one_image_pdf(&content, RGB_4X2, &raw)).unwrap();
+    redact_box(&mut doc, 0, Rect::new(100.0, 200.0, 102.0, 202.0));
+    let page = doc.get_pages().unwrap()[0];
+    let images = extract_page_images(&mut doc, page).unwrap();
+    let left = images
+        .iter()
+        .find(|image| image.bbox.min_x < 150.0 && image.bbox.width() > 0.0)
+        .unwrap();
+    let right = images
+        .iter()
+        .find(|image| image.bbox.min_x > 300.0 && image.bbox.width() > 0.0)
+        .unwrap();
+    assert_ne!(left.object_id, ObjectId::new(5));
+    assert_eq!(right.object_id, ObjectId::new(5));
+    assert_eq!(image_stream(&mut doc, ObjectId::new(5)).content, raw);
+    assert_rgb_left_cleared(&decoded_samples(&mut doc, left.object_id));
+    assert!(doc.objects.contains_key(&ObjectId::new(5)));
+}
+
+#[test]
+fn redaction_drops_a_shared_image_when_every_placement_is_retargeted() {
+    let raw = rgb_4x2_samples();
+    let content = format!(
+        "{}{}",
+        image_paint("4", "2", "100", "200"),
+        image_paint("4", "2", "300", "200")
+    );
+    let mut doc = PdfDocument::load(&one_image_pdf(&content, RGB_4X2, &raw)).unwrap();
+    redact_box(&mut doc, 0, Rect::new(90.0, 190.0, 320.0, 210.0));
+    assert!(!doc.objects.contains_key(&ObjectId::new(5)));
+    assert!(!doc.xref.entries.contains_key(&ObjectId::new(5)));
+    let page = doc.get_pages().unwrap()[0];
+    let images = extract_page_images(&mut doc, page).unwrap();
+    assert!(images.iter().all(|image| image.object_id != ObjectId::new(5)));
+    let painted: Vec<_> = images
+        .iter()
+        .filter(|image| image.bbox.width() > 0.0 || image.bbox.height() > 0.0)
+        .collect();
+    assert_eq!(painted.len(), 2);
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!slice_in(&saved, &raw));
+}
+
+#[test]
+fn redaction_on_one_page_keeps_the_image_for_the_other_page() {
+    let raw = rgb_4x2_samples();
+    let mut doc = PdfDocument::load(&two_page_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        RGB_4X2,
+        &raw,
+    ))
+    .unwrap();
+    redact_document_rectangles(
+        &mut doc,
+        0,
+        &[Rect::new(90.0, 190.0, 110.0, 210.0)],
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    let pages = doc.get_pages().unwrap();
+    let first = extract_page_images(&mut doc, pages[0]).unwrap();
+    assert_eq!(first.len(), 1);
+    assert!(first.iter().all(|image| image.object_id != ObjectId::new(7)));
+    assert!(first[0].bbox.width() > 0.0);
+    assert!(decoded_samples(&mut doc, first[0].object_id)
+        .iter()
+        .all(|byte| *byte == 0));
+    let second = extract_page_images(&mut doc, pages[1]).unwrap();
+    assert!(second.iter().any(|image| image.object_id == ObjectId::new(7)));
+    assert_eq!(image_stream(&mut doc, ObjectId::new(7)).content, raw);
+}
+
+#[test]
+fn redaction_blacks_out_scan_pixels_under_invisible_text() {
+    let samples = vec![255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0];
+    let content = "\
+q
+93 0 0 15 70.5 698.5 cm
+/Im1 Do
+Q
+BT
+/F1 12 Tf
+3 Tr
+1 0 0 1 72 700 Tm
+(secret@corp.com) Tj
+ET
+";
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        content,
+        "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+        &samples,
+    ))
+    .unwrap();
+    redact_document_pattern(
+        &mut doc,
+        &RedactionPattern::Email,
+        None,
+        &RedactionConfig::default(),
+    )
+    .unwrap();
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!bytes_contain(&saved, "secret@corp.com"));
+    let mut doc = PdfDocument::load(&saved).unwrap();
+    let stream = image_stream(&mut doc, ObjectId::new(5));
+    assert_eq!(
+        stream.dict.get("Filter").and_then(|item| item.as_name()),
+        Some("FlateDecode")
+    );
+    assert_eq!(decoded_samples(&mut doc, ObjectId::new(5)), vec![0; 12]);
+}
+
+#[test]
+fn redaction_rewrites_a_jpeg_as_flate_and_keeps_gray_outside_samples() {
+    let mut pixels = vec![0u8; 8 * 8 * 3];
+    for iy in 0..8 {
+        for ix in 0..8 {
+            let offset = (iy * 8 + ix) * 3;
+            if ix == 0 {
+                pixels[offset] = 255;
+            } else if ix == 7 {
+                pixels[offset + 1] = 255;
+            } else {
+                pixels[offset + 2] = 40;
+            }
+        }
+    }
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    jpeg_encoder::Encoder::new(&mut cursor, 90)
+        .encode(&pixels, 8, 8, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let jpeg = cursor.into_inner();
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(jpeg.clone()));
+    let before = decoder.decode().unwrap();
+    let info = decoder.info().unwrap();
+    assert_eq!((info.width, info.height), (8, 8));
+    let right = before[21..24].to_vec();
+    assert_ne!(right, vec![0, 0, 0]);
+
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("8", "8", "100", "200"),
+        "/Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+        &jpeg,
+    ))
+    .unwrap();
+    redact_box(&mut doc, 0, Rect::new(100.0, 200.0, 102.0, 208.0));
+    let saved = doc.save_to_vec().unwrap();
+    assert!(!slice_in(&saved, &jpeg));
+    let mut doc = PdfDocument::load(&saved).unwrap();
+    let stream = image_stream(&mut doc, ObjectId::new(5));
+    assert_eq!(
+        stream.dict.get("Filter").and_then(|item| item.as_name()),
+        Some("FlateDecode")
+    );
+    assert_eq!(
+        stream.dict.get("ColorSpace").and_then(|item| item.as_name()),
+        Some("DeviceRGB")
+    );
+    let samples = decoded_samples(&mut doc, ObjectId::new(5));
+    assert_eq!(&samples[0..3], &[0, 0, 0]);
+    assert_eq!(&samples[21..24], right.as_slice());
+
+    let gray = vec![10u8, 40, 70, 100, 130, 160, 190, 220];
+    let mut doc = PdfDocument::load(&one_image_pdf(
+        &image_paint("4", "2", "100", "200"),
+        GRAY_4X2,
+        &gray,
+    ))
+    .unwrap();
+    redact_box(&mut doc, 0, Rect::new(100.0, 200.0, 102.0, 202.0));
+    let mut doc = reload(&mut doc);
+    let stream = image_stream(&mut doc, ObjectId::new(5));
+    assert_eq!(
+        stream.dict.get("ColorSpace").and_then(|item| item.as_name()),
+        Some("DeviceGray")
+    );
+    assert_eq!(
+        decoded_samples(&mut doc, ObjectId::new(5)),
+        vec![0, 0, 70, 100, 0, 0, 190, 220]
+    );
 }
