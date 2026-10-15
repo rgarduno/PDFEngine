@@ -277,11 +277,174 @@ fn escape_xml(input: &str) -> String {
     out
 }
 
+/// One PDF point, in twentieths of a point (Word twips).
+const PT_TO_TWIPS: f64 = 20.0;
+/// Smallest margin, in points. A tighter content edge is raised to this.
+const MARGIN_FLOOR_PT: f64 = 36.0;
+/// Largest margin, in points. Empty space beyond this stays in the body.
+const MARGIN_CAP_PT: f64 = 72.0;
+/// Vertical gaps at or below this are leading, not paragraph space-before.
+const SPACING_IGNORE_PT: f64 = 16.0;
+/// Space-before cap: 72 points.
+const SPACING_CAP_TWIPS: i64 = 1440;
+/// Word page size clamp: 7.2 pt through 14400 pt.
+const TWIP_MIN: i64 = 144;
+const TWIP_MAX: i64 = 288_000;
+/// Indent below this is treated as flush with the margin.
+const INDENT_EPSILON_PT: f64 = 0.5;
+
+/// Page size and margins derived from the displayed box and the content edges.
+struct PageFrame {
+    box_rect: Rect,
+    width_twips: i64,
+    height_twips: i64,
+    margin_left: i64,
+    margin_right: i64,
+    margin_top: i64,
+    margin_bottom: i64,
+    margin_left_pt: f64,
+    margin_top_pt: f64,
+    content_width_twips: i64,
+}
+
+fn points_to_page_twips(points: f64) -> i64 {
+    if !points.is_finite() {
+        return TWIP_MIN;
+    }
+    let twips = (points * PT_TO_TWIPS).round();
+    if !twips.is_finite() {
+        return TWIP_MIN;
+    }
+    (twips as i64).clamp(TWIP_MIN, TWIP_MAX)
+}
+
+fn margin_bounds(page_pt: f64) -> (f64, f64) {
+    let page_pt = if page_pt.is_finite() && page_pt > 0.0 {
+        page_pt
+    } else {
+        0.0
+    };
+    let cap = MARGIN_CAP_PT.min(page_pt / 4.0);
+    let cap = if cap.is_finite() && cap > 0.0 { cap } else { 0.0 };
+    (MARGIN_FLOOR_PT.min(cap), cap)
+}
+
+fn clamp_margin_pt(raw: f64, page_pt: f64) -> f64 {
+    let (floor, cap) = margin_bounds(page_pt);
+    if !raw.is_finite() {
+        return cap;
+    }
+    raw.clamp(floor, cap)
+}
+
+fn margin_twips(points: f64) -> i64 {
+    if !points.is_finite() || points <= 0.0 {
+        return 0;
+    }
+    let twips = (points * PT_TO_TWIPS).round();
+    if !twips.is_finite() || twips <= 0.0 {
+        return 0;
+    }
+    twips as i64
+}
+
+fn page_frame(box_rect: Rect, elements: &[PageElement]) -> PageFrame {
+    let page_w = box_rect.width();
+    let page_h = box_rect.height();
+    let (left_pt, right_pt, top_pt, bottom_pt) = if elements.is_empty() {
+        (
+            clamp_margin_pt(MARGIN_CAP_PT, page_w),
+            clamp_margin_pt(MARGIN_CAP_PT, page_w),
+            clamp_margin_pt(MARGIN_CAP_PT, page_h),
+            clamp_margin_pt(MARGIN_CAP_PT, page_h),
+        )
+    } else {
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for element in elements {
+            let bbox = element.bbox();
+            min_x = min_x.min(bbox.min_x);
+            max_x = max_x.max(bbox.max_x);
+            min_y = min_y.min(bbox.min_y);
+            max_y = max_y.max(bbox.max_y);
+        }
+        (
+            clamp_margin_pt(min_x - box_rect.min_x, page_w),
+            clamp_margin_pt(box_rect.max_x - max_x, page_w),
+            clamp_margin_pt(box_rect.max_y - max_y, page_h),
+            clamp_margin_pt(min_y - box_rect.min_y, page_h),
+        )
+    };
+
+    let width_twips = points_to_page_twips(page_w);
+    let height_twips = points_to_page_twips(page_h);
+    let margin_left = margin_twips(left_pt);
+    let margin_right = margin_twips(right_pt);
+    let margin_top = margin_twips(top_pt);
+    let margin_bottom = margin_twips(bottom_pt);
+    let content_width_twips = (width_twips - margin_left - margin_right).max(1);
+
+    PageFrame {
+        box_rect,
+        width_twips,
+        height_twips,
+        margin_left,
+        margin_right,
+        margin_top,
+        margin_bottom,
+        margin_left_pt: left_pt,
+        margin_top_pt: top_pt,
+        content_width_twips,
+    }
+}
+
+fn spacing_before_twips(page: Rect, frame: &PageFrame, previous_min_y: Option<f64>, current: Rect) -> i64 {
+    let gap = match previous_min_y {
+        None => page.max_y - current.max_y - frame.margin_top_pt,
+        Some(previous) => previous - current.max_y,
+    };
+    if !gap.is_finite() || gap <= SPACING_IGNORE_PT {
+        return 0;
+    }
+    let twips = (gap * PT_TO_TWIPS).round();
+    if !twips.is_finite() || twips <= 0.0 {
+        return 0;
+    }
+    (twips as i64).min(SPACING_CAP_TWIPS)
+}
+
+fn section_properties_xml(frame: &PageFrame, next_page: bool) -> String {
+    let break_type = if next_page {
+        "<w:type w:val=\"nextPage\"/>"
+    } else {
+        ""
+    };
+    let header = (frame.margin_top / 2).min(720).max(0);
+    let footer = (frame.margin_bottom / 2).min(720).max(0);
+    format!(
+        "<w:sectPr>{break_type}\
+            <w:pgSz w:w=\"{w}\" w:h=\"{h}\"/>\
+            <w:pgMar w:top=\"{top}\" w:right=\"{right}\" w:bottom=\"{bottom}\" w:left=\"{left}\" w:header=\"{header}\" w:footer=\"{footer}\" w:gutter=\"0\"/>\
+        </w:sectPr>",
+        w = frame.width_twips,
+        h = frame.height_twips,
+        top = frame.margin_top,
+        right = frame.margin_right,
+        bottom = frame.margin_bottom,
+        left = frame.margin_left,
+        header = header,
+        footer = footer,
+    )
+}
+
 /// Exports the entire PDF document into a native Microsoft Word OpenXML (`.docx`) binary buffer.
 ///
-/// Generates a self-contained PKZIP archive conforming to ECMA-376 / ISO/IEC 29500
-/// WordprocessingML with styled paragraphs, run-level font families/sizes/weights,
-/// and bordered grid tables.
+/// Each PDF page becomes one Word section. The section size is the CropBox, or the
+/// MediaBox when CropBox is absent. Margins are the gap to the content, clamped to
+/// 36–72 points. A paragraph that starts further right is indented. This remains a
+/// reconstruction: there are no floating text boxes and images are not embedded.
 pub fn export_document_docx(doc: &mut PdfDocument) -> PdfResult<Vec<u8>> {
     doc.require_copy()?;
     let metadata = extract_metadata(doc).unwrap_or_default();
@@ -289,31 +452,43 @@ pub fn export_document_docx(doc: &mut PdfDocument) -> PdfResult<Vec<u8>> {
 
     let mut body_xml = String::new();
 
-    for page_idx in 1..=pages.len() {
-        if page_idx > 1 {
-            body_xml.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>");
-        }
-
-        let (elements, fonts) = extract_page_elements(doc, page_idx)?;
-        for element in elements {
-            match element {
-                PageElement::Paragraph(para) => {
-                    append_paragraph_xml(&mut body_xml, &para, &fonts);
-                }
-                PageElement::Table(table) => {
-                    append_table_xml(&mut body_xml, &table);
-                }
-            }
-        }
+    if pages.is_empty() {
+        let frame = page_frame(Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        body_xml.push_str(&section_properties_xml(&frame, false));
     }
 
-    // Section properties (US Letter 8.5 x 11 in = 12240 x 15840 twips, 1 inch = 1440 twips margins)
-    body_xml.push_str(
-        "<w:sectPr>\
-            <w:pgSz w:w=\"12240\" w:h=\"15840\"/>\
-            <w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>\
-        </w:sectPr>",
-    );
+    for page_idx in 1..=pages.len() {
+        let boxes = super::page_boxes(doc, page_idx - 1)?;
+        let displayed = boxes.crop.unwrap_or(boxes.media);
+        let (elements, fonts) = extract_page_elements(doc, page_idx)?;
+        let frame = page_frame(displayed, &elements);
+        let mut previous_min_y = None;
+
+        for element in &elements {
+            let before = spacing_before_twips(displayed, &frame, previous_min_y, element.bbox());
+            match element {
+                PageElement::Paragraph(para) => {
+                    append_paragraph_xml(&mut body_xml, para, &fonts, &frame, before);
+                }
+                PageElement::Table(table) => {
+                    if before > 0 {
+                        append_spacer_paragraph(&mut body_xml, before);
+                    }
+                    append_table_xml(&mut body_xml, table, &frame);
+                }
+            }
+            previous_min_y = Some(element.bbox().min_y);
+        }
+
+        let last = page_idx == pages.len();
+        if last {
+            body_xml.push_str(&section_properties_xml(&frame, false));
+        } else {
+            body_xml.push_str("<w:p><w:pPr>");
+            body_xml.push_str(&section_properties_xml(&frame, true));
+            body_xml.push_str("</w:pPr></w:p>");
+        }
+    }
 
     let document_xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
@@ -353,10 +528,30 @@ pub fn export_document_docx(doc: &mut PdfDocument) -> PdfResult<Vec<u8>> {
     Ok(zip.finish())
 }
 
+fn append_spacer_paragraph(body_xml: &mut String, before_twips: i64) {
+    body_xml.push_str(&format!(
+        "<w:p><w:pPr><w:spacing w:before=\"{before_twips}\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr></w:p>"
+    ));
+}
+
+fn left_indent_twips(frame: &PageFrame, min_x: f64) -> i64 {
+    let raw = min_x - frame.box_rect.min_x - frame.margin_left_pt;
+    if !raw.is_finite() || raw <= INDENT_EPSILON_PT {
+        return 0;
+    }
+    let twips = (raw * PT_TO_TWIPS).round();
+    if !twips.is_finite() || twips <= 0.0 {
+        return 0;
+    }
+    (twips as i64).clamp(0, frame.content_width_twips)
+}
+
 fn append_paragraph_xml(
     body_xml: &mut String,
     para: &ParagraphBlock,
     fonts: &BTreeMap<String, ResolvedFont>,
+    frame: &PageFrame,
+    before_twips: i64,
 ) {
     let size = para.rendered_size();
     let style_id = if size >= 20.0 {
@@ -376,13 +571,23 @@ fn append_paragraph_xml(
         TextAlignment::Justified => "both",
     };
 
+    let after_twips = if before_twips > 0 { 0 } else { 120 };
+    let indent = match para.alignment {
+        TextAlignment::Left | TextAlignment::Justified => left_indent_twips(frame, para.bbox.min_x),
+        TextAlignment::Center | TextAlignment::Right => 0,
+    };
+
     body_xml.push_str("<w:p><w:pPr>");
     if let Some(st) = style_id {
         body_xml.push_str(&format!("<w:pStyle w:val=\"{st}\"/>"));
     }
     body_xml.push_str(&format!(
-        "<w:spacing w:after=\"120\" w:line=\"240\" w:lineRule=\"auto\"/><w:jc w:val=\"{jc}\"/></w:pPr>"
+        "<w:spacing w:before=\"{before_twips}\" w:after=\"{after_twips}\" w:line=\"240\" w:lineRule=\"auto\"/>"
     ));
+    if indent > 0 {
+        body_xml.push_str(&format!("<w:ind w:left=\"{indent}\"/>"));
+    }
+    body_xml.push_str(&format!("<w:jc w:val=\"{jc}\"/></w:pPr>"));
 
     for (line_idx, line) in para.lines.iter().enumerate() {
         if line_idx > 0 {
@@ -427,15 +632,44 @@ fn append_paragraph_xml(
     body_xml.push_str("</w:p>");
 }
 
-fn append_table_xml(body_xml: &mut String, table: &DetectedTable) {
-    let col_count = table.col_count.max(1);
-    let col_width_twips = 9360 / col_count;
+fn column_widths(total: i64, col_count: usize) -> Vec<i64> {
+    let count = col_count.max(1);
+    let total = total.max(count as i64);
+    let base = total / count as i64;
+    let mut widths = vec![base; count];
+    if let Some(last) = widths.last_mut() {
+        *last = total - base * (count as i64 - 1);
+    }
+    widths
+}
 
-    body_xml.push_str(
+fn append_table_xml(body_xml: &mut String, table: &DetectedTable, frame: &PageFrame) {
+    let col_count = table.col_count.max(1);
+    let raw_width = if table.bbox.width().is_finite() {
+        (table.bbox.width() * PT_TO_TWIPS).round()
+    } else {
+        0.0
+    };
+    let raw_width = if raw_width.is_finite() && raw_width > 0.0 {
+        raw_width as i64
+    } else {
+        col_count as i64
+    };
+    let table_twips = raw_width.clamp(col_count as i64, frame.content_width_twips.max(col_count as i64));
+    let widths = column_widths(table_twips, col_count);
+    let indent = left_indent_twips(frame, table.bbox.min_x);
+    let indent_xml = if indent > 0 {
+        format!("<w:tblInd w:w=\"{indent}\" w:type=\"dxa\"/>")
+    } else {
+        String::new()
+    };
+
+    body_xml.push_str(&format!(
         "<w:tbl>\
             <w:tblPr>\
                 <w:tblStyle w:val=\"TableGrid\"/>\
-                <w:tblW w:w=\"5000\" w:type=\"pct\"/>\
+                <w:tblW w:w=\"{table_twips}\" w:type=\"dxa\"/>\
+                {indent_xml}\
                 <w:tblBorders>\
                     <w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BFBFBF\"/>\
                     <w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BFBFBF\"/>\
@@ -444,12 +678,12 @@ fn append_table_xml(body_xml: &mut String, table: &DetectedTable) {
                     <w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BFBFBF\"/>\
                     <w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BFBFBF\"/>\
                 </w:tblBorders>\
-            </w:tblPr>",
-    );
+            </w:tblPr>"
+    ));
 
     body_xml.push_str("<w:tblGrid>");
-    for _ in 0..col_count {
-        body_xml.push_str(&format!("<w:gridCol w:w=\"{col_width_twips}\"/>"));
+    for width in &widths {
+        body_xml.push_str(&format!("<w:gridCol w:w=\"{width}\"/>"));
     }
     body_xml.push_str("</w:tblGrid>");
 
@@ -462,10 +696,11 @@ fn append_table_xml(body_xml: &mut String, table: &DetectedTable) {
                 .map(|s| s.as_str())
                 .unwrap_or("");
             let escaped = escape_xml(text);
+            let width = widths[col_idx];
             body_xml.push_str(&format!(
                 "<w:tc>\
                     <w:tcPr>\
-                        <w:tcW w:w=\"{col_width_twips}\" w:type=\"dxa\"/>\
+                        <w:tcW w:w=\"{width}\" w:type=\"dxa\"/>\
                         <w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"F2F2F2\"/>\
                     </w:tcPr>\
                     <w:p>\
@@ -485,10 +720,11 @@ fn append_table_xml(body_xml: &mut String, table: &DetectedTable) {
         for col_idx in 0..col_count {
             let text = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
             let escaped = escape_xml(text);
+            let width = widths[col_idx];
             body_xml.push_str(&format!(
                 "<w:tc>\
                     <w:tcPr>\
-                        <w:tcW w:w=\"{col_width_twips}\" w:type=\"dxa\"/>\
+                        <w:tcW w:w=\"{width}\" w:type=\"dxa\"/>\
                     </w:tcPr>\
                     <w:p>\
                         <w:r>\
@@ -871,5 +1107,218 @@ mod tests {
         assert!(archive_str.contains("_rels/.rels"));
         assert!(archive_str.contains("word/document.xml"));
         assert!(archive_str.contains("word/styles.xml"));
+    }
+
+    struct PageSpec {
+        width: i64,
+        height: i64,
+        crop: Option<(i64, i64, i64, i64)>,
+        stream: &'static [u8],
+    }
+
+    fn document_with_pages(specs: &[PageSpec]) -> PdfDocument {
+        let mut doc = PdfDocument::empty();
+
+        let f1_id = ObjectId::new(10);
+        let mut font_f1 = PdfDictionary::new();
+        font_f1.insert("Type", PdfObject::Name(PdfName::new("Font")));
+        font_f1.insert("Subtype", PdfObject::Name(PdfName::new("Type1")));
+        font_f1.insert("BaseFont", PdfObject::Name(PdfName::new("Helvetica")));
+        doc.set_object(f1_id, PdfObject::Dictionary(font_f1));
+
+        let mut fonts_dict = PdfDictionary::new();
+        fonts_dict.insert("F1", PdfObject::Reference(f1_id));
+        let mut resources = PdfDictionary::new();
+        resources.insert("Font", PdfObject::Dictionary(fonts_dict));
+
+        let mut kids = Vec::new();
+        for (index, spec) in specs.iter().enumerate() {
+            let content_id = ObjectId::new(20 + index as u32 * 2);
+            let page_id = ObjectId::new(21 + index as u32 * 2);
+
+            let mut stream_dict = PdfDictionary::new();
+            stream_dict.insert("Length", PdfObject::Integer(spec.stream.len() as i64));
+            doc.set_object(
+                content_id,
+                PdfObject::Stream(PdfStream::new(stream_dict, spec.stream.to_vec())),
+            );
+
+            let mut page_dict = PdfDictionary::new();
+            page_dict.insert("Type", PdfObject::Name(PdfName::new("Page")));
+            page_dict.insert("Parent", PdfObject::Reference(ObjectId::new(2)));
+            page_dict.insert(
+                "MediaBox",
+                PdfObject::Array(vec![
+                    PdfObject::Integer(0),
+                    PdfObject::Integer(0),
+                    PdfObject::Integer(spec.width),
+                    PdfObject::Integer(spec.height),
+                ]),
+            );
+            if let Some((x0, y0, x1, y1)) = spec.crop {
+                page_dict.insert(
+                    "CropBox",
+                    PdfObject::Array(vec![
+                        PdfObject::Integer(x0),
+                        PdfObject::Integer(y0),
+                        PdfObject::Integer(x1),
+                        PdfObject::Integer(y1),
+                    ]),
+                );
+            }
+            page_dict.insert("Resources", PdfObject::Dictionary(resources.clone()));
+            page_dict.insert("Contents", PdfObject::Reference(content_id));
+            doc.set_object(page_id, PdfObject::Dictionary(page_dict));
+            kids.push(PdfObject::Reference(page_id));
+        }
+
+        if let Some(pages_dict) = doc
+            .objects
+            .get_mut(&ObjectId::new(2))
+            .and_then(|object| object.as_dict_mut())
+        {
+            pages_dict.insert("Kids", PdfObject::Array(kids));
+            pages_dict.insert("Count", PdfObject::Integer(specs.len() as i64));
+        }
+
+        doc
+    }
+
+    fn inflate_docx_part(archive: &[u8], name: &str) -> String {
+        use std::io::Read;
+
+        let mut offset = 0;
+        while offset + 30 <= archive.len() && &archive[offset..offset + 4] == b"PK\x03\x04" {
+            let method = u16::from_le_bytes([archive[offset + 8], archive[offset + 9]]);
+            let compressed_size =
+                u32::from_le_bytes(archive[offset + 18..offset + 22].try_into().unwrap()) as usize;
+            let name_len =
+                u16::from_le_bytes([archive[offset + 26], archive[offset + 27]]) as usize;
+            let extra_len =
+                u16::from_le_bytes([archive[offset + 28], archive[offset + 29]]) as usize;
+            let name_start = offset + 30;
+            let name_end = name_start + name_len;
+            let data_start = name_end + extra_len;
+            let data_end = data_start + compressed_size;
+            let entry_name = std::str::from_utf8(&archive[name_start..name_end]).unwrap_or("");
+            if entry_name == name {
+                assert_eq!(method, 8, "document.xml is stored deflated");
+                let mut decoder =
+                    flate2::read::DeflateDecoder::new(&archive[data_start..data_end]);
+                let mut xml = String::new();
+                decoder
+                    .read_to_string(&mut xml)
+                    .expect("deflated part should inflate");
+                return xml;
+            }
+            offset = data_end;
+        }
+        panic!("part {name} was not in the docx archive");
+    }
+
+    #[test]
+    fn docx_section_uses_the_page_box_and_indents_a_paragraph_further_right() {
+        let stream =
+            b"BT /F1 12 Tf 40 460 Td (Left edge note.) Tj ET BT /F1 12 Tf 180 400 Td (Indented body.) Tj ET";
+        let mut doc = document_with_pages(&[PageSpec {
+            width: 400,
+            height: 500,
+            crop: None,
+            stream,
+        }]);
+        let xml = inflate_docx_part(
+            &export_document_docx(&mut doc).expect("docx"),
+            "word/document.xml",
+        );
+
+        assert!(
+            xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"),
+            "page box should be 400 by 500 points, got:\n{xml}"
+        );
+        assert!(
+            xml.contains("w:left=\"800\""),
+            "left margin should be the 40 pt content edge, got:\n{xml}"
+        );
+        assert!(
+            xml.contains("<w:ind w:left=\"2800\"/>"),
+            "the paragraph at x=180 should keep the leftover as a left indent, got:\n{xml}"
+        );
+        assert!(
+            !xml.contains("<w:br w:type=\"page\"/>"),
+            "a single page does not add a page break"
+        );
+    }
+
+    #[test]
+    fn docx_letter_text_at_one_inch_keeps_the_letter_page_and_that_margin() {
+        let stream = b"BT /F1 12 Tf 72 720 Td (Inch mark.) Tj ET";
+        let mut doc = document_with_pages(&[PageSpec {
+            width: 612,
+            height: 792,
+            crop: None,
+            stream,
+        }]);
+        let xml = inflate_docx_part(
+            &export_document_docx(&mut doc).expect("docx"),
+            "word/document.xml",
+        );
+
+        assert!(xml.contains("<w:pgSz w:w=\"12240\" w:h=\"15840\"/>"), "{xml}");
+        assert_eq!(
+            xml.matches("w:left=\"1440\"").count(),
+            1,
+            "the one-inch edge is the margin, not an indent, got:\n{xml}"
+        );
+        assert!(!xml.contains("<w:ind "), "{xml}");
+    }
+
+    #[test]
+    fn docx_page_size_follows_the_crop_box() {
+        let mut doc = document_with_pages(&[PageSpec {
+            width: 612,
+            height: 792,
+            crop: Some((0, 0, 400, 500)),
+            stream: b"",
+        }]);
+        let xml = inflate_docx_part(
+            &export_document_docx(&mut doc).expect("docx"),
+            "word/document.xml",
+        );
+
+        assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"), "{xml}");
+        assert!(!xml.contains("12240"), "{xml}");
+        assert!(!xml.contains("15840"), "{xml}");
+    }
+
+    #[test]
+    fn docx_pages_of_different_sizes_are_separate_sections() {
+        let stream = b"BT /F1 12 Tf 40 80 Td (Page line.) Tj ET";
+        let mut doc = document_with_pages(&[
+            PageSpec {
+                width: 400,
+                height: 500,
+                crop: None,
+                stream,
+            },
+            PageSpec {
+                width: 200,
+                height: 300,
+                crop: None,
+                stream,
+            },
+        ]);
+        let xml = inflate_docx_part(
+            &export_document_docx(&mut doc).expect("docx"),
+            "word/document.xml",
+        );
+
+        assert_eq!(xml.matches("<w:sectPr>").count(), 2, "{xml}");
+        assert_eq!(xml.matches("w:val=\"nextPage\"").count(), 1, "{xml}");
+        assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"), "{xml}");
+        assert!(xml.contains("<w:pgSz w:w=\"4000\" w:h=\"6000\"/>"), "{xml}");
+        assert!(
+            !xml.contains("<w:br w:type=\"page\"/>"),
+            "the section break is the page break, got:\n{xml}"
+        );
     }
 }

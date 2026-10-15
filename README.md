@@ -21,7 +21,7 @@ Most commercial PDF editors and open-source libraries operate under one of two d
 PDFEngine operates directly on the native **ISO 32000 Content Stream Abstract Syntax Tree (AST)**:
 * **Surgical AST Mutation**: Only target text operator nodes (`BT ... ET`) are rewritten. 100% of non-edited vector paths, clipping boundaries, images (`Do`), shading patterns, and graphics state stacks (`q ... Q`) remain bit-for-bit identical.
 * **Semantic Layout Hierarchy**: Visual glyph runs are deterministically clustered into **Spans $\to$ Text Lines $\to$ Paragraph Blocks** with automatic detection of baseline, leading, and alignment (left, center, right, justified).
-* **Typographic-Safe Reflow**: Line breaks and horizontal advances are computed using the embedded font's actual `/Widths` and `hmtx` tables, handling font subset limitations, ligature decomposition (`fi`, `fl`), and ghost space inference.
+* **Typographic-Safe Reflow**: Line breaks and horizontal advances use the embedded font's `/Widths` and `hmtx` when those tables exist. A missing character does not add contours to the subset. The paragraph moves to Helvetica, Times, or Courier, or the replacement writes nothing. Ligatures are a Unicode string map (`U+FB00`–`U+FB06`). Editing does not call it and does not read GSUB.
 
 ---
 
@@ -73,8 +73,8 @@ PDFEngine is decoupled into three dedicated repositories for maximum stability, 
 │ 3. Typographic & Font Engine                                               │
 │    - TrueType / OpenType binary table reader (cmap, hmtx, head, glyf)       │
 │    - Bidirectional /ToUnicode CMap decoder and CID reverse encoder         │
-│    - Typographic ligature preservation and ghost space metric inference    │
-│    - Metric-compatible glyph injection for subsetted font extensions        │
+│    - Ligatures are a Unicode map. Editing does not call it or read GSUB     │
+│    - A missing character does not add contours to glyf or CFF               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 4. Semantic Layout & Surgical Reflow Engine                                 │
 │    - Spatial clustering: Glyphs -> Spans -> TextLines -> ParagraphBlocks    │
@@ -111,17 +111,20 @@ PDFEngine is decoupled into three dedicated repositories for maximum stability, 
 │    - Embedded image watermarks (PNG/JPEG) with background/foreground depth  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 10. Glyph excision and PII scan (not a legal redaction)                     │
-│    - Physical glyph & stream excision from AST (no visual-only hiding)      │
-│    - Zero layout shift: coordinates of non-redacted text preserved via Tm   │
-│    - Automated PII scanning: Email, Phone, RFC, CURP, Credit Card (Luhn)    │
-│    - Opaque blackout vector patches (`re f`) with centered overlay labels   │
-│    - Interactive annotation pruning (/Link, /Highlight leaks prevented)    │
-│    - Metadata /Info and XMP are removed only when scrub_metadata is set     │
+│    - Glyphs go. A match of 4 characters also clears the copies below        │
+│    - Embedded file, form /V and /AP, structure /ActualText /Alt /E /T       │
+│    - Image samples inside the rectangle, including invisible text           │
+│    - 8-bit gray or RGB, one filter, JPEG rewritten as Flate                 │
+│    - One page match clears that copy in the whole document                  │
+│    - PII scan: email, phone, RFC, CURP, SSN, and a Luhn credit card         │
+│    - /Info and XMP are removed only when scrub_metadata is set              │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 11. PDF Security, Permissions & Signatures (ISO 32000 §7.6 and §12.8)       │
-│    - Rev 4 security handler: AES-128 CBC, SHA-256, and MD5                  │
-│    - Standard Security Handler Rev 4 (AES-128) with /O, /U and /Perms       │
-│    - /P blocks print, copy, and edit after a user password opens the file   │
+│    - Rev 4 AES-128, Rev 5 AES-256, and Rev 6 AES-256                        │
+│    - Owner is unrestricted. User password applies print, copy, edit         │
+│    - Bit 12 is stored and is not a second raster                            │
+│    - Bit 10 is not a separate extract path                                  │
+│    - Saving a decrypted file drops /P                                       │
 │    - SHA-256 attestation when no certificate is supplied                    │
 │    - Detached PKCS#7 (RSA-SHA256 or P-256) with PEM or PKCS#12              │
 │    - Optional RFC 3161 timestamp. The check does not decide trust.          │
@@ -185,11 +188,11 @@ PDFEngine/
     │   ├── src/
     │   │   ├── lib.rs          # Public crate API and layer re-exports
     │   │   ├── error.rs        # Strongly-typed PdfError enum (thiserror)
-    │   │   ├── crypto/         # AES-128 CBC, SHA-256, and MD5 primitives
-    │   │   ├── security/       # Rev 4 handler, SHA-256 attestation, and detached PKCS#7
+    │   │   ├── crypto/         # AES-128, AES-256, SHA-256, and MD5 primitives
+    │   │   ├── security/       # Rev 4, Rev 5, and Rev 6 handlers, SHA-256, PKCS#7
     │   │   ├── cos/            # Object model, lexer, parser, filters, xref, writer
     │   │   ├── stream/         # Content Stream AST & graphics state evaluator
-    │   │   ├── fonts/          # TrueType/CFF parsing, ToUnicode, glyph injection
+    │   │   ├── fonts/          # TrueType/CFF parsing and ToUnicode; no glyf injection
     │   │   ├── layout/         # Semantic clustering & paragraph reconstruction
     │   │   ├── images/         # XObject Image extraction, JPEG/PNG codecs & surgical replacement
     │   │   ├── forms/          # AcroForms reader, field filler & surgical flattening
@@ -216,6 +219,8 @@ A text box appends content-stream text inside a rectangle. It is not a movable a
 Find-and-replace rewrites reconstructed paragraph text. A subset font is kept only when every character of the new paragraph, including a space the line break needs, round-trips to a byte that has a real width. Otherwise that paragraph moves to Helvetica, Times, or Courier, and bold or italic follows the old face. The report counts how many paragraphs moved. A character those faces cannot draw aborts the replace and writes nothing. This does not add glyphs to the embedded subset. The raster still paints a standard face as 5 by 7 glyphs. A hit cap can stop inside a paragraph. A newline is allowed. An empty replacement deletes the match. The whole paragraph is rewritten in the first span's face, and color is not preserved.
 
 A fill-and-sign mark appends typed Times-Italic text, a drawn path clipped to the rectangle, or one JPEG or PNG stretched into the rectangle. Initials are the same mark with at most 8 characters. A signature name is at most 80. A newline is not allowed. A character the standard faces cannot draw aborts and writes nothing. A drawn point outside the rectangle aborts and writes nothing. This is not an ink annotation, not a form field, and not a PKCS#7 signature. A later full save still rewrites the file. The raster still paints Times-Italic as 5 by 7 glyphs. The audit name and the image bytes are an API concern. The engine report does not copy the text or the image.
+
+`export_document_docx` writes one Word section per page. The size is the CropBox, or the MediaBox when CropBox is absent. One point is 20 twips. Each margin is the gap to the content, from 36 to 72 points, and at most a quarter of that side. A paragraph that starts further right gets a left indent. Space before is the vertical gap to the block above, capped at 72 points, and the first block subtracts the top margin. A table uses the width of its box. A document with no pages still emits one US Letter section. This remains a reconstruction: there are no floating text boxes, images are not embedded, and it is not Word's page design. Markdown export is unchanged. Editing a PDF still does not rebuild that PDF from the DOCX.
 
 ---
 
@@ -565,7 +570,7 @@ maturin develop --manifest-path crates/pdf-engine-python/Cargo.toml
 - [x] **Phase 11: Annotations, Interactive Links & Vector Rubber Stamps** (Markup annotations, clickable web URIs, internal GoTo navigation, vector rubber stamps with rubrics, surgical flattening)
 - [x] **Phase 12: Dynamic Pagination, Bates Numbering & Semitransparent Watermarks** (Headers & footers with `{page}` / `{total}`, Bates numbering, rotated text watermarks, PNG/JPEG logo watermarks, background/foreground depth)
 - [x] **Phase 13: Glyph excision, PII scan, and optional metadata scrub** (Physical glyph and stream excision, zero layout shift, PII regex scanning [Email, Phone, RFC, CURP, Credit Card Luhn, SSN], opaque blackout patches, annotation pruning, `/Info` and XMP scrub only when requested, PyO3 bindings, FastAPI endpoints and Web Studio)
-- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, `/P` blocks print, copy, and edit after a user password opens the file, SHA-256 /ByteRange integrity attestation when no certificate is supplied, detached PKCS#7 with RSA-SHA256 or P-256 ECDSA when PEM or PKCS#12 is supplied, optional RFC 3161 timestamp. Verification checks the certificate inside the CMS and does not decide trust.)
+- [x] **Phase 14: PDF Security, Permissions & Digital Signatures (ISO 32000 §7.6 & §12.8)** (Standard Security Handler Rev 4 AES-128, Rev 5 AES-256, and Rev 6 AES-256, `/P` blocks print, copy, and edit after a user password opens the file, SHA-256 /ByteRange integrity attestation when no certificate is supplied, detached PKCS#7 with RSA-SHA256 or P-256 ECDSA when PEM or PKCS#12 is supplied, optional RFC 3161 timestamp. Verification checks the certificate inside the CMS and does not decide trust.)
 - [x] **Phase 15: Structured Table Reconstruction & Semantic Extraction (ISO 32000 §14.8.4)** (Vector lattice grid solver, borderless fallback, multi-format CSV/JSON/MD/HTML exporters)
 - [x] **Phase 16: Lossless PDF Optimization & Stream Compression (ISO 32000-1 §7.5.7)** (Object streams `/ObjStm`, Flate recompression, stream deduplication, unused object pruning)
 - [x] **Phase 17: Multi-Page Document Support in Web Studio** (Thumbnail sidebar carousel, visual page reordering, per-page rotation)
