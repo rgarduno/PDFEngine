@@ -198,7 +198,7 @@ PDFEngine/
     │   │   ├── watermark/      # Dynamic Bates pagination, headers/footers & semitransparent watermarks
     │   │   ├── redact/         # Glyph excision and PII scan; metadata scrub is optional
     │   │   ├── tables/         # ISO 32000-1 §14.8.4 table detection & multi-format export
-    │   │   └── editor/         # Surgical stream mutator, reflow, standard-14 style, and content-stream text boxes
+    │   │   └── editor/         # Surgical stream mutator, reflow, standard-14 style, content-stream text boxes, and fill-and-sign marks
     │   └── tests/              # Conformance and integration test suite
     └── pdf-engine-python/      # High-performance PyO3 native Python extension
         ├── Cargo.toml
@@ -214,6 +214,8 @@ A styled paragraph edit can keep the current font or switch to a standard 14 fac
 A text box appends content-stream text inside a rectangle. It is not a movable annotation, not a `/FreeText` annotation, and not a sticky note. The face is a standard 14 font. The defaults are Helvetica, 12 points, black, left aligned, and a leading of 1.2 times the size. Lines whose baseline falls below the rectangle are omitted. This raster paints that standard face with the built-in 5 by 7 glyphs, because the face has no embedded outlines. A real viewer uses the standard face.
 
 Find-and-replace rewrites reconstructed paragraph text. A subset font is kept only when every character of the new paragraph, including a space the line break needs, round-trips to a byte that has a real width. Otherwise that paragraph moves to Helvetica, Times, or Courier, and bold or italic follows the old face. The report counts how many paragraphs moved. A character those faces cannot draw aborts the replace and writes nothing. This does not add glyphs to the embedded subset. The raster still paints a standard face as 5 by 7 glyphs. A hit cap can stop inside a paragraph. A newline is allowed. An empty replacement deletes the match. The whole paragraph is rewritten in the first span's face, and color is not preserved.
+
+A fill-and-sign mark appends typed Times-Italic text, a drawn path clipped to the rectangle, or one JPEG or PNG stretched into the rectangle. Initials are the same mark with at most 8 characters. A signature name is at most 80. A newline is not allowed. A character the standard faces cannot draw aborts and writes nothing. A drawn point outside the rectangle aborts and writes nothing. This is not an ink annotation, not a form field, and not a PKCS#7 signature. A later full save still rewrites the file. The raster still paints Times-Italic as 5 by 7 glyphs. The audit name and the image bytes are an API concern. The engine report does not copy the text or the image.
 
 ---
 
@@ -493,6 +495,7 @@ preflight, or an acceptance by a court.
 | `POST` | `/api/documents/{id}/pages/{p}/edit/{para_id}` | Surgical in-place paragraph text replacement with auto-reflow. Optional font, size, bold, italic, color, alignment, and leading. A named face is a standard 14 font. |
 | `POST` | `/api/documents/{id}/pages/{p}/text-box` | Append content-stream text inside a rectangle. The face is a standard 14 font. This is not a `/FreeText` annotation. |
 | `POST` | `/api/documents/{id}/replace` | Replace reconstructed paragraph text. A subset stays only when its widths cover the new text. Otherwise the paragraph moves to a standard 14 face, or the replace writes nothing. |
+| `POST` | `/api/documents/{id}/pages/{n}/fill-sign` | Append a typed, drawn, or image signature or initials as page content. Not an ink annotation and not a PKCS#7 signature. |
 | `GET` | `/api/documents/{id}/forms` | List all interactive AcroForm fields, types, options, and current values. |
 | `POST` | `/api/documents/{id}/pages/{p}/forms` | Create and position a new interactive form field (Text, Checkbox, Choice, Signature) on page. |
 | `DELETE` | `/api/documents/{id}/forms/{name}` | Delete an interactive form field and its associated widget annotations. |

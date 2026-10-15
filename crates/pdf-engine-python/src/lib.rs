@@ -11,7 +11,9 @@ use std::fs;
 
 use pdf_engine_core::annots::{AnnotationSubtype, LinkAction, ShapeKind, ShapeStyle, StampType};
 use pdf_engine_core::cos::{ObjectId, PdfDocument, PdfObject, PdfStream};
-use pdf_engine_core::editor::{ParagraphStyle, SurgicalEditor, TextBoxSpec};
+use pdf_engine_core::editor::{
+    FillSignKind, FillSignMark, FillSignSpec, ParagraphStyle, SurgicalEditor, TextBoxSpec,
+};
 use pdf_engine_core::fonts::{resolve_page_fonts, FontMetrics, ResolvedFont};
 use pdf_engine_core::layout::geometry::Rect;
 use pdf_engine_core::layout::{LayoutReconstructor, ParagraphBlock, TextAlignment};
@@ -1797,6 +1799,92 @@ impl PyPdfDocument {
         dict.set_item("font_resource", &appended.font_resource)?;
         dict.set_item("base_font", &appended.base_font)?;
         dict.set_item("line_count", appended.line_count)?;
+        Ok(dict)
+    }
+
+    /// Appends a typed, drawn, or image signature or initials as page content.
+    ///
+    /// `page_index` follows `get_page`: a number inside `1..=page_count` is 1-based.
+    /// The mark is not an `/Ink` annotation, not an AcroForm field, and not PKCS#7.
+    /// The returned dict does not copy the typed text or the image bytes.
+    #[pyo3(signature = (page_index, kind, mode, x, y, width, height, text=None, strokes=None, image=None))]
+    pub fn add_fill_sign<'py>(
+        &mut self,
+        py: Python<'py>,
+        page_index: usize,
+        kind: &str,
+        mode: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        text: Option<String>,
+        strokes: Option<Vec<Vec<Vec<f64>>>>,
+        image: Option<Vec<u8>>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let parsed_kind = match kind {
+            "signature" => FillSignKind::Signature,
+            "initials" => FillSignKind::Initials,
+            _ => return Err(fill_sign_input("The kind is signature or initials.")),
+        };
+        let mark = if mode == "typed" {
+            let Some(typed) = text else {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            };
+            if strokes.is_some() || image.is_some() {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            }
+            FillSignMark::Typed(typed)
+        } else if mode == "drawn" {
+            let Some(raw_strokes) = strokes else {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            };
+            if text.is_some() || image.is_some() {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            }
+            let mut parsed = Vec::with_capacity(raw_strokes.len());
+            for stroke in raw_strokes {
+                let mut points = Vec::with_capacity(stroke.len());
+                for point in stroke {
+                    if point.len() != 2 {
+                        return Err(fill_sign_input("The mark does not match the mode."));
+                    }
+                    points.push((point[0], point[1]));
+                }
+                parsed.push(points);
+            }
+            FillSignMark::Drawn(parsed)
+        } else if mode == "image" {
+            let Some(bytes) = image else {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            };
+            if text.is_some() || strokes.is_some() {
+                return Err(fill_sign_input("The mark does not match the mode."));
+            }
+            FillSignMark::Image(bytes)
+        } else {
+            return Err(fill_sign_input("The mode is typed, drawn, or image."));
+        };
+        let spec = FillSignSpec {
+            kind: parsed_kind,
+            x,
+            y,
+            width,
+            height,
+            mark,
+        };
+        let zero_idx = if page_index > 0 && page_index <= self.page_ids.len() {
+            page_index - 1
+        } else {
+            page_index
+        };
+        let appended = pdf_engine_core::append_fill_sign(&mut self.doc, zero_idx, &spec)
+            .map_err(map_engine_value)?;
+        self.refresh_handles()?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("kind", &appended.kind)?;
+        dict.set_item("mode", &appended.mode)?;
+        dict.set_item("resource", &appended.resource)?;
         Ok(dict)
     }
 
@@ -3604,6 +3692,12 @@ impl PyPdfDocument {
         dict.set_item("omitted", raster.omitted)?;
         Ok(dict)
     }
+}
+
+fn fill_sign_input(message: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "Document operation error: Fill and sign: {message}"
+    ))
 }
 
 fn map_engine_value(err: pdf_engine_core::PdfError) -> PyErr {

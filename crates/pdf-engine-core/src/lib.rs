@@ -69,8 +69,9 @@ pub use cos::{
     ObjectId, PdfArray, PdfDictionary, PdfDocument, PdfName, PdfObject, PdfStream, PdfString,
 };
 pub use editor::{
-    append_text_box, AppendedTextBox, ParagraphStyle, PreparedParagraphStyle, ReflowEngine,
-    ReflowLine, SurgicalEditor, TextBoxSpec,
+    append_fill_sign, append_text_box, AppendedFillSign, AppendedTextBox, FillSignKind,
+    FillSignMark, FillSignSpec, ParagraphStyle, PreparedParagraphStyle, ReflowEngine, ReflowLine,
+    SurgicalEditor, TextBoxSpec,
 };
 pub use error::{PdfError, PdfResult};
 pub use fonts::{
