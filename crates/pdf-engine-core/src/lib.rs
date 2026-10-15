@@ -97,7 +97,7 @@ pub use ops::{
     add_attachment, add_layer, add_outline_item, clear_outlines, collect_garbage,
     compare_documents, compute_word_diffs, deduplicate_streams, delete_attachment, delete_layer,
     delete_pages, duplicate_page, export_document_docx, export_document_markdown,
-    export_document_xlsx,
+    export_document_pptx, export_document_xlsx,
     extract_attachment, extract_layers, extract_metadata, extract_outlines, extract_pages,
     flatten_document_permanently, get_page_rotation, insert_blank_page, insert_pages,
     list_attachments, merge_documents, merge_pdf_bytes, optimize_document, page_boxes,

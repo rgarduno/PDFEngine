@@ -224,6 +224,8 @@ A fill-and-sign mark appends typed Times-Italic text, a drawn path clipped to th
 
 `export_document_xlsx` writes one Office Open XML worksheet for each table the existing detector returns. Every cell is that reconstructed text, including a value that looks like a number or a formula, so it is not calculated and not coerced. A span is not an Excel merge. The grid stops at 1,048,576 rows, 16,384 columns, and 32,767 characters in a cell. A document with no detected table still emits one empty worksheet named `Tables`, so the package opens. This is not a binary XLS file and it is not Excel's layout. CSV, JSON, Markdown, and HTML export of one table are unchanged. A badly drawn table can still go undetected. A page the detector refuses fails the export.
 
+`export_document_pptx` writes one slide per page from the same reconstruction. The deck has one size, the first page's CropBox, or its MediaBox when CropBox is absent. One point is 12700 EMU. A later page is stretched onto that size. Each paragraph is a text box on its box. A detected table is text in 12-point Arial, and a span is not a merged cell. A cell stops at 32,767 characters. Images are not embedded. A document with no pages still emits one empty US Letter slide, so the package opens. This is not a binary PPT file and it is not PowerPoint's design. DOCX, XLSX, and Markdown export are unchanged. A badly drawn table can still be missed and then appear as paragraphs. A page the reconstructor refuses fails the export.
+
 ---
 
 ## Security & Resilience (Enterprise Grade)

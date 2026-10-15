@@ -3292,6 +3292,17 @@ impl PyPdfDocument {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to export XLSX: {}", e)))
     }
 
+    /// Exports each page as one PowerPoint slide (`.pptx`).
+    ///
+    /// The deck size is the first page's displayed box. A later page is stretched
+    /// onto that size. A paragraph is a text box. A table is reconstructed text.
+    /// This is not a binary `.ppt`.
+    pub fn export_pptx(&mut self) -> PyResult<Vec<u8>> {
+        gate(self.doc.require_copy())?;
+        pdf_engine_core::export_document_pptx(&mut self.doc)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to export PPTX: {}", e)))
+    }
+
     /// Exports the PDF document into structured GitHub-Flavored Markdown (`.md`).
     pub fn export_markdown(&mut self) -> PyResult<String> {
         gate(self.doc.require_copy())?;

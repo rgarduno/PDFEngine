@@ -8,6 +8,7 @@ pub mod cloner;
 pub mod compose;
 pub mod diff;
 pub mod export_docx;
+pub mod export_pptx;
 pub mod export_xlsx;
 pub mod flatten;
 pub mod layers;
@@ -36,6 +37,7 @@ pub use diff::{
     ImageDiffItem, MetadataDiffItem, PageDiff, PageDimensions, TextDiffItem, WordDiff,
 };
 pub use export_docx::{export_document_docx, export_document_markdown};
+pub use export_pptx::export_document_pptx;
 pub use export_xlsx::export_document_xlsx;
 pub use flatten::{flatten_document_permanently, HardFlattenReport};
 pub use layers::{
